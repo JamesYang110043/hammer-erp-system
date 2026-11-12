@@ -371,7 +371,7 @@ products ───────────────────────�
 | id | UUID PK | |
 | occurred_at | TIMESTAMPTZ | |
 | user_id | UUID FK → users | |
-| action | TEXT | `create` / `update` / `delete` / `post` / `void` / `login` / `login_failed` / `export` … |
+| action | TEXT | `create` / `update` / `delete` / `post` / `void` / `login` / `login_failed` / `logout` / `password_change` / `export`（常數在 `hammer_shared::audit`） |
 | entity_key | TEXT | 資料類別代碼 |
 | record_id | UUID | |
 | before_data / after_data | JSONB | 變更前與變更後（只記錄有變動的欄位） |
