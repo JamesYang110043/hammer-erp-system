@@ -210,7 +210,7 @@ Migration 放在 `crates/db/migrations/`，檔名格式為 `<4 位數版本>_<�
 
 ### 整合測試
 
-`crates/db/tests/` 與 `crates/server/tests/` 中需要資料庫的測試使用 `#[sqlx::test]`，每個測試會建立獨立的暫時資料庫、套用 migration，結束後刪除。需要先啟動 PostgreSQL，並以 `DATABASE_URL` 指定連線（帳號需有 CREATEDB 權限；docker compose 建立的帳號已具備）。建議指向測試用資料庫，避免在開發資料庫留下測試用的 schema：
+`crates/db/tests/`、`crates/core/tests/` 與 `crates/server/tests/` 中需要資料庫的測試使用 `#[sqlx::test]`，每個測試會建立獨立的暫時資料庫、套用 migration，結束後刪除。需要先啟動 PostgreSQL，並以 `DATABASE_URL` 指定連線（帳號需有 CREATEDB 權限；docker compose 建立的帳號已具備）。建議指向測試用資料庫，避免在開發資料庫留下測試用的 schema：
 
 ```bash
 DATABASE_URL=postgres://hammer:change_me_dev_password@127.0.0.1:5432/hammer_erp_test cargo test --workspace
