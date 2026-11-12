@@ -12,6 +12,7 @@ pub mod health;
 pub mod id;
 pub mod permission;
 pub mod role;
+pub mod setup;
 pub mod time;
 
 pub use error::{ApiError, ErrorCode};

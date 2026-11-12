@@ -5,8 +5,9 @@
 //! - [`find_auth_user`]：依 id 取得使用者狀態、角色與權限集合
 //! - [`find_login_user_for_update`]、[`update_login_attempts`]、[`record_login_success`]：登入
 //! - [`find_password_hash_for_update`]、[`update_password`]：修改密碼
+//! - [`any_user_exists`]、[`insert_user`]：初次啟動建立管理者
 //!
-//! 帳號管理（新增、修改、停用）在之後的 issue 加入。
+//! 帳號管理（修改、停用）在之後的 issue 加入。
 //!
 //! 登入失敗次數、鎖定與最後登入時間屬於系統自動維護的狀態，更新時**不**遞增 `version`，
 //! 避免管理者編輯帳號時因為使用者登入而發生樂觀鎖定衝突；修改密碼則會遞增。
@@ -181,4 +182,57 @@ pub async fn update_password<'e>(
     .execute(executor)
     .await?;
     Ok(())
+}
+
+/// 是否有任何使用者（含已停用、已刪除）。初次啟動判斷用。
+pub async fn any_user_exists<'e>(executor: impl PgExecutor<'e>) -> Result<bool, DbError> {
+    let exists = sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM users) AS "exists!""#)
+        .fetch_one(executor)
+        .await?;
+    Ok(exists)
+}
+
+/// 新增使用者所需的資料。
+#[derive(Debug, Clone)]
+pub struct NewUser<'a> {
+    pub id: Uuid,
+    pub username: &'a str,
+    pub display_name: &'a str,
+    pub password_hash: &'a str,
+    /// 角色代碼（`roles.code`），對應 `hammer_shared::role`。
+    pub role_code: &'a str,
+    pub must_change_password: bool,
+    /// 建立者；初次啟動建立第一個管理者時為 `None`。
+    pub created_by: Option<Uuid>,
+    pub created_at: OffsetDateTime,
+}
+
+/// 新增一個啟用中的使用者。角色代碼不存在時回傳 `false`。
+///
+/// 帳號重複時回傳違反 UNIQUE 限制的 [`DbError::Sqlx`]。
+pub async fn insert_user<'e>(
+    executor: impl PgExecutor<'e>,
+    new: &NewUser<'_>,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        INSERT INTO users
+            (id, username, display_name, password_hash, role_id, must_change_password,
+             created_at, created_by, updated_at, updated_by)
+        SELECT $1, $2, $3, $4, r.id, $6, $7, $8, $7, $8
+        FROM roles r
+        WHERE r.code = $5
+        "#,
+        new.id,
+        new.username,
+        new.display_name,
+        new.password_hash,
+        new.role_code,
+        new.must_change_password,
+        new.created_at,
+        new.created_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }

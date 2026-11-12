@@ -40,6 +40,11 @@ pub enum CoreError {
     #[error("此帳號已停用，請聯絡管理者")]
     AccountDisabled,
 
+    /// 操作與目前的資料狀態衝突，訊息直接顯示給使用者（繁體中文）。
+    /// 例如已有帳號時再呼叫初次啟動建立管理者。
+    #[error("{0}")]
+    Conflict(String),
+
     /// 資料存取錯誤。
     #[error(transparent)]
     Db(#[from] DbError),
@@ -60,7 +65,7 @@ impl CoreError {
             Self::InvalidCredentials => ErrorCode::Unauthorized,
             Self::AccountLocked(_) => ErrorCode::AccountLocked,
             Self::AccountDisabled => ErrorCode::AccountDisabled,
-            Self::Db(DbError::Conflict) => ErrorCode::Conflict,
+            Self::Conflict(_) | Self::Db(DbError::Conflict) => ErrorCode::Conflict,
             Self::Db(_) | Self::Internal(_) => ErrorCode::Internal,
         }
     }
@@ -176,6 +181,14 @@ mod tests {
             api.details,
             Some(serde_json::json!({ "locked_until": "2026-11-13T01:05:30Z" }))
         );
+    }
+
+    #[test]
+    fn conflict_keeps_message() {
+        let api: ApiError = CoreError::Conflict("系統已完成初始設定".into()).into();
+        assert_eq!(api.code, ErrorCode::Conflict);
+        assert_eq!(api.message, "系統已完成初始設定");
+        assert_eq!(api.details, None);
     }
 
     #[test]

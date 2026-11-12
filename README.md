@@ -136,6 +136,26 @@ curl localhost:8080/api/v1/health
 
 桌面程式的伺服器網址預設就是 `http://localhost:8080`，不需要修改。可以在「連線設定」按「測試連線」確認。
 
+### 4. 第一次啟動：建立管理者帳號
+
+migration 不會建立任何帳號（architecture.md §11）。資料庫還沒有帳號時，要先建立第一個管理者，之後的帳號由管理者在系統內建立。開發時用 `cargo run -p hammer-server` 啟動的伺服器也一樣。
+
+```bash
+curl localhost:8080/api/v1/setup/status
+# {"needs_setup":true}
+
+curl -X POST localhost:8080/api/v1/setup/admin \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","display_name":"系統管理者","password":"至少十個字元的密碼"}'
+# {"token":"…","user":{…,"role":"admin","must_change_password":false}}
+```
+
+- 兩個端點都不需要登入。
+- `POST /setup/admin` 只有在 `users` 沒有任何資料（含已停用的帳號）時可以呼叫，否則回傳 `409 CONFLICT`；同時送出多個請求時只有一個會成功。
+- 密碼至少 10 個字元。這組密碼是自己設定的，所以不會要求第一次登入後修改。
+- 成功時直接回傳登入 token，不需要再登入一次；並留下 `create` 操作紀錄（不含密碼）。
+- 目前沒有限制只能從本機呼叫。改用 Tailscale 開放其他電腦連線前，請先完成初始設定（是否加上額外保護待 architecture.md Q4 決定）。
+
 ### 網路與資料
 
 | 項目 | 設定 |

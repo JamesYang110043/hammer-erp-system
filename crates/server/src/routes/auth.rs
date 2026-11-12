@@ -101,7 +101,7 @@ pub fn current_user(ctx: &AuthContext) -> CurrentUser {
 }
 
 /// 由 `User-Agent` 與 `X-Client-Version` 組成 `client_info`。
-fn request_client_info(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn request_client_info(headers: &HeaderMap) -> Option<String> {
     let get = |name| headers.get(name).and_then(|v| v.to_str().ok());
     client_info(get(USER_AGENT.as_str()), get(CLIENT_VERSION_HEADER))
 }

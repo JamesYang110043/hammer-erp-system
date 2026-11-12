@@ -5,13 +5,14 @@
 //! - [`public_routes`]：**不需要登入**的路由，只有這裡列出的可以不帶 token：
 //!   - `GET /api/v1/health`
 //!   - 登入（`POST /api/v1/auth/login`）
-//!   - 初次啟動建立管理者（#26）
+//!   - 初次啟動：`GET /api/v1/setup/status`、`POST /api/v1/setup/admin`（[`setup`]）
 //! - [`protected_routes`]：其他所有路由。handler 必須帶 [`AuthUser`](crate::AuthUser)
 //!   （或改密碼、登出、`/auth/me` 使用的 [`AuthUserAllowPasswordChange`](crate::AuthUserAllowPasswordChange)）
 //!   參數，並以 `auth.require(...)` 檢查權限（§6.2）。
 
 pub mod auth;
 pub mod health;
+pub mod setup;
 
 use std::any::Any;
 
@@ -61,6 +62,8 @@ fn public_routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(health::health))
         .route("/auth/login", post(auth::login))
+        .route("/setup/status", get(setup::status))
+        .route("/setup/admin", post(setup::create_admin))
 }
 
 /// 需要登入的路由。
