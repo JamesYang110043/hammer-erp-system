@@ -105,6 +105,33 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+### 啟動 API Server
+
+先啟動 PostgreSQL 並複製 `.env`（見上方「開發環境啟動」），然後：
+
+```bash
+cargo run -p hammer-server
+curl localhost:8080/api/v1/health
+# {"status":"ok","version":"0.1.0","database":"ok"}
+```
+
+啟動時會自動套用 migrations。按 Ctrl+C（或送 SIGTERM）時，會等進行中的請求完成再關閉。
+
+設定的優先順序是：環境變數 > 設定檔（以 `HAMMER_CONFIG` 指定路徑，範例見 `crates/server/config.example.toml`）> 預設值。
+
+| 環境變數 | 預設值 | 說明 |
+|---|---|---|
+| `DATABASE_URL` | （必填） | PostgreSQL 連線字串 |
+| `HAMMER_LISTEN_ADDR` | `127.0.0.1:8080` | 監聽位址 |
+| `HAMMER_LOG_LEVEL` | `info` | log 等級（tracing `EnvFilter` 語法） |
+| `HAMMER_LOG_FORMAT` | 開發版 `pretty`、release 版 `json` | log 格式 |
+| `HAMMER_ATTACHMENTS_DIR` | `data/attachments` | 附件存放目錄，啟動時自動建立 |
+| `HAMMER_BODY_LIMIT_BYTES` | `10485760` | Request body 大小上限 |
+
+`GET /api/v1/health` 不需要登入：資料庫正常時回傳 `200`，資料庫異常時回傳 `503`（`"database":"error"`），伺服器不會因此停止。
+所有錯誤都以統一格式回傳（`{"code":"NOT_FOUND","message":"…"}`），每個回應都有 `x-request-id` 標頭，與 log 中的 `request_id` 對應。
+帶 `X-Client-Version` 標頭且版本低於 `MIN_CLIENT_VERSION`（`crates/shared/src/constants.rs`）時回傳 `426`；沒帶標頭時放行。
+
 ### 資料庫 migration
 
 Migration 放在 `crates/db/migrations/`，檔名格式為 `<4 位數版本>_<英文描述>.sql`（例如 `0002_users.sql`）。檔案在編譯時嵌入，以 `hammer_db::run_migrations` 套用（依 architecture.md §11，API Server 啟動時自動執行）；已套用過的會略過。
@@ -113,7 +140,7 @@ Migration 放在 `crates/db/migrations/`，檔名格式為 `<4 位數版本>_<�
 
 ### 整合測試
 
-`crates/db/tests/` 的測試使用 `#[sqlx::test]`，每個測試會建立獨立的暫時資料庫、套用 migration，結束後刪除。需要先啟動 PostgreSQL，並以 `DATABASE_URL` 指定連線（帳號需有 CREATEDB 權限；docker compose 建立的帳號已具備）。建議指向測試用資料庫，避免在開發資料庫留下測試用的 schema：
+`crates/db/tests/` 與 `crates/server/tests/` 中需要資料庫的測試使用 `#[sqlx::test]`，每個測試會建立獨立的暫時資料庫、套用 migration，結束後刪除。需要先啟動 PostgreSQL，並以 `DATABASE_URL` 指定連線（帳號需有 CREATEDB 權限；docker compose 建立的帳號已具備）。建議指向測試用資料庫，避免在開發資料庫留下測試用的 schema：
 
 ```bash
 DATABASE_URL=postgres://hammer:change_me_dev_password@127.0.0.1:5432/hammer_erp_test cargo test --workspace

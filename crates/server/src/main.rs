@@ -1,11 +1,6 @@
-//! Hammer ERP API Server（axum）。
-//!
-//! 目前只是骨架，尚無實作。
+//! Hammer ERP API Server 執行檔。
 
-fn main() {}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_compiles() {}
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    hammer_server::run().await
 }
