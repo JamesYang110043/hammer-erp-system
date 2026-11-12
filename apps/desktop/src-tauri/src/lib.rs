@@ -35,6 +35,11 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::set_server_url,
         ])
         .constant("CLIENT_VERSION", CLIENT_VERSION)
+        // 尚未有對應 command 的 API 型別（登入畫面使用）
+        .typ::<hammer_shared::auth::LoginRequest>()
+        .typ::<hammer_shared::auth::LoginResponse>()
+        .typ::<hammer_shared::auth::CurrentUser>()
+        .typ::<hammer_shared::auth::ChangePasswordRequest>()
         // command 回傳 `{ status: "ok", data } | { status: "error", error }`，錯誤有型別
         .error_handling(ErrorHandlingMode::Result)
 }

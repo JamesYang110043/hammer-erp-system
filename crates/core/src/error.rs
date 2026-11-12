@@ -4,6 +4,8 @@
 
 use hammer_db::DbError;
 use hammer_shared::{ApiError, ErrorCode};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// 商業邏輯層的錯誤。
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +28,18 @@ pub enum CoreError {
     #[error("請先修改密碼")]
     PasswordChangeRequired,
 
+    /// 登入時帳號不存在或密碼錯誤。兩者訊息相同，不透露帳號是否存在。
+    #[error("帳號或密碼錯誤")]
+    InvalidCredentials,
+
+    /// 連續登入失敗，帳號鎖定到此時間（§6.2）。
+    #[error("登入失敗次數過多，帳號已暫時鎖定，請於 {} 後再試", format_taipei_time(.0))]
+    AccountLocked(OffsetDateTime),
+
+    /// 帳號已停用。
+    #[error("此帳號已停用，請聯絡管理者")]
+    AccountDisabled,
+
     /// 資料存取錯誤。
     #[error(transparent)]
     Db(#[from] DbError),
@@ -43,6 +57,9 @@ impl CoreError {
             Self::Unauthorized => ErrorCode::Unauthorized,
             Self::Forbidden(_) => ErrorCode::Forbidden,
             Self::PasswordChangeRequired => ErrorCode::PasswordChangeRequired,
+            Self::InvalidCredentials => ErrorCode::Unauthorized,
+            Self::AccountLocked(_) => ErrorCode::AccountLocked,
+            Self::AccountDisabled => ErrorCode::AccountDisabled,
             Self::Db(DbError::Conflict) => ErrorCode::Conflict,
             Self::Db(_) | Self::Internal(_) => ErrorCode::Internal,
         }
@@ -61,12 +78,22 @@ impl From<CoreError> for ApiError {
         if let CoreError::Forbidden(permission) = err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "permission": permission }))
+        } else if let CoreError::AccountLocked(until) = err {
+            let locked_until = until.format(&Rfc3339).unwrap_or_default();
+            ApiError::new(code, err.to_string())
+                .with_details(serde_json::json!({ "locked_until": locked_until }))
         } else if err.is_user_facing() {
             ApiError::new(code, err.to_string())
         } else {
             ApiError::new(code, "伺服器發生錯誤，請稍後再試")
         }
     }
+}
+
+/// 以台北時間顯示 `HH:MM`（D13）。
+fn format_taipei_time(at: &OffsetDateTime) -> String {
+    let t = at.to_offset(hammer_shared::time::TAIPEI_OFFSET);
+    format!("{:02}:{:02}", t.hour(), t.minute())
 }
 
 #[cfg(test)]
@@ -124,6 +151,30 @@ mod tests {
         assert_eq!(
             api.details,
             Some(serde_json::json!({ "permission": "record.write" }))
+        );
+    }
+
+    #[test]
+    fn login_errors_map_to_codes() {
+        let api: ApiError = CoreError::InvalidCredentials.into();
+        assert_eq!(api.code, ErrorCode::Unauthorized);
+        assert_eq!(api.message, "帳號或密碼錯誤");
+        assert_eq!(api.details, None);
+
+        let api: ApiError = CoreError::AccountDisabled.into();
+        assert_eq!(api.code, ErrorCode::AccountDisabled);
+    }
+
+    #[test]
+    fn account_locked_includes_unlock_time() {
+        let until = time::macros::datetime!(2026-11-13 01:05:30 UTC);
+        let api: ApiError = CoreError::AccountLocked(until).into();
+        assert_eq!(api.code, ErrorCode::AccountLocked);
+        // 訊息以台北時間顯示
+        assert!(api.message.contains("09:05"), "{}", api.message);
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "locked_until": "2026-11-13T01:05:30Z" }))
         );
     }
 

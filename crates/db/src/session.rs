@@ -143,3 +143,26 @@ pub async fn revoke_user_sessions<'e>(
     .await?;
     Ok(result.rows_affected())
 }
+
+/// 撤銷某使用者除了 `keep_id` 以外所有尚未撤銷的 session（修改密碼後保留目前的 session）。
+/// 回傳撤銷的筆數。
+pub async fn revoke_other_user_sessions<'e>(
+    executor: impl PgExecutor<'e>,
+    user_id: Uuid,
+    keep_id: Uuid,
+    revoked_at: OffsetDateTime,
+) -> Result<u64, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE sessions
+        SET revoked_at = $3
+        WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL
+        "#,
+        user_id,
+        keep_id,
+        revoked_at,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected())
+}

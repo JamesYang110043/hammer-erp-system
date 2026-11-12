@@ -94,6 +94,8 @@ pub fn default_message(code: ErrorCode) -> &'static str {
         ErrorCode::PayloadTooLarge => "上傳的資料超過大小上限",
         ErrorCode::ClientOutdated => "程式版本過舊，請更新後再使用",
         ErrorCode::PasswordChangeRequired => "請先修改密碼",
+        ErrorCode::AccountLocked => "帳號已暫時鎖定，請稍後再試",
+        ErrorCode::AccountDisabled => "此帳號已停用，請聯絡管理者",
     }
 }
 
@@ -138,11 +140,16 @@ mod tests {
     }
 
     #[test]
-    fn password_change_required_is_403() {
+    fn forbidden_family_is_403() {
         // 與 FORBIDDEN 共用 403；由狀態碼反推時一律視為 FORBIDDEN
-        let code = ErrorCode::PasswordChangeRequired;
-        assert_eq!(status_of(code), StatusCode::FORBIDDEN);
-        assert_eq!(code_for_status(status_of(code)), ErrorCode::Forbidden);
+        for code in [
+            ErrorCode::PasswordChangeRequired,
+            ErrorCode::AccountLocked,
+            ErrorCode::AccountDisabled,
+        ] {
+            assert_eq!(status_of(code), StatusCode::FORBIDDEN);
+            assert_eq!(code_for_status(status_of(code)), ErrorCode::Forbidden);
+        }
     }
 
     #[test]
