@@ -19,12 +19,12 @@ hammer-erp-system/
 │   ├── core/           # 商業邏輯
 │   ├── db/             # sqlx 資料存取、migrations
 │   └── server/         # axum API Server
-├── apps/desktop/       # Tauri 桌面程式（尚未建立）
+├── apps/desktop/       # Tauri 桌面程式（src-tauri：Rust 端；src：React 前端）
 ├── deploy/             # docker-compose（PostgreSQL）
 └── docs/
 ```
 
-模組相依方向（不可反向）：`server → core → db`、`core → formula → shared`，詳見 architecture.md §4。
+模組相依方向（不可反向）：`server → core → db`、`core → formula → shared`、`desktop(src-tauri) → shared, formula`，詳見 architecture.md §4。
 
 ## 開發環境啟動
 
@@ -164,3 +164,38 @@ cargo sqlx migrate run --source crates/db/migrations    # 讓 DATABASE_URL 的�
 cargo sqlx prepare --workspace                          # 產生 .sqlx/
 cargo sqlx prepare --workspace --check                  # 檢查 .sqlx/ 是否為最新（PR 前執行）
 ```
+
+## 桌面程式（`apps/desktop`）
+
+Tauri 2 + React + TypeScript + Ant Design 5。前端不直接呼叫 HTTP API，一律透過 Tauri command（Rust 端用 reqwest 呼叫 API Server，architecture.md §3.3）。
+
+需要安裝：
+
+- [rustup](https://rustup.rs/)
+- Node.js 22.22 以上與 pnpm（`corepack enable` 後會依 `package.json` 的 `packageManager` 使用指定版本）
+- Tauri 的系統相依套件：macOS 需要 Xcode Command Line Tools；Windows 需要 Microsoft C++ Build Tools 與 WebView2，詳見 [Tauri 官方說明](https://v2.tauri.app/start/prerequisites/)
+
+```bash
+cd apps/desktop
+pnpm install
+pnpm tauri dev        # 開發模式（會自動啟動 Vite）
+pnpm lint             # ESLint + Prettier 檢查
+pnpm typecheck        # TypeScript 型別檢查
+pnpm format           # 以 Prettier 格式化
+```
+
+- 伺服器網址預設 `http://localhost:8080`，可在「連線設定」修改並「測試連線」；設定存在作業系統的 app 設定目錄（`settings.json`）。
+- 底部狀態列每 10 秒檢查一次 `/api/v1/health`，顯示連線狀態與伺服器／用戶端版本。
+- 每個請求都會帶 `X-Client-Version`（`apps/desktop/src-tauri/Cargo.toml` 的版本）。
+
+### TypeScript 型別（tauri-specta）
+
+`src/bindings.ts` 由 Rust 型別與 commands 自動產生，**納入版本控制，不要手動修改**。修改 Rust 型別或新增 command 後重新產生：
+
+```bash
+cd apps/desktop
+pnpm gen:bindings     # pnpm tauri dev 啟動時也會自動重新產生
+pnpm typecheck        # 型別不符時會在這裡報錯
+```
+
+`cargo test --workspace` 中的 `bindings_are_up_to_date` 會檢查 `bindings.ts` 是否為最新。

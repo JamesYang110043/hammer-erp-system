@@ -62,7 +62,10 @@ pub struct ApiError {
     /// 給使用者看的訊息（繁體中文）。
     pub message: String,
     /// 額外資訊，例如驗證失敗的欄位。
+    ///
+    /// TypeScript 中為 `unknown`：`serde_json::Value` 可能含 64 位元整數，specta 預設禁止匯出。
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(type = Option<specta_typescript::Unknown>)]
     pub details: Option<serde_json::Value>,
 }
 
