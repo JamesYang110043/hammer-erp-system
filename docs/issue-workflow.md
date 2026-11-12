@@ -116,7 +116,7 @@ PR 送出前，以下都要成立：
 | Rust | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Rust | `cargo test --workspace` |
 | 資料庫查詢 | `cargo sqlx prepare --workspace --check` |
-| 前端 | `npm run lint`、`npx tsc --noEmit`（在 `apps/desktop`） |
+| 前端 | `pnpm lint`、`pnpm typecheck`（在 `apps/desktop`） |
 
 - [ ] 如果改動了架構決策或資料表設計，同步更新 architecture.md
 
