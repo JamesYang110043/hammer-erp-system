@@ -1,9 +1,15 @@
 //! 前後端共用：資料型別、錯誤碼、權限常數。
 //!
-//! 目前只是骨架，尚無實作。相依方向見 `docs/architecture.md` §4。
+//! API Server 與 Tauri 端都依賴本 crate，確保兩邊的定義一致。
+//! 本 crate 位於相依方向的最底層，不可依賴專案內其他 crate（`docs/architecture.md` §4）。
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_compiles() {}
-}
+pub mod constants;
+pub mod decimal;
+pub mod error;
+pub mod id;
+pub mod permission;
+pub mod role;
+pub mod time;
+
+pub use error::{ApiError, ErrorCode};
+pub use id::{Id, new_id};
