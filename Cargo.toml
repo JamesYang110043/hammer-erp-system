@@ -23,12 +23,16 @@ hammer-core = { path = "crates/core" }
 hammer-db = { path = "crates/db" }
 
 anyhow = "1"
+argon2 = "0.5"
 axum = "0.8"
+base64 = "0.22"
 dotenvy = "0.15"
+getrandom = "0.3"
 rust_decimal = { version = "1", default-features = false, features = ["std", "serde"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 # specta 2 仍是 RC 版，固定版本號，需與 tauri-specta 相容
 specta = { version = "=2.0.0-rc.28", features = ["derive"] }
 specta-typescript = "=0.0.15"
@@ -61,3 +65,10 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 # 非測試程式碼禁止 unwrap()；測試中允許（見 clippy.toml）
 unwrap_used = "deny"
+
+# Argon2 在 debug 建置下非常慢（單次雜湊可達數秒），開發與測試時也以最佳化編譯
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

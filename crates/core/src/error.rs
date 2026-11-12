@@ -1,0 +1,87 @@
+//! `core` 的錯誤。
+//!
+//! 每個錯誤都對應一個 [`ErrorCode`]，由 `server` 轉成統一的 API 錯誤格式（§10）。
+
+use hammer_db::DbError;
+use hammer_shared::{ApiError, ErrorCode};
+
+/// 商業邏輯層的錯誤。
+#[derive(Debug, thiserror::Error)]
+pub enum CoreError {
+    /// 輸入資料不符合規則，訊息直接顯示給使用者（繁體中文）。
+    #[error("{0}")]
+    Validation(String),
+
+    /// 資料存取錯誤。
+    #[error(transparent)]
+    Db(#[from] DbError),
+
+    /// 不應發生的內部錯誤（例如資料庫中的密碼雜湊格式損壞）。訊息只寫進 log。
+    #[error("內部錯誤：{0}")]
+    Internal(String),
+}
+
+impl CoreError {
+    /// 對應的錯誤碼。
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::Validation(_) => ErrorCode::Validation,
+            Self::Db(DbError::Conflict) => ErrorCode::Conflict,
+            Self::Db(_) | Self::Internal(_) => ErrorCode::Internal,
+        }
+    }
+
+    /// 是否可以把訊息直接顯示給使用者。內部錯誤的細節不應回傳給客戶端。
+    pub fn is_user_facing(&self) -> bool {
+        matches!(self.code(), ErrorCode::Validation | ErrorCode::Conflict)
+    }
+}
+
+impl From<CoreError> for ApiError {
+    /// 轉成 API 錯誤。內部錯誤只回傳通用訊息。
+    fn from(err: CoreError) -> Self {
+        let code = err.code();
+        if err.is_user_facing() {
+            ApiError::new(code, err.to_string())
+        } else {
+            ApiError::new(code, "伺服器發生錯誤，請稍後再試")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validation_maps_to_validation_code() {
+        let err = CoreError::Validation("密碼至少需要 10 個字元".into());
+        assert_eq!(err.code(), ErrorCode::Validation);
+        let api: ApiError = err.into();
+        assert_eq!(api.code, ErrorCode::Validation);
+        assert_eq!(api.message, "密碼至少需要 10 個字元");
+    }
+
+    #[test]
+    fn db_conflict_maps_to_conflict() {
+        let err = CoreError::from(DbError::Conflict);
+        assert_eq!(err.code(), ErrorCode::Conflict);
+        assert!(err.is_user_facing());
+    }
+
+    #[test]
+    fn internal_hides_details() {
+        let err = CoreError::Internal("密碼雜湊格式錯誤".into());
+        assert_eq!(err.code(), ErrorCode::Internal);
+        let api: ApiError = err.into();
+        assert_eq!(api.code, ErrorCode::Internal);
+        assert!(!api.message.contains("雜湊"));
+    }
+
+    #[test]
+    fn other_db_errors_are_internal() {
+        let err = CoreError::from(DbError::Sqlx(hammer_db::sqlx::Error::RowNotFound));
+        assert_eq!(err.code(), ErrorCode::Internal);
+        assert!(!err.is_user_facing());
+    }
+}

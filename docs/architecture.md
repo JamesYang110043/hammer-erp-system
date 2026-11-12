@@ -168,9 +168,11 @@ desktop(src-tauri) ──▶ shared, formula
 ### 6.2 安全規則
 
 - 密碼用 Argon2id 雜湊後儲存，不保存明文。
+- 密碼至少 10 個字元（以字元計，不是 bytes），不另外要求大小寫、數字或符號。
 - 連續登入失敗 5 次，鎖定帳號 15 分鐘（數值可在系統設定調整）。
 - 新帳號或管理者重設密碼後，第一次登入強制修改密碼。
 - Session 用隨機 token，資料庫只存 token 的 SHA-256 雜湊；閒置 480 分鐘（8 小時）後自動失效（數值可在系統設定調整）。
+- Session 沒有絕對有效期限：`expires_at` = `last_seen_at` + 閒置時間，每次使用時一起延長；持續使用就不會被登出。
 - 以上數值存在 `settings`，預設值由 migration 寫入：`security.max_failed_logins` = 5、`security.lockout_minutes` = 15、`security.session_idle_minutes` = 480。
 - 每個 API 都在伺服器端（`core`）檢查權限。前端隱藏按鈕只是輔助。
 - 系統至少要保留一個有效的管理者帳號，不能把最後一個管理者刪除或降級。
@@ -360,7 +362,7 @@ products ───────────────────────�
 | user_id | UUID FK → users | |
 | token_hash | TEXT UNIQUE | token 的 SHA-256 |
 | client_info | TEXT | 裝置名稱與客戶端版本 |
-| created_at / last_seen_at / expires_at | TIMESTAMPTZ | |
+| created_at / last_seen_at / expires_at | TIMESTAMPTZ | `expires_at` = `last_seen_at` + 閒置時間，隨使用延長（§6.2） |
 | revoked_at | TIMESTAMPTZ | 登出或被強制登出 |
 
 #### `audit_logs`
