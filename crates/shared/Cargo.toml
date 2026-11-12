@@ -1,0 +1,12 @@
+[package]
+name = "hammer-shared"
+description = "前後端共用：資料型別、錯誤碼、權限常數"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

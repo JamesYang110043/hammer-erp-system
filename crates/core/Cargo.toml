@@ -1,0 +1,15 @@
+[package]
+name = "hammer-core"
+description = "商業邏輯：單據流程、庫存 FIFO、匯率換算、權限判斷"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hammer-db.workspace = true
+hammer-formula.workspace = true
+hammer-shared.workspace = true
+
+[lints]
+workspace = true
