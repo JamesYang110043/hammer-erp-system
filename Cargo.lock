@@ -1518,6 +1518,8 @@ dependencies = [
 name = "hammer-db"
 version = "0.1.0"
 dependencies = [
+ "hammer-shared",
+ "serde_json",
  "sqlx",
  "thiserror 2.0.21",
  "time",
