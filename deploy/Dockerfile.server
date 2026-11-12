@@ -1,0 +1,69 @@
+# syntax=docker/dockerfile:1
+#
+# Hammer ERP API Server 映像檔（architecture.md §3.1、§11）
+#
+# 建置環境為 repo 根目錄，通常透過 deploy/docker-compose.yml 建置：
+#   docker compose --profile full build server        # 在 deploy/ 目錄
+# 或直接：
+#   docker build -f deploy/Dockerfile.server -t hammer-server .   # 在 repo 根目錄
+#
+# 分成四個階段：
+#   chef     安裝 cargo-chef
+#   planner  從 workspace 產生相依套件清單（recipe.json）
+#   builder  先只編譯相依套件（只要 Cargo.toml / Cargo.lock 沒變就會沿用快取），再編譯伺服器
+#   runtime  只放執行檔的精簡映像檔
+
+ARG RUST_VERSION=1.99
+ARG DEBIAN_RELEASE=trixie
+
+# ---------- chef ----------
+FROM rust:${RUST_VERSION}-slim-${DEBIAN_RELEASE} AS chef
+RUN cargo install cargo-chef --version 0.1.78 --locked
+WORKDIR /app
+
+# ---------- planner ----------
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---------- builder ----------
+FROM chef AS builder
+# 使用 .sqlx/ 中的查詢型別資訊，建置時不需要連線資料庫
+ENV SQLX_OFFLINE=true
+COPY --from=planner /app/recipe.json recipe.json
+# 只編譯伺服器用到的相依套件，不包含桌面程式（Tauri）
+RUN cargo chef cook --release --locked -p hammer-server --recipe-path recipe.json
+COPY . .
+RUN cargo build --release --locked -p hammer-server \
+    && cp target/release/hammer-server /usr/local/bin/hammer-server
+
+# ---------- runtime ----------
+FROM debian:${DEBIAN_RELEASE}-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# 以非 root 使用者執行；附件目錄先建立並設定擁有者，
+# 具名 volume 第一次掛載時會沿用這個擁有者
+RUN groupadd --system --gid 10001 hammer \
+    && useradd --system --uid 10001 --gid hammer --no-create-home --shell /usr/sbin/nologin hammer \
+    && mkdir -p /var/lib/hammer/attachments \
+    && chown -R hammer:hammer /var/lib/hammer
+
+COPY --from=builder /usr/local/bin/hammer-server /usr/local/bin/hammer-server
+
+ENV TZ=Asia/Taipei \
+    HAMMER_LISTEN_ADDR=0.0.0.0:8080 \
+    HAMMER_LOG_FORMAT=json \
+    HAMMER_ATTACHMENTS_DIR=/var/lib/hammer/attachments
+
+USER hammer
+WORKDIR /var/lib/hammer
+EXPOSE 8080
+
+# 映像檔裡沒有 curl，用 bash 的 /dev/tcp 呼叫 health API；回應 200 才算健康
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /api/v1/health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n 1 <&3 | grep -q ' 200 '"]
+
+ENTRYPOINT ["/usr/local/bin/hammer-server"]

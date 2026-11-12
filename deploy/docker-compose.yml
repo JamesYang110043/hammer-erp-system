@@ -1,8 +1,10 @@
-# 開發與第一階段單機部署用的 PostgreSQL（architecture.md D2、D3、§11）
+# Hammer ERP 的 PostgreSQL 與 API Server（architecture.md D2、D3、§3.1、§11）
 #
-# 使用方式（在 deploy/ 目錄）：
-#   cp .env.example .env
-#   docker compose up -d
+# 使用方式（在 deploy/ 目錄，先 cp .env.example .env）：
+#   開發：只啟動資料庫，API Server 用 cargo run 啟動
+#     docker compose up -d
+#   單機部署：同時啟動資料庫與 API Server
+#     docker compose --profile full up -d --build
 #
 # 注意：deploy/initdb/ 內的初始化腳本只會在 volume 為空（第一次啟動）時執行。
 
@@ -17,7 +19,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?請先複製 .env.example 為 .env 並設定 POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-hammer_erp}
     ports:
-      # 只綁定本機，不可對外開放（architecture.md §3.2）
+      # 只綁定本機，不可對外開放（architecture.md §3.2）。
+      # server 服務透過 Docker 內部網路以 db:5432 連線，不經過這個埠號。
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -29,5 +32,30 @@ services:
       retries: 10
       start_period: 10s
 
+  server:
+    # 只有指定 --profile full 時才會啟動
+    profiles: ["full"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    image: hammer-erp-server:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        # 等 PostgreSQL 的 healthcheck 通過才啟動；db 重新啟動時一併重啟
+        condition: service_healthy
+        restart: true
+    environment:
+      # 帳號或密碼含 URL 特殊字元（@ : / 等）時，需要先做 URL 編碼
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hammer_erp}
+      HAMMER_LOG_LEVEL: ${HAMMER_LOG_LEVEL:-info}
+      # HAMMER_LISTEN_ADDR、HAMMER_ATTACHMENTS_DIR、HAMMER_LOG_FORMAT 由 Dockerfile.server 設定
+    ports:
+      # 預設只綁定本機。之後改用 Tailscale 時，在 .env 設定 HAMMER_PUBLISH_ADDR（architecture.md §3.2）
+      - "${HAMMER_PUBLISH_ADDR:-127.0.0.1:8080}:8080"
+    volumes:
+      - attachments:/var/lib/hammer/attachments
+
 volumes:
   pgdata:
+  attachments:

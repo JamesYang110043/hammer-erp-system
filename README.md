@@ -20,7 +20,7 @@ hammer-erp-system/
 │   ├── db/             # sqlx 資料存取、migrations
 │   └── server/         # axum API Server
 ├── apps/desktop/       # Tauri 桌面程式（src-tauri：Rust 端；src：React 前端）
-├── deploy/             # docker-compose（PostgreSQL）
+├── deploy/             # docker-compose（PostgreSQL、API Server）、Dockerfile.server
 └── docs/
 ```
 
@@ -93,6 +93,76 @@ docker compose exec db psql -U hammer -d hammer_erp -c "select version();"
 cd deploy
 docker compose down
 ```
+
+## 單機部署
+
+第一階段把 PostgreSQL 和 API Server 都放在同一台電腦的 Docker 中執行，桌面程式連到 `http://localhost:8080`（architecture.md §3.1）。
+
+`deploy/docker-compose.yml` 用 profile 區分兩種用法：
+
+| 用途 | 指令（在 `deploy/` 目錄） | 啟動的服務 |
+|---|---|---|
+| 開發 | `docker compose up -d` | 只有 `db`；API Server 用 `cargo run` 啟動 |
+| 單機部署 | `docker compose --profile full up -d --build` | `db` 與 `server` |
+
+兩種用法都會占用 `8080` 埠，同時執行 `cargo run -p hammer-server` 與 `server` 容器時，後啟動的那一個會無法監聽。
+
+### 1. 準備
+
+1. 安裝 Docker（見上方「開發環境啟動」第 1 步）。
+2. 複製並修改 `deploy/.env`：
+
+   ```bash
+   cp deploy/.env.example deploy/.env
+   ```
+
+   正式使用前請改掉 `POSTGRES_PASSWORD`。帳號或密碼含 URL 特殊字元（`@`、`:`、`/` 等）時，要另外處理 URL 編碼；建議只使用英數字。單機部署不需要根目錄的 `.env`。
+
+### 2. 建置並啟動
+
+```bash
+cd deploy
+docker compose --profile full up -d --build
+docker compose --profile full ps      # db 與 server 的 STATUS 都顯示 healthy 代表已就緒
+curl localhost:8080/api/v1/health
+# {"status":"ok","version":"0.1.0","database":"ok"}
+```
+
+- 第一次建置需要下載並編譯所有 Rust 相依套件，要花數分鐘。之後只改程式碼時，相依套件會沿用 Docker 快取（cargo-chef）。
+- `server` 等到 `db` 的 healthcheck 通過才會啟動，啟動時會自動套用 migrations。
+- 建置使用 `SQLX_OFFLINE=true`，讀取 `.sqlx/` 中的查詢型別資訊，不需要連線資料庫。
+
+### 3. 連線
+
+桌面程式的伺服器網址預設就是 `http://localhost:8080`，不需要修改。可以在「連線設定」按「測試連線」確認。
+
+### 網路與資料
+
+| 項目 | 設定 |
+|---|---|
+| API Server | 預設只綁定 `127.0.0.1:8080`。之後改用 Tailscale 時，在 `deploy/.env` 設定 `HAMMER_PUBLISH_ADDR`（architecture.md §3.2） |
+| PostgreSQL | 只綁定 `127.0.0.1:5432`；`server` 容器透過 Docker 內部網路以 `db:5432` 連線。其他電腦無法連到資料庫 |
+| 資料庫資料 | 具名 volume `hammer-erp_pgdata` |
+| 附件 | 具名 volume `hammer-erp_attachments`（容器內 `/var/lib/hammer/attachments`） |
+| log | JSON 格式，用 `docker compose logs -f server` 查看；等級以 `deploy/.env` 的 `HAMMER_LOG_LEVEL` 設定 |
+
+### 開機自動啟動
+
+兩個服務都設定 `restart: unless-stopped`：電腦重新開機、Docker 啟動後會自動恢復，除非之前用 `docker compose stop` 或 `down` 手動停止。需要 Docker 本身在開機時啟動：
+
+- Docker Desktop（macOS / Windows）：Settings → General → 勾選「Start Docker Desktop when you sign in to your computer」。電腦也要設定為自動登入，否則要登入後才會啟動。
+- Linux：`sudo systemctl enable docker`
+
+### 更新與停止
+
+```bash
+cd deploy
+git pull
+docker compose --profile full up -d --build   # 重新建置並替換 server 容器，資料保留
+docker compose --profile full down            # 停止並移除容器，資料保留
+```
+
+`docker compose --profile full down -v` 會連同資料庫與附件的 volume 一起刪除（**會刪除所有資料**）。
 
 ## 開發
 

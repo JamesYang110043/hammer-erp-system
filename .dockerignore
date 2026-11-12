@@ -1,0 +1,31 @@
+# deploy/Dockerfile.server 的建置環境是 repo 根目錄；只送入建置需要的檔案
+
+.git/
+.github/
+.claude/
+.vscode/
+.idea/
+docs/
+deploy/
+data/
+
+# 編譯產物、前端相依套件
+target/
+**/target/
+**/node_modules/
+apps/desktop/dist/
+
+# 桌面程式前端；workspace 只需要 apps/desktop/src-tauri 的 Cargo.toml 與原始碼
+apps/desktop/src/
+apps/desktop/src-tauri/icons/
+apps/desktop/src-tauri/gen/
+
+# 環境變數與密碼
+.env
+.env.*
+**/.env
+
+# 映像檔使用基底映像檔內的 Rust 版本，不依 rust-toolchain.toml 另外下載工具鏈
+rust-toolchain.toml
+
+.DS_Store
