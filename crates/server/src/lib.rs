@@ -5,6 +5,7 @@
 //!
 //! 相依方向：`server → core → db`、`server → shared`（`docs/architecture.md` §4）。
 
+pub mod auth;
 pub mod config;
 pub mod error;
 pub mod middleware;
@@ -16,6 +17,7 @@ pub mod telemetry;
 use anyhow::Context;
 use hammer_core::db::{self, PoolConfig};
 
+pub use auth::{AuthUser, AuthUserAllowPasswordChange};
 pub use config::Config;
 pub use error::AppError;
 pub use routes::router;

@@ -12,6 +12,20 @@ pub enum CoreError {
     #[error("{0}")]
     Validation(String),
 
+    /// 未登入、token 無效、session 已失效，或使用者已停用、已刪除。
+    ///
+    /// 不區分原因，避免透露帳號狀態；原因只寫進 log。
+    #[error("尚未登入或登入已失效，請重新登入")]
+    Unauthorized,
+
+    /// 已登入但沒有所需的權限。內容為權限代碼。
+    #[error("沒有權限執行此操作")]
+    Forbidden(&'static str),
+
+    /// 必須先修改密碼（`users.must_change_password = true`，§6.2）。
+    #[error("請先修改密碼")]
+    PasswordChangeRequired,
+
     /// 資料存取錯誤。
     #[error(transparent)]
     Db(#[from] DbError),
@@ -26,6 +40,9 @@ impl CoreError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Validation(_) => ErrorCode::Validation,
+            Self::Unauthorized => ErrorCode::Unauthorized,
+            Self::Forbidden(_) => ErrorCode::Forbidden,
+            Self::PasswordChangeRequired => ErrorCode::PasswordChangeRequired,
             Self::Db(DbError::Conflict) => ErrorCode::Conflict,
             Self::Db(_) | Self::Internal(_) => ErrorCode::Internal,
         }
@@ -33,7 +50,7 @@ impl CoreError {
 
     /// 是否可以把訊息直接顯示給使用者。內部錯誤的細節不應回傳給客戶端。
     pub fn is_user_facing(&self) -> bool {
-        matches!(self.code(), ErrorCode::Validation | ErrorCode::Conflict)
+        !matches!(self.code(), ErrorCode::Internal)
     }
 }
 
@@ -41,7 +58,10 @@ impl From<CoreError> for ApiError {
     /// 轉成 API 錯誤。內部錯誤只回傳通用訊息。
     fn from(err: CoreError) -> Self {
         let code = err.code();
-        if err.is_user_facing() {
+        if let CoreError::Forbidden(permission) = err {
+            ApiError::new(code, err.to_string())
+                .with_details(serde_json::json!({ "permission": permission }))
+        } else if err.is_user_facing() {
             ApiError::new(code, err.to_string())
         } else {
             ApiError::new(code, "伺服器發生錯誤，請稍後再試")
@@ -76,6 +96,35 @@ mod tests {
         let api: ApiError = err.into();
         assert_eq!(api.code, ErrorCode::Internal);
         assert!(!api.message.contains("雜湊"));
+    }
+
+    #[test]
+    fn auth_errors_map_to_codes() {
+        let cases = [
+            (CoreError::Unauthorized, ErrorCode::Unauthorized),
+            (CoreError::Forbidden("record.write"), ErrorCode::Forbidden),
+            (
+                CoreError::PasswordChangeRequired,
+                ErrorCode::PasswordChangeRequired,
+            ),
+        ];
+        for (err, code) in cases {
+            assert_eq!(err.code(), code);
+            assert!(err.is_user_facing());
+            let message = err.to_string();
+            let api: ApiError = err.into();
+            assert_eq!(api.code, code);
+            assert_eq!(api.message, message);
+        }
+    }
+
+    #[test]
+    fn forbidden_includes_permission_in_details() {
+        let api: ApiError = CoreError::Forbidden("record.write").into();
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "permission": "record.write" }))
+        );
     }
 
     #[test]

@@ -1,13 +1,16 @@
 //! 商業邏輯：單據流程、庫存 FIFO、匯率換算、權限判斷。
 //!
 //! - [`audit`]：操作紀錄的 diff 與寫入
-//! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定
+//! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定、目前使用者與權限檢查
+//! - `test_util`（`test-util` feature）：整合測試用，直接建立使用者與 session
 //!
 //! 相依方向見 `docs/architecture.md` §4。
 
 pub mod audit;
 pub mod auth;
 mod error;
+#[cfg(feature = "test-util")]
+pub mod test_util;
 
 pub use error::CoreError;
 
