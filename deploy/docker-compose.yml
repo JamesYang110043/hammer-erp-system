@@ -1,0 +1,33 @@
+# 開發與第一階段單機部署用的 PostgreSQL（architecture.md D2、D3、§11）
+#
+# 使用方式（在 deploy/ 目錄）：
+#   cp .env.example .env
+#   docker compose up -d
+#
+# 注意：deploy/initdb/ 內的初始化腳本只會在 volume 為空（第一次啟動）時執行。
+
+name: hammer-erp
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?請先複製 .env.example 為 .env 並設定 POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?請先複製 .env.example 為 .env 並設定 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-hammer_erp}
+    ports:
+      # 只綁定本機，不可對外開放（architecture.md §3.2）
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:
