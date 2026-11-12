@@ -7,8 +7,15 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig([
-  // src/bindings.ts 由 tauri-specta 自動產生，不檢查
-  globalIgnores(['dist', 'src-tauri', 'src/bindings.ts']),
+  // src/bindings.ts 由 tauri-specta 自動產生；其餘為測試產出，不檢查
+  globalIgnores([
+    'dist',
+    'src-tauri',
+    'src/bindings.ts',
+    'coverage',
+    'playwright-report',
+    'test-results',
+  ]),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
