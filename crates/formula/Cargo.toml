@@ -1,0 +1,13 @@
+[package]
+name = "hammer-formula"
+description = "公式引擎：解析器、Decimal 計算、相依性分析"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hammer-shared.workspace = true
+
+[lints]
+workspace = true

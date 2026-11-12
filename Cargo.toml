@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/shared",
+    "crates/formula",
+    "crates/core",
+    "crates/db",
+    "crates/server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+# 共用相依套件版本統一寫在這裡；各 crate 以 `xxx.workspace = true` 引用。
+[workspace.dependencies]
+hammer-shared = { path = "crates/shared" }
+hammer-formula = { path = "crates/formula" }
+hammer-core = { path = "crates/core" }
+hammer-db = { path = "crates/db" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# 非測試程式碼禁止 unwrap()；測試中允許（見 clippy.toml）
+unwrap_used = "deny"
