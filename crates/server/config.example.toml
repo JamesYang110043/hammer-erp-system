@@ -1,0 +1,24 @@
+# Hammer ERP API Server 設定檔範例
+#
+# 使用方式：以環境變數 HAMMER_CONFIG 指定路徑，例如
+#   HAMMER_CONFIG=crates/server/config.example.toml cargo run -p hammer-server
+#
+# 每個欄位都可省略；同名環境變數（見 crates/server/src/config.rs）優先於設定檔。
+# 連線字串含密碼，正式環境建議用環境變數 DATABASE_URL 設定，不要寫在檔案裡。
+
+# database_url = "postgres://hammer:change_me_dev_password@127.0.0.1:5432/hammer_erp"
+
+# HTTP 監聽位址
+listen_addr = "127.0.0.1:8080"
+
+# log 等級（tracing EnvFilter 語法），例如 "debug" 或 "hammer_server=debug,info"
+log_level = "info"
+
+# log 格式："pretty"（易讀）或 "json"；省略時開發版用 pretty、release 版用 json
+# log_format = "pretty"
+
+# 附件存放目錄（相對路徑以啟動時的工作目錄為準）
+attachments_dir = "data/attachments"
+
+# Request body 大小上限（位元組）
+body_limit_bytes = 10485760

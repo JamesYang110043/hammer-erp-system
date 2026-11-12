@@ -21,6 +21,9 @@ test-results/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/schemas/
 
+# API Server 執行時資料（附件等）
+/data/
+
 # 環境變數與密碼
 .env
 .env.*

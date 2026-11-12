@@ -21,7 +21,11 @@ hammer-formula = { path = "crates/formula" }
 hammer-core = { path = "crates/core" }
 hammer-db = { path = "crates/db" }
 
+anyhow = "1"
+axum = "0.8"
+dotenvy = "0.15"
 rust_decimal = { version = "1", default-features = false, features = ["std", "serde"] }
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # specta 2 仍是 RC 版，固定版本號，需與 tauri-specta 相容
@@ -39,6 +43,13 @@ sqlx = { version = "0.9", default-features = false, features = [
     "time",
 ] }
 thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["catch-panic", "limit", "request-id", "trace", "util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt", "ansi"] }
+http-body-util = "0.1"
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 
