@@ -1,0 +1,237 @@
+# Rust 與前端檢查（architecture.md §11、docs/issue-workflow.md §6）
+#
+# - changes：判斷改動範圍；只改 docs/ 或 README 時，其他 job 都會跳過（跳過視為通過）
+# - rust-lint：fmt、clippy、sqlx offline 資料檢查
+# - rust-test：cargo llvm-cov 執行所有測試（含 #[sqlx::test] 整合測試）＋ core/formula 覆蓋率門檻
+# - web-lint：前端 lint、typecheck
+#
+# 需要資料庫的 job 使用 PostgreSQL service container（只能在 Linux runner 使用）。
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# 同一個 PR 有新的 push 時，取消舊的執行；push 到 main 的每次執行都保留
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  # dorny/paths-filter 在 private repo 需要讀取 PR 的檔案列表
+  pull-requests: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # 與 sqlx-cli 版本一致（README「sqlx offline mode」）
+  SQLX_CLI_VERSION: 0.9.0
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'rustfmt.toml'
+              - 'clippy.toml'
+              - 'crates/**'
+              - 'apps/desktop/src-tauri/**'
+              # bindings_are_up_to_date 測試會比對這個檔案
+              - 'apps/desktop/src/bindings.ts'
+              - '.sqlx/**'
+              - '.github/workflows/ci.yml'
+              - '.github/scripts/**'
+            web:
+              - 'apps/desktop/**'
+              - '.github/workflows/ci.yml'
+
+  rust-lint:
+    name: rust-lint
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # 與 deploy/docker-compose.yml 相同版本
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hammer_erp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/hammer_erp
+    steps:
+      - uses: actions/checkout@v5
+      - name: 安裝 Tauri 的 Linux 系統相依套件
+        run: ./.github/scripts/install-tauri-linux-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # ~/.cargo/bin 也會快取，sqlx-cli 只有第一次需要編譯
+          cache-bin: true
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: 安裝 sqlx-cli
+        run: |
+          if ! cargo sqlx --version 2>/dev/null | grep -q " ${SQLX_CLI_VERSION}$"; then
+            cargo install sqlx-cli --version "${SQLX_CLI_VERSION}" \
+              --no-default-features --features postgres,rustls --locked --force
+          fi
+          cargo sqlx --version
+
+      - name: 套用 migrations
+        run: cargo sqlx migrate run --source crates/db/migrations
+
+      - name: 檢查 .sqlx/ 是否為最新
+        run: cargo sqlx prepare --workspace --check
+
+  rust-test:
+    name: rust-test
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # 覆蓋率摘要留言
+    services:
+      postgres:
+        # 與 deploy/docker-compose.yml 相同版本
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hammer_erp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # #[sqlx::test] 會為每個測試建立暫時資料庫，需要 CREATEDB 權限（postgres 為超級使用者）
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/hammer_erp_test
+      # 編譯期使用 .sqlx/，與 Docker 建置一致
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v5
+      - name: 安裝 Tauri 的 Linux 系統相依套件
+        run: ./.github/scripts/install-tauri-linux-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: 執行測試並量測覆蓋率
+        run: cargo llvm-cov --workspace --no-report
+
+      # cargo llvm-cov 在 stable 不執行 doctest，另外跑一次
+      - name: 執行 doctest
+        run: cargo test --workspace --doc
+
+      - name: 產生覆蓋率報告
+        run: |
+          cargo llvm-cov report --json --summary-only --output-path coverage.json
+          cargo llvm-cov report --summary-only > coverage.txt
+
+      - name: 檢查 core / formula 覆蓋率門檻（80%）
+        id: gate
+        run: |
+          set +e
+          ./.github/scripts/coverage-gate.sh coverage.json 80 > gate.md
+          status=$?
+          set -e
+          {
+            echo "<!-- hammer-coverage -->"
+            echo "### 覆蓋率"
+            echo
+            echo "\`crates/core\`、\`crates/formula\` 行覆蓋率需 ≥ 80%，未達到時 CI 失敗；其他 crate 只回報數字。"
+            echo
+            cat gate.md
+            echo
+            echo "<details><summary>全部檔案</summary>"
+            echo
+            echo '```'
+            cat coverage.txt
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "commit: ${{ github.event.pull_request.head.sha || github.sha }}"
+          } > coverage.md
+          cat coverage.md >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: 覆蓋率摘要留言到 PR
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && hashFiles('coverage.md') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # 已有覆蓋率留言就更新，避免每次 push 都新增一則
+          comment_id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- hammer-coverage -->")))][0].id // empty' | head -n 1)
+          if [ -n "$comment_id" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -F body=@coverage.md > /dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file coverage.md
+          fi
+
+  web-lint:
+    name: web-lint
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          # 版本取自 package.json 的 packageManager
+          package_json_file: apps/desktop/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm lint
+        run: pnpm lint
+      - name: pnpm typecheck
+        run: pnpm typecheck

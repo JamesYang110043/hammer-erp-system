@@ -1,0 +1,95 @@
+# 桌面程式建置：在 macOS（Apple Silicon）與 Windows 執行 tauri build（architecture.md §11）
+#
+# 產出不簽章的安裝檔（簽章為待決事項 Q6），上傳為 workflow artifact，
+# 可從 Actions 頁面該次執行的 Artifacts 區下載。
+# 只動到文件等與桌面程式無關的檔案時，build job 會跳過（跳過視為通過）。
+
+name: Desktop Build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # 桌面程式與它相依的 crate（architecture.md §4：desktop → shared, formula）
+          filters: |
+            desktop:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'apps/desktop/**'
+              - 'crates/shared/**'
+              - 'crates/formula/**'
+              - '.github/workflows/desktop-build.yml'
+
+  build:
+    name: desktop-build (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos
+            runner: macos-latest # Apple Silicon（arm64）
+            artifact: hammer-erp-macos-arm64
+            bundles: |
+              target/release/bundle/dmg/*.dmg
+          - name: windows
+            runner: windows-latest
+            artifact: hammer-erp-windows-x64
+            bundles: |
+              target/release/bundle/msi/*.msi
+              target/release/bundle/nsis/*.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: pnpm install
+        working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+
+      # beforeBuildCommand（pnpm build）會先建置前端
+      - name: tauri build
+        working-directory: apps/desktop
+        run: pnpm tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.bundles }}
+          if-no-files-found: error
+          retention-days: 14

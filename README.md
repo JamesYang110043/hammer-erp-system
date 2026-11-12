@@ -269,3 +269,30 @@ pnpm typecheck        # 型別不符時會在這裡報錯
 ```
 
 `cargo test --workspace` 中的 `bindings_are_up_to_date` 會檢查 `bindings.ts` 是否為最新。
+
+## CI（GitHub Actions）
+
+PR 到 `main` 以及 push 到 `main` 時自動執行。同一個 PR 有新的 push 時，會取消舊的執行。
+
+| Workflow | Job | 內容 |
+|---|---|---|
+| `ci.yml` | `changes` | 用 `dorny/paths-filter` 判斷改動範圍；沒動到的 job 會跳過 |
+| | `rust-lint` | `cargo fmt --check`、`cargo clippy -D warnings`、`cargo sqlx prepare --workspace --check`（`.sqlx/` 與查詢不一致時失敗） |
+| | `rust-test` | `cargo llvm-cov --workspace`（含 `#[sqlx::test]` 整合測試，使用 PostgreSQL service container）與 doctest；`crates/core`、`crates/formula` 行覆蓋率低於 80% 時失敗，覆蓋率摘要會留言在 PR |
+| | `web-lint` | `apps/desktop` 的 `pnpm lint`、`pnpm typecheck` |
+| `desktop-build.yml` | `desktop-build (macos)`、`desktop-build (windows)` | `tauri build`，產出不簽章的 `.dmg`（Apple Silicon）與 `.msi`／`.exe` |
+
+- 只改 `docs/`、README 等文件時，Rust、前端與桌面建置的 job 都會跳過。
+- 安裝檔下載：Actions 頁面 → 選擇該次 **Desktop Build** 執行 → 頁面下方 **Artifacts**。保留 14 天。
+- 安裝檔沒有簽章（architecture.md Q6）。macOS 開啟時若出現「已損毀」，執行 `xattr -cr "/Applications/Hammer ERP.app"`；Windows 出現 SmartScreen 警告時選「其他資訊 → 仍要執行」。
+- 覆蓋率門檻的計算在 `.github/scripts/coverage-gate.sh`。本機量測：`cargo llvm-cov --workspace`（需先安裝 `cargo-llvm-cov` 並設定 `DATABASE_URL`）。
+
+### 分支保護建議
+
+建議在 `main` 設定分支保護（Settings → Branches 或 Rulesets）：
+
+- 合併前必須透過 PR，且至少 1 人 review
+- 以下 check 必須通過：`rust-lint`、`rust-test`、`web-lint`、`desktop-build (macos)`、`desktop-build (windows)`。因改動範圍而跳過的 job 會視為通過
+- 合併前分支必須是最新（Require branches to be up to date）
+
+> 目前 repo 是 private 且使用 GitHub Free 方案，無法設定分支保護（API 回傳 403）。在升級方案或改為公開之前，**CI 沒通過的 PR 仍然可以 merge**，merge 前請自行確認所有 check 都是綠燈。
