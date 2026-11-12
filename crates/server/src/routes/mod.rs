@@ -4,12 +4,13 @@
 //!
 //! - [`public_routes`]：**不需要登入**的路由，只有這裡列出的可以不帶 token：
 //!   - `GET /api/v1/health`
-//!   - 登入（`POST /api/v1/auth/login`，#25）
+//!   - 登入（`POST /api/v1/auth/login`）
 //!   - 初次啟動建立管理者（#26）
 //! - [`protected_routes`]：其他所有路由。handler 必須帶 [`AuthUser`](crate::AuthUser)
 //!   （或改密碼、登出、`/auth/me` 使用的 [`AuthUserAllowPasswordChange`](crate::AuthUserAllowPasswordChange)）
 //!   參數，並以 `auth.require(...)` 檢查權限（§6.2）。
 
+pub mod auth;
 pub mod health;
 
 use std::any::Any;
@@ -17,7 +18,7 @@ use std::any::Any;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use hammer_shared::constants::API_PREFIX;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -57,12 +58,17 @@ pub fn router(state: AppState) -> Router {
 
 /// 不需要登入的路由。新增前請確認真的不需要登入，並同步更新模組文件的清單。
 fn public_routes() -> Router<AppState> {
-    Router::new().route("/health", get(health::health))
+    Router::new()
+        .route("/health", get(health::health))
+        .route("/auth/login", post(auth::login))
 }
 
 /// 需要登入的路由。
 fn protected_routes() -> Router<AppState> {
     Router::new()
+        .route("/auth/logout", post(auth::logout))
+        .route("/auth/me", get(auth::me))
+        .route("/auth/change-password", post(auth::change_password))
 }
 
 async fn not_found() -> AppError {

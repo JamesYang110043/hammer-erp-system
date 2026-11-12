@@ -51,6 +51,13 @@ export type ApiError_Serialize = {
 	details?: unknown,
 };
 
+/**  `POST /api/v1/auth/change-password` 的輸入。 */
+export type ChangePasswordRequest = {
+	current_password: string,
+	/**  至少 10 個字元（§6.2）。 */
+	new_password: string,
+};
+
 export type ClientError = ClientError_Serialize | ClientError_Deserialize;
 
 export type ClientError_Deserialize = 
@@ -81,6 +88,19 @@ export type ClientError_Serialize =
 /**  本機設定檔讀寫失敗。 */
 { kind: "storage"; message: string };
 
+/**  目前登入的使用者（`GET /api/v1/auth/me`，以及登入回應中的 `user`）。 */
+export type CurrentUser = {
+	id: string,
+	username: string,
+	display_name: string,
+	/**  角色代碼，對應 `role` 模組的常數（`admin` / `editor` / `viewer`）。 */
+	role: string,
+	/**  權限代碼，對應 `permission` 模組的常數，依代碼排序。 */
+	permissions: string[],
+	/**  為 `true` 時必須先修改密碼，其他 API 會回傳 `PASSWORD_CHANGE_REQUIRED`。 */
+	must_change_password: boolean,
+};
+
 /**
  *  錯誤碼。JSON 中為 `SCREAMING_SNAKE_CASE` 字串。
  * 
@@ -108,7 +128,11 @@ export type ErrorCode =
 /**  客戶端版本過舊，需要更新（§10）。 */
 "CLIENT_OUTDATED" | 
 /**  必須先修改密碼才能使用其他功能（§6.2）。 */
-"PASSWORD_CHANGE_REQUIRED";
+"PASSWORD_CHANGE_REQUIRED" | 
+/**  連續登入失敗，帳號暫時鎖定（§6.2）。`details.locked_until` 為解鎖時間（RFC 3339）。 */
+"ACCOUNT_LOCKED" | 
+/**  帳號已停用，無法登入。 */
+"ACCOUNT_DISABLED";
 
 /**
  *  `GET /api/v1/health` 的回應。
@@ -126,6 +150,19 @@ export type HealthResponse = {
 
 /**  健康狀態。JSON 中為小寫字串（`"ok"`、`"error"`）。 */
 export type HealthStatus = "ok" | "error";
+
+/**  `POST /api/v1/auth/login` 的輸入。 */
+export type LoginRequest = {
+	username: string,
+	password: string,
+};
+
+/**  `POST /api/v1/auth/login` 成功時的回應。 */
+export type LoginResponse = {
+	/**  Session token。之後的請求放在 `Authorization: Bearer <token>`。 */
+	token: string,
+	user: CurrentUser,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

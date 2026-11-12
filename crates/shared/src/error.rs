@@ -37,6 +37,10 @@ pub enum ErrorCode {
     ClientOutdated,
     /// 必須先修改密碼才能使用其他功能（§6.2）。
     PasswordChangeRequired,
+    /// 連續登入失敗，帳號暫時鎖定（§6.2）。`details.locked_until` 為解鎖時間（RFC 3339）。
+    AccountLocked,
+    /// 帳號已停用，無法登入。
+    AccountDisabled,
 }
 
 impl ErrorCode {
@@ -53,7 +57,7 @@ impl ErrorCode {
             Self::Conflict => 409,
             Self::PayloadTooLarge => 413,
             Self::ClientOutdated => 426,
-            Self::PasswordChangeRequired => 403,
+            Self::PasswordChangeRequired | Self::AccountLocked | Self::AccountDisabled => 403,
         }
     }
 }
@@ -150,6 +154,8 @@ mod tests {
                 ErrorCode::PasswordChangeRequired,
                 "PASSWORD_CHANGE_REQUIRED",
             ),
+            (ErrorCode::AccountLocked, "ACCOUNT_LOCKED"),
+            (ErrorCode::AccountDisabled, "ACCOUNT_DISABLED"),
         ];
         for (code, s) in cases {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(s));
@@ -164,5 +170,7 @@ mod tests {
         assert_eq!(ErrorCode::PayloadTooLarge.http_status(), 413);
         assert_eq!(ErrorCode::ClientOutdated.http_status(), 426);
         assert_eq!(ErrorCode::PasswordChangeRequired.http_status(), 403);
+        assert_eq!(ErrorCode::AccountLocked.http_status(), 403);
+        assert_eq!(ErrorCode::AccountDisabled.http_status(), 403);
     }
 }

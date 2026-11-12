@@ -4,6 +4,7 @@
 //! 本 crate 位於相依方向的最底層，不可依賴專案內其他 crate（`docs/architecture.md` §4）。
 
 pub mod audit;
+pub mod auth;
 pub mod constants;
 pub mod decimal;
 pub mod error;
