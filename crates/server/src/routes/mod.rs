@@ -1,4 +1,14 @@
 //! 路由。
+//!
+//! 路由分成兩組：
+//!
+//! - [`public_routes`]：**不需要登入**的路由，只有這裡列出的可以不帶 token：
+//!   - `GET /api/v1/health`
+//!   - 登入（`POST /api/v1/auth/login`，#25）
+//!   - 初次啟動建立管理者（#26）
+//! - [`protected_routes`]：其他所有路由。handler 必須帶 [`AuthUser`](crate::AuthUser)
+//!   （或改密碼、登出、`/auth/me` 使用的 [`AuthUserAllowPasswordChange`](crate::AuthUserAllowPasswordChange)）
+//!   參數，並以 `auth.require(...)` 檢查權限（§6.2）。
 
 pub mod health;
 
@@ -22,7 +32,7 @@ use crate::{AppError, AppState};
 pub fn router(state: AppState) -> Router {
     let body_limit = state.config.body_limit_bytes;
 
-    let api = Router::new().route("/health", get(health::health));
+    let api = public_routes().merge(protected_routes());
 
     // `.layer()` 越後面加的越外層：請求由下往上經過，回應由上往下。
     Router::new()
@@ -43,6 +53,16 @@ pub fn router(state: AppState) -> Router {
             request_id::MakeRequestUuidV7,
         ))
         .with_state(state)
+}
+
+/// 不需要登入的路由。新增前請確認真的不需要登入，並同步更新模組文件的清單。
+fn public_routes() -> Router<AppState> {
+    Router::new().route("/health", get(health::health))
+}
+
+/// 需要登入的路由。
+fn protected_routes() -> Router<AppState> {
+    Router::new()
 }
 
 async fn not_found() -> AppError {

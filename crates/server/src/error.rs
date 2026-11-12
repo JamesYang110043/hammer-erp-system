@@ -3,6 +3,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use hammer_core::CoreError;
 use hammer_core::db::DbError;
 use hammer_shared::{ApiError, ErrorCode};
 
@@ -37,6 +38,16 @@ impl AppError {
 impl From<ApiError> for AppError {
     fn from(err: ApiError) -> Self {
         Self(err)
+    }
+}
+
+impl From<CoreError> for AppError {
+    /// 商業邏輯錯誤。內部錯誤的細節只寫進 log，不回傳給客戶端。
+    fn from(err: CoreError) -> Self {
+        if !err.is_user_facing() {
+            tracing::error!(error = %err, "伺服器內部錯誤");
+        }
+        Self(err.into())
     }
 }
 
@@ -82,6 +93,7 @@ pub fn default_message(code: ErrorCode) -> &'static str {
         ErrorCode::Conflict => "此資料已被其他人修改，請重新載入",
         ErrorCode::PayloadTooLarge => "上傳的資料超過大小上限",
         ErrorCode::ClientOutdated => "程式版本過舊，請更新後再使用",
+        ErrorCode::PasswordChangeRequired => "請先修改密碼",
     }
 }
 
@@ -126,6 +138,14 @@ mod tests {
     }
 
     #[test]
+    fn password_change_required_is_403() {
+        // 與 FORBIDDEN 共用 403；由狀態碼反推時一律視為 FORBIDDEN
+        let code = ErrorCode::PasswordChangeRequired;
+        assert_eq!(status_of(code), StatusCode::FORBIDDEN);
+        assert_eq!(code_for_status(status_of(code)), ErrorCode::Forbidden);
+    }
+
+    #[test]
     fn unknown_statuses_fall_back() {
         assert_eq!(
             code_for_status(StatusCode::UNSUPPORTED_MEDIA_TYPE),
@@ -135,6 +155,21 @@ mod tests {
             code_for_status(StatusCode::BAD_GATEWAY),
             ErrorCode::Internal
         );
+    }
+
+    #[test]
+    fn core_errors_keep_code() {
+        assert_eq!(
+            AppError::from(CoreError::Unauthorized).code(),
+            ErrorCode::Unauthorized
+        );
+        assert_eq!(
+            AppError::from(CoreError::PasswordChangeRequired).code(),
+            ErrorCode::PasswordChangeRequired
+        );
+        let err = AppError::from(CoreError::Internal("秘密細節".into()));
+        assert_eq!(err.code(), ErrorCode::Internal);
+        assert!(!err.0.message.contains("秘密"));
     }
 
     #[test]

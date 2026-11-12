@@ -35,6 +35,8 @@ pub enum ErrorCode {
     PayloadTooLarge,
     /// 客戶端版本過舊，需要更新（§10）。
     ClientOutdated,
+    /// 必須先修改密碼才能使用其他功能（§6.2）。
+    PasswordChangeRequired,
 }
 
 impl ErrorCode {
@@ -51,6 +53,7 @@ impl ErrorCode {
             Self::Conflict => 409,
             Self::PayloadTooLarge => 413,
             Self::ClientOutdated => 426,
+            Self::PasswordChangeRequired => 403,
         }
     }
 }
@@ -143,6 +146,10 @@ mod tests {
             (ErrorCode::Conflict, "CONFLICT"),
             (ErrorCode::PayloadTooLarge, "PAYLOAD_TOO_LARGE"),
             (ErrorCode::ClientOutdated, "CLIENT_OUTDATED"),
+            (
+                ErrorCode::PasswordChangeRequired,
+                "PASSWORD_CHANGE_REQUIRED",
+            ),
         ];
         for (code, s) in cases {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(s));
@@ -156,5 +163,6 @@ mod tests {
         assert_eq!(ErrorCode::Conflict.http_status(), 409);
         assert_eq!(ErrorCode::PayloadTooLarge.http_status(), 413);
         assert_eq!(ErrorCode::ClientOutdated.http_status(), 426);
+        assert_eq!(ErrorCode::PasswordChangeRequired.http_status(), 403);
     }
 }

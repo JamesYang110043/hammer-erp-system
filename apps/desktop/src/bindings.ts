@@ -106,7 +106,9 @@ export type ErrorCode =
 /**  請求內容超過大小上限。 */
 "PAYLOAD_TOO_LARGE" | 
 /**  客戶端版本過舊，需要更新（§10）。 */
-"CLIENT_OUTDATED";
+"CLIENT_OUTDATED" | 
+/**  必須先修改密碼才能使用其他功能（§6.2）。 */
+"PASSWORD_CHANGE_REQUIRED";
 
 /**
  *  `GET /api/v1/health` 的回應。
