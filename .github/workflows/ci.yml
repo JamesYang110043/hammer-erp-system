@@ -3,7 +3,8 @@
 # - changes：判斷改動範圍；只改 docs/ 或 README 時，其他 job 都會跳過（跳過視為通過）
 # - rust-lint：fmt、clippy、sqlx offline 資料檢查
 # - rust-test：cargo llvm-cov 執行所有測試（含 #[sqlx::test] 整合測試）＋ core/formula 覆蓋率門檻
-# - web-lint：前端 lint、typecheck
+# - web-test：前端 lint、typecheck、Vitest 單元測試（含覆蓋率，只回報不設門檻）
+# - e2e-web：Playwright 對 Vite 前端執行 E2E（IPC 以 mock 回應）；失敗時上傳截圖與 trace
 #
 # 需要資料庫的 job 使用 PostgreSQL service container（只能在 Linux runner 使用）。
 
@@ -56,8 +57,13 @@ jobs:
               - '.sqlx/**'
               - '.github/workflows/ci.yml'
               - '.github/scripts/**'
+            # 前端；不含 apps/desktop/src-tauri/**，只改 Rust 時前端 job 會跳過
+            # （Rust 型別改動會連帶更新 src/bindings.ts，仍會觸發）
             web:
-              - 'apps/desktop/**'
+              - 'apps/desktop/*'
+              - 'apps/desktop/src/**'
+              - 'apps/desktop/e2e/**'
+              - 'apps/desktop/public/**'
               - '.github/workflows/ci.yml'
 
   rust-lint:
@@ -211,8 +217,8 @@ jobs:
             gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file coverage.md
           fi
 
-  web-lint:
-    name: web-lint
+  web-test:
+    name: web-test
     needs: changes
     if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
@@ -235,3 +241,39 @@ jobs:
         run: pnpm lint
       - name: pnpm typecheck
         run: pnpm typecheck
+      - name: pnpm test --coverage
+        run: pnpm test --coverage
+
+  e2e-web:
+    name: e2e-web
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: 安裝 Playwright 瀏覽器
+        run: pnpm exec playwright install --with-deps chromium
+      - name: pnpm test:e2e
+        run: pnpm test:e2e
+      # 失敗時的截圖與 trace 在 test-results/（用 `pnpm exec playwright show-trace <trace.zip>` 開啟）
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: playwright-results
+          path: |
+            apps/desktop/test-results/
+            apps/desktop/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
