@@ -252,7 +252,15 @@ pnpm tauri dev        # 開發模式（會自動啟動 Vite）
 pnpm lint             # ESLint + Prettier 檢查
 pnpm typecheck        # TypeScript 型別檢查
 pnpm format           # 以 Prettier 格式化
+pnpm test             # Vitest 單元測試（pnpm test --coverage 顯示覆蓋率）
+pnpm test:e2e         # Playwright E2E（自動啟動 Vite；第一次先執行 pnpm exec playwright install chromium）
 ```
+
+### 前端測試
+
+- 單元測試（Vitest + React Testing Library）放在元件旁：`Foo.tsx` → `Foo.test.tsx`。Tauri command 用 `src/test/ipc.ts` 的 `mockCommands` 模擬（包裝 `@tauri-apps/api/mocks` 的 `mockIPC`），錯誤用 `commandError(...)`；元件用 `src/test/render.tsx` 的 `renderWithProviders` 渲染（antd 繁中語系、TanStack Query）。
+- E2E（Playwright）放在 `e2e/`，對 Vite dev server 執行，不啟動 Tauri。Tauri command 用 `e2e/tauri-mock.ts` 的 `mockTauri(page, handlers)` 模擬，必須在 `page.goto()` 前呼叫；錯誤用 `throw new CommandRejection(...)`。
+- E2E 失敗時，截圖與 trace 存在 `test-results/`，用 `pnpm exec playwright show-trace <trace.zip>` 開啟。
 
 - 伺服器網址預設 `http://localhost:8080`，可在「連線設定」修改並「測試連線」；設定存在作業系統的 app 設定目錄（`settings.json`）。
 - 底部狀態列每 10 秒檢查一次 `/api/v1/health`，顯示連線狀態與伺服器／用戶端版本。
@@ -279,10 +287,12 @@ PR 到 `main` 以及 push 到 `main` 時自動執行。同一個 PR 有新的 pu
 | `ci.yml` | `changes` | 用 `dorny/paths-filter` 判斷改動範圍；沒動到的 job 會跳過 |
 | | `rust-lint` | `cargo fmt --check`、`cargo clippy -D warnings`、`cargo sqlx prepare --workspace --check`（`.sqlx/` 與查詢不一致時失敗） |
 | | `rust-test` | `cargo llvm-cov --workspace`（含 `#[sqlx::test]` 整合測試，使用 PostgreSQL service container）與 doctest；`crates/core`、`crates/formula` 行覆蓋率低於 80% 時失敗，覆蓋率摘要會留言在 PR |
-| | `web-lint` | `apps/desktop` 的 `pnpm lint`、`pnpm typecheck` |
+| | `web-test` | `apps/desktop` 的 `pnpm lint`、`pnpm typecheck`、`pnpm test --coverage`（前端覆蓋率只回報，不設門檻） |
+| | `e2e-web` | `pnpm test:e2e`（Playwright，Chromium）；失敗時截圖與 trace 上傳為 artifact `playwright-results` |
 | `desktop-build.yml` | `desktop-build (macos)`、`desktop-build (windows)` | `tauri build`，產出不簽章的 `.dmg`（Apple Silicon）與 `.msi`／`.exe` |
 
 - 只改 `docs/`、README 等文件時，Rust、前端與桌面建置的 job 都會跳過。
+- 只改 Rust（`crates/`、`apps/desktop/src-tauri/`）時，`web-test`、`e2e-web` 會跳過；如果同時更新了 `src/bindings.ts`，前端 job 仍會執行。
 - 安裝檔下載：Actions 頁面 → 選擇該次 **Desktop Build** 執行 → 頁面下方 **Artifacts**。保留 14 天。
 - 安裝檔沒有簽章（architecture.md Q6）。macOS 開啟時若出現「已損毀」，執行 `xattr -cr "/Applications/Hammer ERP.app"`；Windows 出現 SmartScreen 警告時選「其他資訊 → 仍要執行」。
 - 覆蓋率門檻的計算在 `.github/scripts/coverage-gate.sh`。本機量測：`cargo llvm-cov --workspace`（需先安裝 `cargo-llvm-cov` 並設定 `DATABASE_URL`）。
@@ -292,7 +302,7 @@ PR 到 `main` 以及 push 到 `main` 時自動執行。同一個 PR 有新的 pu
 建議在 `main` 設定分支保護（Settings → Branches 或 Rulesets）：
 
 - 合併前必須透過 PR，且至少 1 人 review
-- 以下 check 必須通過：`rust-lint`、`rust-test`、`web-lint`、`desktop-build (macos)`、`desktop-build (windows)`。因改動範圍而跳過的 job 會視為通過
+- 以下 check 必須通過：`rust-lint`、`rust-test`、`web-test`、`e2e-web`、`desktop-build (macos)`、`desktop-build (windows)`。因改動範圍而跳過的 job 會視為通過
 - 合併前分支必須是最新（Require branches to be up to date）
 
 > 目前 repo 是 private 且使用 GitHub Free 方案，無法設定分支保護（API 回傳 403）。在升級方案或改為公開之前，**CI 沒通過的 PR 仍然可以 merge**，merge 前請自行確認所有 check 都是綠燈。
