@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO users\n            (id, username, display_name, password_hash, role_id, must_change_password,\n             created_at, created_by, updated_at, updated_by)\n        SELECT $1, $2, $3, $4, r.id, $6, $7, $8, $7, $8\n        FROM roles r\n        WHERE r.code = $5\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2f1898eaa114bbb79795fe7c846607a106dc570b2d2d287696930afd6e517ac1"
+}

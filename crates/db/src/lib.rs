@@ -4,15 +4,17 @@
 //! - [`run_migrations`]：套用 `crates/db/migrations/` 的 migration
 //! - [`ensure_version_matched`]：樂觀鎖定檢查，版本不符時回傳 [`DbError::Conflict`]
 //! - [`audit`]：寫入 `audit_logs`
+//! - [`lock`]：advisory lock
 //! - [`session`]：`sessions` 的新增、查詢、更新與撤銷
 //! - [`settings`]：讀取 `settings`
-//! - [`user`]：認證用的使用者、角色與權限查詢
+//! - [`user`]：認證用的使用者、角色與權限查詢，以及建立帳號
 //!
 //! 共通欄位與 `custom_data` 慣例寫在 `migrations/0001_foundation.sql` 的註解。
 //! 相依方向見 `docs/architecture.md` §4。
 
 pub mod audit;
 mod error;
+pub mod lock;
 mod migrate;
 mod optimistic;
 mod pool;

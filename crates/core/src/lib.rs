@@ -2,6 +2,7 @@
 //!
 //! - [`audit`]：操作紀錄的 diff 與寫入
 //! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定、目前使用者與權限檢查
+//! - [`setup`]：初次啟動建立第一個管理者
 //! - `test_util`（`test-util` feature）：整合測試用，直接建立使用者與 session
 //!
 //! 相依方向見 `docs/architecture.md` §4。
@@ -9,6 +10,7 @@
 pub mod audit;
 pub mod auth;
 mod error;
+pub mod setup;
 #[cfg(feature = "test-util")]
 pub mod test_util;
 
