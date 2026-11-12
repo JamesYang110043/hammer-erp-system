@@ -21,6 +21,14 @@ hammer-formula = { path = "crates/formula" }
 hammer-core = { path = "crates/core" }
 hammer-db = { path = "crates/db" }
 
+rust_decimal = { version = "1", default-features = false, features = ["std", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# specta 2 仍是 RC 版，固定版本號，需與 tauri-specta 相容
+specta = { version = "=2.0.0-rc.28", features = ["derive"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

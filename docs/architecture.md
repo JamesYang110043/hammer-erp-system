@@ -137,7 +137,7 @@ desktop(src-tauri) ──▶ shared, formula
 | 金額 | rust_decimal |
 | 密碼雜湊 | argon2（Argon2id） |
 | 主鍵 | uuid（v7） |
-| 時間 | time 或 chrono（實作時擇一，全專案統一） |
+| 時間 | time（不使用 chrono，全專案統一）。Asia/Taipei 固定 UTC+8、無日光節約，用固定位移即可，不需時區資料庫；工具函式在 `crates/shared` 的 `time` 模組 |
 | 錯誤處理 | thiserror（函式庫）、anyhow（執行檔） |
 | 日誌 | tracing |
 | HTTP Client | reqwest（rustls） |

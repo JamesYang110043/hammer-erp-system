@@ -1,0 +1,142 @@
+//! 統一錯誤格式（`docs/architecture.md` §10）。
+//!
+//! ```json
+//! { "code": "NOT_FOUND", "message": "找不到資料", "details": { … } }
+//! ```
+//!
+//! `details` 沒有內容時省略。
+
+use serde::{Deserialize, Serialize};
+use specta::Type;
+
+/// 錯誤碼。JSON 中為 `SCREAMING_SNAKE_CASE` 字串。
+///
+/// 之後各模組的業務錯誤碼（例如 `STOCK_INSUFFICIENT`）加在這裡。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ErrorCode {
+    /// 伺服器內部錯誤。
+    Internal,
+    /// 輸入資料驗證失敗。
+    Validation,
+    /// 找不到資料。
+    NotFound,
+    /// 未登入或 session 失效。
+    Unauthorized,
+    /// 沒有權限。
+    Forbidden,
+    /// 樂觀鎖定衝突：資料已被其他人修改（§9.4）。
+    Conflict,
+    /// 客戶端版本過舊，需要更新（§10）。
+    ClientOutdated,
+}
+
+impl ErrorCode {
+    /// 對應的 HTTP 狀態碼。
+    pub fn http_status(self) -> u16 {
+        match self {
+            Self::Internal => 500,
+            Self::Validation => 422,
+            Self::NotFound => 404,
+            Self::Unauthorized => 401,
+            Self::Forbidden => 403,
+            Self::Conflict => 409,
+            Self::ClientOutdated => 426,
+        }
+    }
+}
+
+/// API 錯誤回應的內容。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+pub struct ApiError {
+    pub code: ErrorCode,
+    /// 給使用者看的訊息（繁體中文）。
+    pub message: String,
+    /// 額外資訊，例如驗證失敗的欄位。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+impl ApiError {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn json_shape_matches_architecture_doc() {
+        let err = ApiError::new(ErrorCode::Validation, "數量必須大於 0")
+            .with_details(json!({ "field": "quantity" }));
+        assert_eq!(
+            serde_json::to_value(&err).unwrap(),
+            json!({
+                "code": "VALIDATION",
+                "message": "數量必須大於 0",
+                "details": { "field": "quantity" }
+            })
+        );
+    }
+
+    #[test]
+    fn details_omitted_when_none() {
+        let err = ApiError::new(ErrorCode::NotFound, "找不到資料");
+        assert_eq!(
+            serde_json::to_value(&err).unwrap(),
+            json!({ "code": "NOT_FOUND", "message": "找不到資料" })
+        );
+    }
+
+    #[test]
+    fn deserializes_from_server_response() {
+        let err: ApiError = serde_json::from_value(json!({
+            "code": "CLIENT_OUTDATED",
+            "message": "請更新程式"
+        }))
+        .unwrap();
+        assert_eq!(err, ApiError::new(ErrorCode::ClientOutdated, "請更新程式"));
+    }
+
+    #[test]
+    fn all_codes_serialize_as_screaming_snake_case() {
+        let cases = [
+            (ErrorCode::Internal, "INTERNAL"),
+            (ErrorCode::Validation, "VALIDATION"),
+            (ErrorCode::NotFound, "NOT_FOUND"),
+            (ErrorCode::Unauthorized, "UNAUTHORIZED"),
+            (ErrorCode::Forbidden, "FORBIDDEN"),
+            (ErrorCode::Conflict, "CONFLICT"),
+            (ErrorCode::ClientOutdated, "CLIENT_OUTDATED"),
+        ];
+        for (code, s) in cases {
+            assert_eq!(serde_json::to_value(code).unwrap(), json!(s));
+        }
+    }
+
+    #[test]
+    fn http_status_mapping() {
+        assert_eq!(ErrorCode::Conflict.http_status(), 409);
+        assert_eq!(ErrorCode::ClientOutdated.http_status(), 426);
+    }
+}
