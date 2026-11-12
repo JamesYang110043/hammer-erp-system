@@ -2,6 +2,8 @@
 //!
 //! - 資料庫正常 → `200`，`status: "ok"`
 //! - 資料庫異常 → `503`，`status: "error"`（伺服器本身仍繼續運作）
+//!
+//! 回應型別定義在 [`hammer_shared::health`]，桌面程式共用。
 
 use std::time::Duration;
 
@@ -9,29 +11,12 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use hammer_core::db::sqlx;
-use serde::{Deserialize, Serialize};
+use hammer_shared::health::{HealthResponse, HealthStatus as Status};
 
 use crate::{AppState, SERVER_VERSION};
 
 /// 資料庫檢查的逾時時間。
 const DB_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Status {
-    Ok,
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HealthResponse {
-    /// 整體狀態。
-    pub status: Status,
-    /// 伺服器版本。
-    pub version: String,
-    /// 資料庫連線狀態。
-    pub database: Status,
-}
 
 pub async fn health(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
     let check = tokio::time::timeout(

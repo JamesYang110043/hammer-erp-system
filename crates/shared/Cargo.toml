@@ -11,6 +11,7 @@ rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 specta = { workspace = true, features = ["serde_json", "time", "uuid"] }
+specta-typescript.workspace = true
 time.workspace = true
 uuid.workspace = true
 
