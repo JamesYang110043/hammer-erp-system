@@ -16,10 +16,11 @@ import { unwrap } from './client';
 export const entitiesKey = ['entities'] as const;
 const entityKey = (key: string) => [...entitiesKey, key] as const;
 
-export function useEntities() {
+export function useEntities({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: entitiesKey,
     queryFn: () => unwrap(commands.listEntities()),
+    enabled,
   });
 }
 
