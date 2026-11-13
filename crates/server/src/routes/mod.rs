@@ -13,6 +13,7 @@
 pub mod auth;
 pub mod health;
 pub mod setup;
+pub mod users;
 
 use std::any::Any;
 
@@ -72,6 +73,14 @@ fn protected_routes() -> Router<AppState> {
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
         .route("/auth/change-password", post(auth::change_password))
+        .route("/roles", get(users::list_roles))
+        .route("/users", get(users::list).post(users::create))
+        .route(
+            "/users/{id}",
+            get(users::get).patch(users::update).delete(users::delete),
+        )
+        .route("/users/{id}/reset-password", post(users::reset_password))
+        .route("/users/{id}/unlock", post(users::unlock))
 }
 
 async fn not_found() -> AppError {

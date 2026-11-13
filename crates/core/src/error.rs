@@ -7,12 +7,31 @@ use hammer_shared::{ApiError, ErrorCode};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+/// [`CoreError::LastAdmin`] 在 API 回應 `details.reason` 的值。
+pub const LAST_ADMIN_REASON: &str = "last_admin";
+
 /// 商業邏輯層的錯誤。
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     /// 輸入資料不符合規則，訊息直接顯示給使用者（繁體中文）。
     #[error("{0}")]
     Validation(String),
+
+    /// 某個欄位的輸入不符合規則（例如帳號重複）。API 回應的 `details.field` 為欄位名稱。
+    #[error("{message}")]
+    InvalidField {
+        field: &'static str,
+        message: String,
+    },
+
+    /// 操作後系統沒有任何有效（啟用、未刪除）的管理者（§6.2）。
+    /// API 回應為 `VALIDATION`，`details.reason` 為 [`LAST_ADMIN_REASON`]。
+    #[error("系統至少需要保留一個有效的管理者，無法停用、刪除最後一個管理者或變更其角色")]
+    LastAdmin,
+
+    /// 找不到資料（不存在或已刪除），訊息直接顯示給使用者（繁體中文）。
+    #[error("{0}")]
+    NotFound(String),
 
     /// 未登入、token 無效、session 已失效，或使用者已停用、已刪除。
     ///
@@ -58,7 +77,10 @@ impl CoreError {
     /// 對應的錯誤碼。
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Validation(_) => ErrorCode::Validation,
+            Self::Validation(_) | Self::InvalidField { .. } | Self::LastAdmin => {
+                ErrorCode::Validation
+            }
+            Self::NotFound(_) => ErrorCode::NotFound,
             Self::Unauthorized => ErrorCode::Unauthorized,
             Self::Forbidden(_) => ErrorCode::Forbidden,
             Self::PasswordChangeRequired => ErrorCode::PasswordChangeRequired,
@@ -67,6 +89,15 @@ impl CoreError {
             Self::AccountDisabled => ErrorCode::AccountDisabled,
             Self::Conflict(_) | Self::Db(DbError::Conflict) => ErrorCode::Conflict,
             Self::Db(_) | Self::Internal(_) => ErrorCode::Internal,
+        }
+    }
+
+    /// 把 [`CoreError::Validation`] 標上欄位名稱（轉成 [`CoreError::InvalidField`]）。
+    /// 其他錯誤不變。
+    pub fn with_field(self, field: &'static str) -> Self {
+        match self {
+            Self::Validation(message) => Self::InvalidField { field, message },
+            other => other,
         }
     }
 
@@ -80,7 +111,12 @@ impl From<CoreError> for ApiError {
     /// 轉成 API 錯誤。內部錯誤只回傳通用訊息。
     fn from(err: CoreError) -> Self {
         let code = err.code();
-        if let CoreError::Forbidden(permission) = err {
+        if let CoreError::InvalidField { field, message } = err {
+            ApiError::new(code, message).with_details(serde_json::json!({ "field": field }))
+        } else if let CoreError::LastAdmin = err {
+            ApiError::new(code, err.to_string())
+                .with_details(serde_json::json!({ "reason": LAST_ADMIN_REASON }))
+        } else if let CoreError::Forbidden(permission) = err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "permission": permission }))
         } else if let CoreError::AccountLocked(until) = err {
@@ -189,6 +225,45 @@ mod tests {
         assert_eq!(api.code, ErrorCode::Conflict);
         assert_eq!(api.message, "系統已完成初始設定");
         assert_eq!(api.details, None);
+    }
+
+    #[test]
+    fn invalid_field_includes_field_in_details() {
+        let err = CoreError::Validation("此帳號已被使用".into()).with_field("username");
+        assert_eq!(err.code(), ErrorCode::Validation);
+        let api: ApiError = err.into();
+        assert_eq!(api.code, ErrorCode::Validation);
+        assert_eq!(api.message, "此帳號已被使用");
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "field": "username" }))
+        );
+    }
+
+    #[test]
+    fn with_field_keeps_other_errors() {
+        let err = CoreError::Unauthorized.with_field("username");
+        assert!(matches!(err, CoreError::Unauthorized));
+    }
+
+    #[test]
+    fn last_admin_is_validation_with_reason() {
+        let api: ApiError = CoreError::LastAdmin.into();
+        assert_eq!(api.code, ErrorCode::Validation);
+        assert!(api.message.contains("管理者"));
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "reason": "last_admin" }))
+        );
+    }
+
+    #[test]
+    fn not_found_keeps_message() {
+        let err = CoreError::NotFound("找不到此帳號".into());
+        assert_eq!(err.code(), ErrorCode::NotFound);
+        let api: ApiError = err.into();
+        assert_eq!(api.code, ErrorCode::NotFound);
+        assert_eq!(api.message, "找不到此帳號");
     }
 
     #[test]

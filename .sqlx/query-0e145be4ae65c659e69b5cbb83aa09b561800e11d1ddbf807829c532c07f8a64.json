@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(*) AS \"count!\"\n        FROM users u\n        JOIN roles r ON r.id = u.role_id\n        WHERE r.code = $1 AND u.is_active AND u.deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0e145be4ae65c659e69b5cbb83aa09b561800e11d1ddbf807829c532c07f8a64"
+}
