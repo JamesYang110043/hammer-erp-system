@@ -4,15 +4,16 @@
 //! - [`plan_create_field`]、[`plan_update_field`]：欄位，含 §7.2 系統欄位的限制
 //! - [`validate_field_config`]：欄位設定與型態相符（小數位數、選項、驗證規則、預設值）
 //! - [`plan_reorder`]：調整欄位排序
+//! - [`plan_change_type`]：變更欄位資料型態的新定義（§7.4；資料的轉換在 [`super::type_change`]）
 //!
 //! 錯誤都是 [`CoreError::InvalidField`]，`field` 為 request 的欄位名稱（[`field`]）。
 
 use std::collections::{HashMap, HashSet};
 
 use hammer_shared::schema::{
-    CreateEntityRequest, CreateFieldRequest, DataType, EntityDefinition, EntityKind, EntityStorage,
-    FieldDefinition, FieldOrderItem, FieldStorage, UpdateEntityRequest, UpdateFieldRequest,
-    validate_key,
+    ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DataType, EntityDefinition,
+    EntityKind, EntityStorage, FieldDefinition, FieldOrderItem, FieldStorage, UpdateEntityRequest,
+    UpdateFieldRequest, validate_key,
 };
 use hammer_shared::{Id, new_id};
 use serde_json::Value;
@@ -20,6 +21,8 @@ use time::OffsetDateTime;
 
 use crate::CoreError;
 use crate::record_data::normalize_field_value;
+
+use super::type_change::{self, TypeChange};
 
 /// 驗證錯誤 `details.field` 的欄位名稱，與 request 的欄位名稱相同。
 pub mod field {
@@ -327,6 +330,41 @@ pub fn validate_field_config(mut def: FieldDefinition) -> Result<FieldDefinition
 
     def.default_value = normalize_default(&def)?;
     Ok(def)
+}
+
+/// 檢查變更資料型態的輸入，回傳新的欄位定義（`version` 等不變）與轉換的種類。
+///
+/// - 系統欄位不可變更型態（§7.2）→ 錯誤（`data_type`）
+/// - 型態相同、轉換自或轉換成 `relation`、`file`、`formula` → 錯誤（`data_type`）
+/// - `decimal_places`、`options`、`validation` 依新型態整筆取代，須符合 [`validate_field_config`]
+/// - `default_value` 轉換成新型態；無法轉換 → 錯誤（`default_value`）
+pub fn plan_change_type(
+    current: &FieldDefinition,
+    req: &ChangeFieldTypeRequest,
+) -> Result<(FieldDefinition, TypeChange), CoreError> {
+    if current.is_system {
+        return Err(invalid(field::DATA_TYPE, "系統欄位不可變更資料型態"));
+    }
+    let change = type_change::classify(current.data_type, req.data_type)
+        .map_err(|m| invalid(field::DATA_TYPE, m))?;
+    let mut next = validate_field_config(FieldDefinition {
+        data_type: req.data_type,
+        decimal_places: req.decimal_places,
+        options: req.options.clone(),
+        validation: req.validation.clone(),
+        default_value: None,
+        ..current.clone()
+    })?;
+    next.default_value = match current.default_value.as_ref() {
+        None => None,
+        Some(default) => type_change::convert_value(current, &next, default).map_err(|m| {
+            invalid(
+                field::DEFAULT_VALUE,
+                &format!("預設值無法轉換成新的資料型態：{m}"),
+            )
+        })?,
+    };
+    Ok((next, change))
 }
 
 /// 以欄位的設定驗證並正規化預設值。
@@ -1198,5 +1236,118 @@ mod tests {
         let steps = plan_reorder(&current, &[item("a"), item("b")]).unwrap();
         assert!(!steps[0].changes());
         assert!(steps[1].changes());
+    }
+
+    fn change_req(def: &FieldDefinition, data_type: DataType) -> ChangeFieldTypeRequest {
+        ChangeFieldTypeRequest {
+            version: def.version,
+            data_type,
+            decimal_places: None,
+            options: None,
+            validation: None,
+        }
+    }
+
+    fn change_err(def: &FieldDefinition, req: &ChangeFieldTypeRequest) -> &'static str {
+        let err = plan_change_type(def, req).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::Validation);
+        field_of(&err)
+    }
+
+    #[test]
+    fn change_type_replaces_type_settings() {
+        let def = created(&CreateFieldRequest {
+            validation: Some(Validation {
+                max_length: Some(10),
+                ..Default::default()
+            }),
+            is_searchable: true,
+            column_width: Some(80),
+            ..create_req("qty", DataType::Text)
+        });
+        let (next, change) = plan_change_type(
+            &def,
+            &ChangeFieldTypeRequest {
+                decimal_places: Some(2),
+                validation: Some(Validation {
+                    min: Some(Decimal::ZERO),
+                    ..Default::default()
+                }),
+                ..change_req(&def, DataType::Decimal)
+            },
+        )
+        .unwrap();
+        assert_eq!(change, TypeChange::Checked);
+        assert_eq!(next.data_type, DataType::Decimal);
+        assert_eq!(next.decimal_places, Some(2));
+        assert_eq!(next.validation.unwrap().min, Some(Decimal::ZERO));
+        // 其他屬性不變
+        assert!(next.is_searchable);
+        assert_eq!(next.column_width, Some(80));
+        assert_eq!((next.id, next.version), (def.id, def.version));
+
+        let (next, change) = plan_change_type(&def, &change_req(&def, DataType::LongText)).unwrap();
+        assert_eq!(change, TypeChange::Safe);
+        assert_eq!(next.validation, None);
+    }
+
+    #[test]
+    fn change_type_validates_new_settings() {
+        let def = created(&create_req("qty", DataType::Text));
+        // decimal 需要小數位數
+        assert_eq!(
+            change_err(&def, &change_req(&def, DataType::Decimal)),
+            field::DECIMAL_PLACES
+        );
+        // select 需要選項
+        assert_eq!(
+            change_err(&def, &change_req(&def, DataType::Select)),
+            field::OPTIONS
+        );
+        // 整數不使用字元數上限
+        let req = ChangeFieldTypeRequest {
+            validation: Some(Validation {
+                max_length: Some(5),
+                ..Default::default()
+            }),
+            ..change_req(&def, DataType::Integer)
+        };
+        assert_eq!(change_err(&def, &req), field::VALIDATION);
+    }
+
+    #[test]
+    fn change_type_rejects_system_same_and_unsupported() {
+        let sys = system_field();
+        assert_eq!(
+            change_err(&sys, &change_req(&sys, DataType::LongText)),
+            field::DATA_TYPE
+        );
+        let def = created(&create_req("name", DataType::Text));
+        assert_eq!(
+            change_err(&def, &change_req(&def, DataType::Text)),
+            field::DATA_TYPE
+        );
+        for t in [DataType::Relation, DataType::File, DataType::Formula] {
+            assert_eq!(change_err(&def, &change_req(&def, t)), field::DATA_TYPE);
+        }
+    }
+
+    #[test]
+    fn change_type_converts_default_value() {
+        let def = created(&CreateFieldRequest {
+            default_value: Some(json!("12")),
+            ..create_req("qty", DataType::Text)
+        });
+        let (next, _) = plan_change_type(&def, &change_req(&def, DataType::Integer)).unwrap();
+        assert_eq!(next.default_value, Some(json!(12)));
+
+        let def = created(&CreateFieldRequest {
+            default_value: Some(json!("abc")),
+            ..create_req("qty", DataType::Text)
+        });
+        assert_eq!(
+            change_err(&def, &change_req(&def, DataType::Integer)),
+            field::DEFAULT_VALUE
+        );
     }
 }

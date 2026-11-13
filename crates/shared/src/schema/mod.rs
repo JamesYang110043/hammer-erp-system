@@ -6,7 +6,8 @@
 //! - API 回應：[`EntityDefinition`]、[`FieldDefinition`]
 //! - API 回應：[`EntityDetail`]（資料類別與欄位定義）
 //! - API 請求：[`CreateEntityRequest`]、[`UpdateEntityRequest`]、[`CreateFieldRequest`]、
-//!   [`UpdateFieldRequest`]、[`DeactivateFieldRequest`]、[`ReorderFieldsRequest`]
+//!   [`UpdateFieldRequest`]、[`DeactivateFieldRequest`]、[`ReorderFieldsRequest`]、
+//!   [`ChangeFieldTypeRequest`]
 //!
 //! # 端點
 //!
@@ -22,6 +23,7 @@
 //! | `PATCH /api/v1/entities/{key}/fields/{field_key}` | [`UpdateFieldRequest`] | `200` [`FieldDefinition`] |
 //! | `POST /api/v1/entities/{key}/fields/{field_key}/deactivate` | [`DeactivateFieldRequest`] | `200` [`FieldDefinition`] |
 //! | `PUT /api/v1/entities/{key}/fields/order` | [`ReorderFieldsRequest`] | `200` [`FieldDefinition`]`[]` |
+//! | `POST /api/v1/entities/{key}/fields/{field_key}/change-type` | [`ChangeFieldTypeRequest`] | `200` [`FieldDefinition`] |
 //!
 //! 錯誤：輸入不合法 → `422 VALIDATION`，`details.field` 為 request 的欄位名稱；
 //! `version` 不符 → `409 CONFLICT`；資料類別或欄位不存在 → `404 NOT_FOUND`。
@@ -444,7 +446,7 @@ pub struct CreateFieldRequest {
 
 /// 修改欄位的輸入（整筆取代可修改的屬性）。`field_key`、`storage` 不可修改。
 ///
-/// 變更 `data_type` 依 §7.4 的規則檢查既有資料（尚未支援）；系統欄位不可變更型態（§7.2）。
+/// 變更 `data_type` 使用 [`ChangeFieldTypeRequest`]。
 /// 系統欄位只能修改顯示名稱、顯示或隱藏、排序、欄寬、說明文字、必填與預設值（§7.2），
 /// 其他屬性必須維持原值。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -483,6 +485,51 @@ pub struct DeactivateFieldRequest {
     /// 讀取時取得的版本號；不符時回傳 `409 CONFLICT`。
     pub version: i32,
 }
+
+/// 變更自訂欄位資料型態的輸入（§7.4）。系統欄位不可變更型態（§7.2）。
+///
+/// 依新型態整筆取代 `decimal_places`、`options`、`validation`（不使用的設定省略或 `null`），
+/// 其他屬性不變；`default_value` 轉換成新型態。
+///
+/// 伺服器在同一個 transaction 內把該資料類別的**所有**資料（含已軟刪除）轉換成新型態並更新欄位定義。
+/// 轉換規則：
+///
+/// | 從 → 到 | 規則 |
+/// |---|---|
+/// | 任意型態 → `text` / `long_text` | 允許（轉成文字） |
+/// | `text` ↔ `long_text` | 允許 |
+/// | `integer` → `decimal` | 允許 |
+/// | `select` → `multi_select` | 允許（變成只有一個選項的陣列） |
+/// | 其他 | 逐筆轉換，只要有一筆失敗就拒絕 |
+///
+/// 轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
+/// `relation`、`file`、`formula` 不能轉換。
+///
+/// 錯誤：
+/// - 有資料無法轉換 → `422 VALIDATION`，`details` 為
+///   `{ "field": "data_type", "total": 失敗總筆數, "records": [{ "id", "value", "deleted", "message" }] }`，
+///   `records` 最多 [`MAX_CONVERSION_FAILURES`] 筆，`value` 為原本的值，`deleted` 表示該筆資料已軟刪除
+/// - 設定不合法、系統欄位、型態相同或不支援 → `422 VALIDATION`，`details.field` 為 request 的欄位名稱
+/// - `version` 不符 → `409 CONFLICT`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ChangeFieldTypeRequest {
+    /// 讀取時取得的欄位版本號；不符時回傳 `409 CONFLICT`。
+    pub version: i32,
+    /// 新的資料型態，必須與目前不同。
+    pub data_type: DataType,
+    /// `decimal`、`money` 必填。
+    #[serde(default)]
+    pub decimal_places: Option<i16>,
+    /// `select`、`multi_select` 必填。
+    #[serde(default)]
+    pub options: Option<Vec<SelectOption>>,
+    /// 新型態的驗證規則；省略或 `null` 代表不設定。
+    #[serde(default)]
+    pub validation: Option<Validation>,
+}
+
+/// 型態變更失敗時，`details.records` 最多列出的筆數。
+pub const MAX_CONVERSION_FAILURES: usize = 100;
 
 /// 資料類別與其所有欄位定義（含已停用），欄位依 `sort_order` 排序。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]

@@ -117,7 +117,7 @@ pub async fn create_record(
     ctx.require(permission::RECORD_WRITE)?;
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
-    let (entity, fields) = load_entity(&mut tx, entity_key).await?;
+    let (entity, fields) = load_entity_for_write(&mut tx, entity_key).await?;
     let data = Value::Object(
         normalize_record_data(&fields, &req.data, WriteMode::Create)
             .map_err(CoreError::InvalidFields)?,
@@ -175,7 +175,7 @@ pub async fn update_record(
     ctx.require(permission::RECORD_WRITE)?;
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
-    let (entity, fields) = load_entity(&mut tx, entity_key).await?;
+    let (entity, fields) = load_entity_for_write(&mut tx, entity_key).await?;
     let current = lock_record(&mut tx, entity.id, id).await?;
     ensure_version(current.version, req.version)?;
 
@@ -231,7 +231,7 @@ pub async fn delete_record(
     ctx.require(permission::RECORD_WRITE)?;
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
-    let (entity, _) = load_entity(&mut tx, entity_key).await?;
+    let (entity, _) = load_entity_for_write(&mut tx, entity_key).await?;
     let current = lock_record(&mut tx, entity.id, id).await?;
     ensure_version(current.version, version)?;
 
@@ -460,8 +460,26 @@ async fn load_entity(
     conn: &mut PgConnection,
     key: &str,
 ) -> Result<(EntityDefinition, Vec<FieldDefinition>), CoreError> {
-    let entity = schema_db::find_entity_by_key(&mut *conn, key)
-        .await?
+    let row = schema_db::find_entity_by_key(&mut *conn, key).await?;
+    load_fields_of(conn, row).await
+}
+
+/// 同 [`load_entity`]，寫入資料時使用：以 `FOR SHARE` 鎖定資料類別，等待進行中的欄位定義變更
+/// （例如變更欄位型態，[`crate::schema::change_field_type`]）完成後才讀取欄位定義，
+/// 避免依舊的定義寫入資料。
+async fn load_entity_for_write(
+    tx: &mut PgTransaction<'_>,
+    key: &str,
+) -> Result<(EntityDefinition, Vec<FieldDefinition>), CoreError> {
+    let row = schema_db::find_entity_by_key_for_share(&mut **tx, key).await?;
+    load_fields_of(tx, row).await
+}
+
+async fn load_fields_of(
+    conn: &mut PgConnection,
+    row: Option<schema_db::EntityRow>,
+) -> Result<(EntityDefinition, Vec<FieldDefinition>), CoreError> {
+    let entity = row
         .map(entity_from_row)
         .transpose()?
         .filter(|e| e.is_active && e.storage == EntityStorage::CustomRecords)

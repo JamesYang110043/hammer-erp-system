@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE custom_records AS r\n        SET data = u.data, updated_by = $4, version = r.version + 1\n        FROM UNNEST($2::uuid[], $3::jsonb[]) AS u(id, data)\n        WHERE r.id = u.id AND r.entity_id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "JsonbArray",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b5c09f6a750394a90ab5fb7ee0fa128f428a4bd61943fefc2c7a1621f47265df"
+}

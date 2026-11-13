@@ -228,6 +228,11 @@ desktop(src-tauri) ──▶ shared, formula
 | `select` → `multi_select` | 允許 |
 | 其他轉換 | 先驗證全部既有資料。只要有一筆轉換失敗就拒絕，並列出失敗的資料 |
 
+- 轉換範圍包含已軟刪除的資料，在同一個交易內完成資料轉換與欄位定義更新。
+- 「允許」指型態本身一定能轉換；轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
+- 寫入資料時以 `FOR SHARE` 鎖定資料類別，變更型態時以 `FOR UPDATE` 鎖定，避免轉換期間依舊的欄位定義寫入資料。
+- 各型態的轉換方式見 `crates/core/src/schema/type_change.rs`。
+
 ### 7.5 索引策略
 
 - 每張系統資料表的 `custom_data`，以及 `custom_records.data`，都建 GIN 索引。

@@ -3,6 +3,7 @@
 //! 每個錯誤都對應一個 [`ErrorCode`]，由 `server` 轉成統一的 API 錯誤格式（§10）。
 
 use crate::record_data::FieldError;
+use crate::schema::type_change::ConversionFailure;
 use hammer_db::DbError;
 use hammer_shared::{ApiError, ErrorCode};
 use time::OffsetDateTime;
@@ -38,6 +39,16 @@ pub enum CoreError {
     /// API 回應為 `VALIDATION`，`details.fields` 為 `[{ "field_key", "message" }]`，列出所有出錯的欄位。
     #[error("資料有 {} 個欄位不正確，請修正後再送出", .0.len())]
     InvalidFields(Vec<FieldError>),
+
+    /// 變更欄位型態時，有資料無法轉換（§7.4）。`failures` 最多
+    /// [`hammer_shared::schema::MAX_CONVERSION_FAILURES`] 筆，`total` 為失敗總筆數。
+    /// API 回應為 `VALIDATION`，`details` 為
+    /// `{ "field": "data_type", "total", "records": [{ "id", "value", "deleted", "message" }] }`。
+    #[error("有 {total} 筆資料無法轉換成新的資料型態")]
+    ConversionFailed {
+        failures: Vec<ConversionFailure>,
+        total: usize,
+    },
 
     /// 操作後系統沒有任何有效（啟用、未刪除）的管理者（§6.2）。
     /// API 回應為 `VALIDATION`，`details.reason` 為 [`LAST_ADMIN_REASON`]。
@@ -96,6 +107,7 @@ impl CoreError {
             | Self::InvalidField { .. }
             | Self::InvalidParam { .. }
             | Self::InvalidFields(_)
+            | Self::ConversionFailed { .. }
             | Self::LastAdmin => ErrorCode::Validation,
             Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::NotFound(_) => ErrorCode::NotFound,
@@ -140,6 +152,23 @@ impl From<CoreError> for ApiError {
                 .collect();
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "fields": fields }))
+        } else if let CoreError::ConversionFailed { failures, total } = &err {
+            let records: Vec<_> = failures
+                .iter()
+                .map(|f| {
+                    serde_json::json!({
+                        "id": f.record_id,
+                        "value": f.value,
+                        "deleted": f.deleted,
+                        "message": f.message,
+                    })
+                })
+                .collect();
+            ApiError::new(code, err.to_string()).with_details(serde_json::json!({
+                "field": "data_type",
+                "total": total,
+                "records": records,
+            }))
         } else if let CoreError::LastAdmin = err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "reason": LAST_ADMIN_REASON }))
@@ -219,6 +248,33 @@ mod tests {
         assert_eq!(api.code, ErrorCode::BadRequest);
         assert_eq!(api.message, "page 必須是整數");
         assert_eq!(api.details, None);
+    }
+
+    #[test]
+    fn conversion_failed_lists_records_and_total() {
+        let id = hammer_shared::new_id();
+        let err = CoreError::ConversionFailed {
+            failures: vec![ConversionFailure {
+                record_id: id,
+                value: serde_json::json!("abc"),
+                deleted: true,
+                message: "「abc」不是整數".into(),
+            }],
+            total: 150,
+        };
+        assert_eq!(err.code(), ErrorCode::Validation);
+        let api: ApiError = err.into();
+        assert_eq!(api.message, "有 150 筆資料無法轉換成新的資料型態");
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({
+                "field": "data_type",
+                "total": 150,
+                "records": [
+                    { "id": id, "value": "abc", "deleted": true, "message": "「abc」不是整數" },
+                ],
+            }))
+        );
     }
 
     #[test]
