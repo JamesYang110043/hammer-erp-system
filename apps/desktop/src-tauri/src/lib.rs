@@ -90,6 +90,15 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::schema::EntityDetail>()
         .typ::<hammer_shared::schema::ReorderFieldsRequest>()
         .typ::<hammer_shared::schema::FieldOrderItem>()
+        // 列表版面
+        .typ::<hammer_shared::layout::LayoutColumn>()
+        .typ::<hammer_shared::layout::LayoutConfig>()
+        .typ::<hammer_shared::layout::ViewLayout>()
+        .typ::<hammer_shared::layout::CreateViewLayoutRequest>()
+        .typ::<hammer_shared::layout::UpdateViewLayoutRequest>()
+        .typ::<hammer_shared::layout::DeleteViewLayoutQuery>()
+        .typ::<hammer_shared::layout::LayoutSource>()
+        .typ::<hammer_shared::layout::DefaultViewLayout>()
         // command 回傳 `{ status: "ok", data } | { status: "error", error }`，錯誤有型別
         .error_handling(ErrorHandlingMode::Result)
 }
