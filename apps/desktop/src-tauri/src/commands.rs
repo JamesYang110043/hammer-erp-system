@@ -3,7 +3,9 @@
 //! 前端不直接呼叫 HTTP API，一律經過這裡（`docs/architecture.md` §3.3）。
 //! 新增 command 後要加進 [`crate::specta_builder`]，並執行 `pnpm gen:bindings`。
 
+use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest};
 use hammer_shared::health::HealthResponse;
+use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use tauri::State;
 
 use crate::error::ClientError;
@@ -44,4 +46,57 @@ pub fn set_server_url(
     let url = normalize_server_url(&server_url)?;
     state.set_server_url(url.clone())?;
     Ok(url)
+}
+
+/// 伺服器是否還沒有任何帳號（需要先建立管理者）。
+#[tauri::command]
+#[specta::specta]
+pub async fn setup_status(state: State<'_, AppState>) -> Result<SetupStatus, ClientError> {
+    state.setup_status().await
+}
+
+/// 建立第一個管理者，成功後直接登入（token 存進鑰匙圈）。
+#[tauri::command]
+#[specta::specta]
+pub async fn setup_admin(
+    state: State<'_, AppState>,
+    req: CreateAdminRequest,
+) -> Result<CurrentUser, ClientError> {
+    state.setup_admin(&req).await
+}
+
+/// 登入，token 存進鑰匙圈；token 不會回傳給前端。
+#[tauri::command]
+#[specta::specta]
+pub async fn login(
+    state: State<'_, AppState>,
+    req: LoginRequest,
+) -> Result<CurrentUser, ClientError> {
+    state.login(&req).await
+}
+
+/// 登出並清除本機 token。伺服器連不上時仍會清除本機 token。
+#[tauri::command]
+#[specta::specta]
+pub async fn logout(state: State<'_, AppState>) -> Result<(), ClientError> {
+    state.logout().await
+}
+
+/// 目前登入的使用者；本機沒有 token 時回傳 `null`。
+///
+/// token 已失效時回傳 `sessionExpired` 錯誤，並清除本機 token。
+#[tauri::command]
+#[specta::specta]
+pub async fn current_user(state: State<'_, AppState>) -> Result<Option<CurrentUser>, ClientError> {
+    state.current_user().await
+}
+
+/// 修改自己的密碼。
+#[tauri::command]
+#[specta::specta]
+pub async fn change_password(
+    state: State<'_, AppState>,
+    req: ChangePasswordRequest,
+) -> Result<(), ClientError> {
+    state.change_password(&req).await
 }

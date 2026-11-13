@@ -88,6 +88,7 @@ React 介面 ──invoke──▶ Tauri command (Rust) ──reqwest──▶ A
 ```
 
 - 前端不直接呼叫 HTTP API，一律透過 Tauri command。
+- 登入 token 只留在 Rust 端，不傳給前端；鑰匙圈以伺服器網址區分，切換伺服器時各自保留登入狀態。需要登入的請求收到 `401` 時，Rust 端清除 token 並回傳 `sessionExpired` 錯誤，前端回到登入頁。
 - Rust 型別用 `tauri-specta` 自動產生 TypeScript 型別，確保前後端欄位一致。
 
 ---

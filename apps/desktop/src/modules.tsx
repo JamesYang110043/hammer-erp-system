@@ -5,20 +5,26 @@ import {
   ShopOutlined,
   SwapOutlined,
   TeamOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import type { ReactNode } from 'react';
+
+import type { Permission } from './auth/permission';
+import { PERMISSIONS } from './bindings';
 
 export interface ModuleEntry {
   /** 路由路徑（不含開頭的 `/`） */
   path: string;
   label: string;
   icon: ReactNode;
+  /** 需要的權限；沒有權限的使用者看不到選單，也無法開啟頁面。未指定時任何登入者都能使用。 */
+  permission?: Permission;
 }
 
 /**
  * 左側選單的模組。目前都是空白頁，之後各里程碑逐一實作。
  *
- * 「系統設定」之後只有管理者看得到（M1 登入與權限完成後處理，權限仍以伺服器檢查為準）。
+ * 依 `permission` 顯示或隱藏只是輔助，權限仍以伺服器檢查為準（docs/architecture.md §6.2）。
  */
 export const MODULES: readonly ModuleEntry[] = [
   { path: 'inventory', label: '進出貨', icon: <SwapOutlined /> },
@@ -26,7 +32,13 @@ export const MODULES: readonly ModuleEntry[] = [
   { path: 'suppliers', label: '廠商', icon: <ShopOutlined /> },
   { path: 'invoices', label: '發票', icon: <FileTextOutlined /> },
   { path: 'finance', label: '財務', icon: <DollarOutlined /> },
-  { path: 'system', label: '系統設定', icon: <SettingOutlined /> },
+  { path: 'users', label: '帳號管理', icon: <UserOutlined />, permission: PERMISSIONS.USER_MANAGE },
+  {
+    path: 'system',
+    label: '系統設定',
+    icon: <SettingOutlined />,
+    permission: PERMISSIONS.SETTINGS_MANAGE,
+  },
 ];
 
 /** 連線設定頁（本機設定，任何人都可以修改）。 */

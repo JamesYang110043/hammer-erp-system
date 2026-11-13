@@ -9,8 +9,7 @@ use argon2::password_hash::{self, PasswordHash, PasswordHasher, PasswordVerifier
 
 use crate::CoreError;
 
-/// 密碼最少字元數（以 Unicode 字元計算，不是 bytes）。
-pub const MIN_PASSWORD_CHARS: usize = 10;
+pub use hammer_shared::auth::MIN_PASSWORD_CHARS;
 
 /// 檢查密碼是否符合規則：至少 [`MIN_PASSWORD_CHARS`] 個字元。
 ///

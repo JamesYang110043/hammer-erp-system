@@ -12,6 +12,11 @@ use specta::Type;
 
 use crate::Id;
 
+/// 密碼最少字元數（以 Unicode 字元計算，不是 bytes，§6.2）。
+///
+/// 伺服器（`core`）以此檢查；桌面程式也用來在送出前提示。
+pub const MIN_PASSWORD_CHARS: usize = 10;
+
 /// `POST /api/v1/auth/login` 的輸入。
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct LoginRequest {
@@ -55,7 +60,7 @@ pub struct CurrentUser {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct ChangePasswordRequest {
     pub current_password: String,
-    /// 至少 10 個字元（§6.2）。
+    /// 至少 [`MIN_PASSWORD_CHARS`] 個字元（§6.2）。
     pub new_password: String,
 }
 

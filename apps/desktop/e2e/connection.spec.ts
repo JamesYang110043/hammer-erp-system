@@ -8,6 +8,16 @@ const OTHER_URL = 'http://192.168.1.10:8080';
 test('main screen shows connection status and test connection works', async ({ page }) => {
   await mockTauri(page, {
     get_server_url: () => SAVED_URL,
+    // 已登入（鑰匙圈有有效的 token）
+    setup_status: () => ({ needs_setup: false }),
+    current_user: () => ({
+      id: '0196f5a0-0000-7000-8000-000000000001',
+      username: 'admin',
+      display_name: '王管理',
+      role: 'admin',
+      permissions: ['user.manage'],
+      must_change_password: false,
+    }),
     health_check: ({ serverUrl }) => {
       // 狀態列輪詢（serverUrl 為 null）使用已儲存的網址
       if (serverUrl === null || serverUrl === OTHER_URL) {

@@ -1,4 +1,4 @@
-import type { ClientError } from '../bindings';
+import type { ClientError, ErrorCode } from '../bindings';
 
 /** Tauri command 回傳的錯誤，包成 `Error` 讓 TanStack Query 處理。 */
 export class CommandError extends Error {
@@ -34,4 +34,14 @@ export function errorMessage(err: unknown): string {
     return err.message;
   }
   return String(err);
+}
+
+/** 登入已逾時（Rust 端已清除 token），應回到登入頁。 */
+export function isSessionExpired(err: unknown): boolean {
+  return err instanceof CommandError && err.error.kind === 'sessionExpired';
+}
+
+/** 伺服器回傳的錯誤碼；不是伺服器錯誤時回傳 `undefined`。 */
+export function apiErrorCode(err: unknown): ErrorCode | undefined {
+  return err instanceof CommandError && err.error.kind === 'api' ? err.error.code : undefined;
 }
