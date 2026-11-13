@@ -23,7 +23,7 @@ import {
 import { useEntity } from '../../api/schema';
 import { useCurrentUser, usePermission } from '../../auth/permission';
 import { PERMISSIONS } from '../../bindings';
-import { newRecordPath } from '../../modules';
+import { newRecordPath, recordPath } from '../../modules';
 import type {
   DefaultViewLayout_Serialize as DefaultViewLayout,
   EntityDefinition,
@@ -154,6 +154,8 @@ function RecordList({
       key: '__actions',
       width: 80,
       fixed: 'right',
+      // 點列會開啟資料；操作欄（含確認視窗）的點擊不要傳到列
+      onCell: () => ({ onClick: (e) => e.stopPropagation() }),
       render: (_, record) => (
         <Popconfirm
           title="確定要刪除這筆資料？"
@@ -278,6 +280,10 @@ function RecordList({
         loading={records.isFetching}
         scroll={{ x: 'max-content' }}
         onChange={onTableChange}
+        onRow={(record) => ({
+          onClick: () => navigate(recordPath(entityKey, record.id)),
+          style: { cursor: 'pointer' },
+        })}
         pagination={{
           current: records.data?.page ?? page,
           pageSize: records.data?.page_size ?? pageSize,

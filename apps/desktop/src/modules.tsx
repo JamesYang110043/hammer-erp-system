@@ -94,9 +94,19 @@ export function menuEntities(entities: readonly EntityDefinition[]): EntityDefin
     .sort((a, b) => a.sort_order - b.sort_order);
 }
 
-/** 新增資料頁（表單在 #54 實作）。 */
+/** 資料列表頁。 */
+export function recordListPath(entityKey: string): string {
+  return `/${ENTITIES_PATH}/${entityKey}`;
+}
+
+/** 新增資料頁。 */
 export function newRecordPath(entityKey: string): string {
   return `/${ENTITIES_PATH}/${entityKey}/new`;
+}
+
+/** 檢視與編輯資料頁。 */
+export function recordPath(entityKey: string, id: string): string {
+  return `/${ENTITIES_PATH}/${entityKey}/${id}`;
 }
 
 /** 連線設定頁（本機設定，任何人都可以修改）。 */

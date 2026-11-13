@@ -2,9 +2,11 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 
 import { commands } from '../bindings';
 import type {
+  CreateRecordRequest_Deserialize as CreateRecordRequest,
   CreateViewLayoutRequest_Deserialize as CreateViewLayoutRequest,
   Record as DataRecord,
   RecordListQuery_Deserialize as RecordListQuery,
+  UpdateRecordRequest_Deserialize as UpdateRecordRequest,
   UpdateViewLayoutRequest_Deserialize as UpdateViewLayoutRequest,
   ViewLayout_Serialize as ViewLayout,
 } from '../bindings';
@@ -24,6 +26,54 @@ export function useRecords(entityKey: string, query: RecordListQuery) {
     // 換頁、排序時保留上一頁資料，避免表格閃爍
     placeholderData: keepPreviousData,
   });
+}
+
+/**
+ * 單筆資料（表單使用）。
+ *
+ * 不放在 {@link recordsKey} 底下：列表重新取得時不影響編輯中的表單。
+ */
+export const recordKey = (entityKey: string, id: string) => ['record', entityKey, id] as const;
+
+export function useRecord(entityKey: string, id: string | undefined) {
+  return useQuery({
+    queryKey: recordKey(entityKey, id ?? ''),
+    queryFn: () => unwrap(commands.getRecord(entityKey, id!)),
+    enabled: id !== undefined,
+    // 表單開啟期間不自動重新取得；有衝突時由使用者決定是否重新載入
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** 新增、修改資料成功後更新單筆快取，並重新取得列表與操作紀錄。 */
+function useRecordMutation<TVars>(
+  entityKey: string,
+  mutationFn: (vars: TVars) => Promise<DataRecord>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: (saved) => {
+      queryClient.setQueryData(recordKey(entityKey, saved.id), saved);
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: recordsKey(entityKey) }),
+        queryClient.invalidateQueries({ queryKey: auditLogsKey }),
+      ]);
+    },
+  });
+}
+
+export function useCreateRecord(entityKey: string) {
+  return useRecordMutation(entityKey, (req: CreateRecordRequest) =>
+    unwrap(commands.createRecord(entityKey, req)),
+  );
+}
+
+export function useUpdateRecord(entityKey: string) {
+  return useRecordMutation(entityKey, ({ id, req }: { id: string; req: UpdateRecordRequest }) =>
+    unwrap(commands.updateRecord(entityKey, id, req)),
+  );
 }
 
 /** 刪除資料，成功後重新取得列表與操作紀錄。 */

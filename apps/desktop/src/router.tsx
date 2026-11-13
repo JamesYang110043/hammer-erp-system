@@ -6,6 +6,7 @@ import { PERMISSIONS } from './bindings';
 import { CONNECTION_SETTINGS_PATH, ENTITIES_PATH, MODULES } from './modules';
 import { ConnectionSettingsPage } from './pages/ConnectionSettingsPage';
 import { PlaceholderPage } from './pages/PlaceholderPage';
+import { RecordFormPage } from './pages/records/RecordFormPage';
 import { RecordsPage } from './pages/records/RecordsPage';
 
 // 只有登入後才會渲染（見 App.tsx）。
@@ -42,11 +43,19 @@ export const router = createHashRouter([
         ),
       },
       {
-        // 新增資料的表單在 #54 實作
         path: `${ENTITIES_PATH}/:key/new`,
         element: (
           <RequirePermission permission={PERMISSIONS.RECORD_WRITE}>
-            <PlaceholderPage title="新增資料" />
+            <RecordFormPage />
+          </RequirePermission>
+        ),
+      },
+      {
+        // 沒有 `record.write` 時只能檢視
+        path: `${ENTITIES_PATH}/:key/:id`,
+        element: (
+          <RequirePermission permission={PERMISSIONS.RECORD_READ}>
+            <RecordFormPage />
           </RequirePermission>
         ),
       },
