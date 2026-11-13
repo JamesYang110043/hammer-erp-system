@@ -72,6 +72,19 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         // 操作紀錄
         .typ::<hammer_shared::audit::AuditLogEntry>()
         .typ::<hammer_shared::audit::AuditLogQuery>()
+        // 資料類別與欄位定義
+        .typ::<hammer_shared::schema::DataType>()
+        .typ::<hammer_shared::schema::EntityKind>()
+        .typ::<hammer_shared::schema::EntityStorage>()
+        .typ::<hammer_shared::schema::FieldStorage>()
+        .typ::<hammer_shared::schema::Validation>()
+        .typ::<hammer_shared::schema::SelectOption>()
+        .typ::<hammer_shared::schema::EntityDefinition>()
+        .typ::<hammer_shared::schema::FieldDefinition>()
+        .typ::<hammer_shared::schema::CreateEntityRequest>()
+        .typ::<hammer_shared::schema::UpdateEntityRequest>()
+        .typ::<hammer_shared::schema::CreateFieldRequest>()
+        .typ::<hammer_shared::schema::UpdateFieldRequest>()
         // command 回傳 `{ status: "ok", data } | { status: "error", error }`，錯誤有型別
         .error_handling(ErrorHandlingMode::Result)
 }

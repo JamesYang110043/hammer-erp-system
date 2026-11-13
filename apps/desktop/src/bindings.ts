@@ -257,6 +257,118 @@ export type CreateAdminRequest = {
 	password: string,
 };
 
+/**
+ *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
+ * 
+ *  M2a 只接受 `kind = master`；明細子表與單號規則在 M2b 支援。
+ */
+export type CreateEntityRequest = CreateEntityRequest_Serialize | CreateEntityRequest_Deserialize;
+
+/**
+ *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
+ * 
+ *  M2a 只接受 `kind = master`；明細子表與單號規則在 M2b 支援。
+ */
+export type CreateEntityRequest_Deserialize = {
+	/**  資料類別代碼，須符合 [`validate_key`]；建立後不可修改。 */
+	key: string,
+	/**  顯示名稱（前後空白會去除）。 */
+	label: string,
+	icon?: string | null,
+	kind: EntityKind,
+	/**  資料標題範本。 */
+	title_template?: string | null,
+	/**  選單排序（預設 0）。 */
+	sort_order?: number,
+};
+
+/**
+ *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
+ * 
+ *  M2a 只接受 `kind = master`；明細子表與單號規則在 M2b 支援。
+ */
+export type CreateEntityRequest_Serialize = {
+	/**  資料類別代碼，須符合 [`validate_key`]；建立後不可修改。 */
+	key: string,
+	/**  顯示名稱（前後空白會去除）。 */
+	label: string,
+	icon: string | null,
+	kind: EntityKind,
+	/**  資料標題範本。 */
+	title_template: string | null,
+	/**  選單排序（預設 0）。 */
+	sort_order: number,
+};
+
+/**
+ *  建立欄位的輸入。儲存方式固定為 `json`。
+ * 
+ *  M2a 不允許 `relation`、`file`、`formula`（見 [`DataType::is_value_supported`]）。
+ */
+export type CreateFieldRequest = CreateFieldRequest_Serialize | CreateFieldRequest_Deserialize;
+
+/**
+ *  建立欄位的輸入。儲存方式固定為 `json`。
+ * 
+ *  M2a 不允許 `relation`、`file`、`formula`（見 [`DataType::is_value_supported`]）。
+ */
+export type CreateFieldRequest_Deserialize = {
+	/**  欄位代碼，須符合 [`validate_key`]；建立後不可修改。 */
+	field_key: string,
+	/**  顯示名稱（前後空白會去除）。 */
+	label: string,
+	data_type: DataType,
+	is_required?: boolean,
+	/**  預設 `true`。 */
+	is_visible?: boolean,
+	is_readonly?: boolean,
+	is_searchable?: boolean,
+	is_unique?: boolean,
+	/**  預設值，格式依 [`value`]。TypeScript 為 `unknown`。 */
+	default_value?: unknown | null,
+	validation?: Validation_Deserialize | null,
+	/**  `select`、`multi_select` 必填。 */
+	options?: SelectOption_Deserialize[] | null,
+	/**  `decimal`、`money` 必填。 */
+	decimal_places?: number | null,
+	ui_widget?: string | null,
+	column_width?: number | null,
+	help_text?: string | null,
+	/**  排序（預設 0）。 */
+	sort_order?: number,
+};
+
+/**
+ *  建立欄位的輸入。儲存方式固定為 `json`。
+ * 
+ *  M2a 不允許 `relation`、`file`、`formula`（見 [`DataType::is_value_supported`]）。
+ */
+export type CreateFieldRequest_Serialize = {
+	/**  欄位代碼，須符合 [`validate_key`]；建立後不可修改。 */
+	field_key: string,
+	/**  顯示名稱（前後空白會去除）。 */
+	label: string,
+	data_type: DataType,
+	is_required: boolean,
+	/**  預設 `true`。 */
+	is_visible: boolean,
+	is_readonly: boolean,
+	is_searchable: boolean,
+	is_unique: boolean,
+	/**  預設值，格式依 [`value`]。TypeScript 為 `unknown`。 */
+	default_value: unknown | null,
+	validation: Validation_Serialize | null,
+	/**  `select`、`multi_select` 必填。 */
+	options: SelectOption_Serialize[] | null,
+	/**  `decimal`、`money` 必填。 */
+	decimal_places: number | null,
+	ui_widget: string | null,
+	column_width: number | null,
+	help_text: string | null,
+	/**  排序（預設 0）。 */
+	sort_order: number,
+};
+
 /**  `POST /api/v1/users` 的輸入。建立後 `must_change_password = true`。 */
 export type CreateUserRequest = {
 	/**  登入帳號（前後空白會去除）。不可與既有帳號（含已刪除）重複。 */
@@ -282,11 +394,131 @@ export type CurrentUser = {
 	must_change_password: boolean,
 };
 
+/**  欄位資料型態（§7.3）。對應 `field_definitions.data_type`。 */
+export type DataType = 
+/**  單行文字。 */
+"text" | 
+/**  多行文字。 */
+"long_text" | 
+/**  整數。 */
+"integer" | 
+/**  小數（指定小數位數）。 */
+"decimal" | 
+/**  金額。M2a 只處理數值與小數位數，幣別在 M3 處理。 */
+"money" | 
+/**  日期。 */
+"date" | 
+/**  日期時間。 */
+"datetime" | 
+/**  勾選。 */
+"boolean" | 
+/**  下拉單選。 */
+"select" | 
+/**  下拉多選。 */
+"multi_select" | 
+/**  關聯到其他資料類別（M2b）。 */
+"relation" | 
+/**  附件（M2b）。 */
+"file" | 
+/**  公式，唯讀，由系統計算（M2c）。 */
+"formula";
+
 /**  `DELETE /api/v1/users/{id}` 的 query string。 */
 export type DeleteUserQuery = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
 };
+
+/**
+ *  資料類別定義（API 回應）。
+ * 
+ *  不包含 `table_name` 等資料庫內部資訊。
+ */
+export type EntityDefinition = EntityDefinition_Serialize | EntityDefinition_Deserialize;
+
+/**
+ *  資料類別定義（API 回應）。
+ * 
+ *  不包含 `table_name` 等資料庫內部資訊。
+ */
+export type EntityDefinition_Deserialize = {
+	id: string,
+	/**  資料類別代碼（建立後不可修改）。 */
+	key: string,
+	/**  顯示名稱。 */
+	label: string,
+	/**  圖示名稱；沒有設定時為 `null`。 */
+	icon?: string | null,
+	kind: EntityKind,
+	/**  系統資料類別不可刪除（§7.1）。 */
+	is_system: boolean,
+	storage: EntityStorage,
+	/**  明細子表所屬的主表；不是明細子表時為 `null`。 */
+	parent_entity_id?: string | null,
+	/**  單號規則；沒有設定時為 `null`。 */
+	numbering_pattern?: string | null,
+	/**  資料標題範本，例如 `{record_no} {customer.name}`；沒有設定時為 `null`。 */
+	title_template?: string | null,
+	/**  選單排序。 */
+	sort_order: number,
+	is_active: boolean,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號（§9.4）。 */
+	version: number,
+};
+
+/**
+ *  資料類別定義（API 回應）。
+ * 
+ *  不包含 `table_name` 等資料庫內部資訊。
+ */
+export type EntityDefinition_Serialize = {
+	id: string,
+	/**  資料類別代碼（建立後不可修改）。 */
+	key: string,
+	/**  顯示名稱。 */
+	label: string,
+	/**  圖示名稱；沒有設定時為 `null`。 */
+	icon: string | null,
+	kind: EntityKind,
+	/**  系統資料類別不可刪除（§7.1）。 */
+	is_system: boolean,
+	storage: EntityStorage,
+	/**  明細子表所屬的主表；不是明細子表時為 `null`。 */
+	parent_entity_id: string | null,
+	/**  單號規則；沒有設定時為 `null`。 */
+	numbering_pattern: string | null,
+	/**  資料標題範本，例如 `{record_no} {customer.name}`；沒有設定時為 `null`。 */
+	title_template: string | null,
+	/**  選單排序。 */
+	sort_order: number,
+	is_active: boolean,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號（§9.4）。 */
+	version: number,
+};
+
+/**  資料類別的種類。對應 `entity_definitions.kind`。 */
+export type EntityKind = 
+/**  主檔。 */
+"master" | 
+/**  單據。 */
+"document" | 
+/**  明細子表。 */
+"detail";
+
+/**  資料類別的儲存方式。對應 `entity_definitions.storage`。 */
+export type EntityStorage = 
+/**  系統資料表。 */
+"table" | 
+/**  通用資料表 `custom_records`。 */
+"custom_records";
 
 /**
  *  錯誤碼。JSON 中為 `SCREAMING_SNAKE_CASE` 字串。
@@ -320,6 +552,124 @@ export type ErrorCode =
 "ACCOUNT_LOCKED" | 
 /**  帳號已停用，無法登入。 */
 "ACCOUNT_DISABLED";
+
+/**
+ *  欄位定義（API 回應）。
+ * 
+ *  不包含 `column_name`、`formula_deps` 等資料庫內部資訊。
+ */
+export type FieldDefinition = FieldDefinition_Serialize | FieldDefinition_Deserialize;
+
+/**
+ *  欄位定義（API 回應）。
+ * 
+ *  不包含 `column_name`、`formula_deps` 等資料庫內部資訊。
+ */
+export type FieldDefinition_Deserialize = {
+	id: string,
+	entity_id: string,
+	/**  欄位代碼（建立後不可修改），也是 JSONB 的鍵。 */
+	field_key: string,
+	/**  顯示名稱。 */
+	label: string,
+	data_type: DataType,
+	/**  系統欄位（§7.2）。 */
+	is_system: boolean,
+	storage: FieldStorage,
+	is_required: boolean,
+	is_visible: boolean,
+	is_readonly: boolean,
+	is_searchable: boolean,
+	is_unique: boolean,
+	/**  預設值，格式依 [`value`]；沒有設定時為 `null`。TypeScript 為 `unknown`。 */
+	default_value?: unknown | null,
+	/**  驗證規則；沒有設定時為 `null`。 */
+	validation?: Validation_Deserialize | null,
+	/**  `select`、`multi_select` 的選項；其他型態為 `null`。 */
+	options?: SelectOption_Deserialize[] | null,
+	/**  `decimal`、`money` 的小數位數；其他型態為 `null`。 */
+	decimal_places?: number | null,
+	/**  `relation` 關聯的資料類別；其他型態為 `null`。 */
+	relation_entity_id?: string | null,
+	/**  `formula` 的公式；其他型態為 `null`。 */
+	formula?: string | null,
+	/**  `formula` 的結果型態；其他型態為 `null`。 */
+	formula_result_type?: DataType | null,
+	/**  選用的輸入元件；`null` 代表依型態使用預設元件。 */
+	ui_widget?: string | null,
+	/**  列表欄寬（px）；`null` 代表自動。 */
+	column_width?: number | null,
+	/**  說明文字。 */
+	help_text?: string | null,
+	sort_order: number,
+	/**  `false` 代表已停用；自訂欄位只能停用，資料保留（§7.2）。 */
+	is_active: boolean,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號（§9.4）。 */
+	version: number,
+};
+
+/**
+ *  欄位定義（API 回應）。
+ * 
+ *  不包含 `column_name`、`formula_deps` 等資料庫內部資訊。
+ */
+export type FieldDefinition_Serialize = {
+	id: string,
+	entity_id: string,
+	/**  欄位代碼（建立後不可修改），也是 JSONB 的鍵。 */
+	field_key: string,
+	/**  顯示名稱。 */
+	label: string,
+	data_type: DataType,
+	/**  系統欄位（§7.2）。 */
+	is_system: boolean,
+	storage: FieldStorage,
+	is_required: boolean,
+	is_visible: boolean,
+	is_readonly: boolean,
+	is_searchable: boolean,
+	is_unique: boolean,
+	/**  預設值，格式依 [`value`]；沒有設定時為 `null`。TypeScript 為 `unknown`。 */
+	default_value: unknown | null,
+	/**  驗證規則；沒有設定時為 `null`。 */
+	validation: Validation_Serialize | null,
+	/**  `select`、`multi_select` 的選項；其他型態為 `null`。 */
+	options: SelectOption_Serialize[] | null,
+	/**  `decimal`、`money` 的小數位數；其他型態為 `null`。 */
+	decimal_places: number | null,
+	/**  `relation` 關聯的資料類別；其他型態為 `null`。 */
+	relation_entity_id: string | null,
+	/**  `formula` 的公式；其他型態為 `null`。 */
+	formula: string | null,
+	/**  `formula` 的結果型態；其他型態為 `null`。 */
+	formula_result_type: DataType | null,
+	/**  選用的輸入元件；`null` 代表依型態使用預設元件。 */
+	ui_widget: string | null,
+	/**  列表欄寬（px）；`null` 代表自動。 */
+	column_width: number | null,
+	/**  說明文字。 */
+	help_text: string | null,
+	sort_order: number,
+	/**  `false` 代表已停用；自訂欄位只能停用，資料保留（§7.2）。 */
+	is_active: boolean,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號（§9.4）。 */
+	version: number,
+};
+
+/**  欄位的儲存方式。對應 `field_definitions.storage`。 */
+export type FieldStorage = 
+/**  資料表的實體欄位（系統欄位）。 */
+"column" | 
+/**  `custom_data` / `data` JSONB。 */
+"json";
 
 /**
  *  `GET /api/v1/health` 的回應。
@@ -377,10 +727,129 @@ export type Role = {
 	permissions: string[],
 };
 
+/**  `select`、`multi_select` 的選項。對應 `field_definitions.options` JSONB 陣列的元素。 */
+export type SelectOption = SelectOption_Serialize | SelectOption_Deserialize;
+
+/**  `select`、`multi_select` 的選項。對應 `field_definitions.options` JSONB 陣列的元素。 */
+export type SelectOption_Deserialize = {
+	/**  存入資料的值；同一個欄位內不可重複。 */
+	value: string,
+	/**  顯示名稱。 */
+	label: string,
+	/**  標籤顏色（Ant Design 的顏色名稱，例如 `blue`）；沒有設定時為 `null`。 */
+	color?: string | null,
+};
+
+/**  `select`、`multi_select` 的選項。對應 `field_definitions.options` JSONB 陣列的元素。 */
+export type SelectOption_Serialize = {
+	/**  存入資料的值；同一個欄位內不可重複。 */
+	value: string,
+	/**  顯示名稱。 */
+	label: string,
+	/**  標籤顏色（Ant Design 的顏色名稱，例如 `blue`）；沒有設定時為 `null`。 */
+	color: string | null,
+};
+
 /**  `GET /api/v1/setup/status` 的回應。 */
 export type SetupStatus = {
 	/**  資料庫還沒有任何帳號，需要先建立管理者。 */
 	needs_setup: boolean,
+};
+
+/**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage` 不可修改。 */
+export type UpdateEntityRequest = UpdateEntityRequest_Serialize | UpdateEntityRequest_Deserialize;
+
+/**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage` 不可修改。 */
+export type UpdateEntityRequest_Deserialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	label: string,
+	/**  `null` 代表清除。 */
+	icon?: string | null,
+	/**  `null` 代表清除。 */
+	title_template?: string | null,
+	sort_order: number,
+	/**  停用後不出現在選單；系統資料類別不可停用。 */
+	is_active: boolean,
+};
+
+/**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage` 不可修改。 */
+export type UpdateEntityRequest_Serialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	label: string,
+	/**  `null` 代表清除。 */
+	icon: string | null,
+	/**  `null` 代表清除。 */
+	title_template: string | null,
+	sort_order: number,
+	/**  停用後不出現在選單；系統資料類別不可停用。 */
+	is_active: boolean,
+};
+
+/**
+ *  修改欄位的輸入（整筆取代可修改的屬性）。`field_key`、`storage` 不可修改。
+ * 
+ *  變更 `data_type` 依 §7.4 的規則檢查既有資料；系統欄位不可變更型態（§7.2）。
+ */
+export type UpdateFieldRequest = UpdateFieldRequest_Serialize | UpdateFieldRequest_Deserialize;
+
+/**
+ *  修改欄位的輸入（整筆取代可修改的屬性）。`field_key`、`storage` 不可修改。
+ * 
+ *  變更 `data_type` 依 §7.4 的規則檢查既有資料；系統欄位不可變更型態（§7.2）。
+ */
+export type UpdateFieldRequest_Deserialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	label: string,
+	data_type: DataType,
+	is_required: boolean,
+	is_visible: boolean,
+	is_readonly: boolean,
+	is_searchable: boolean,
+	is_unique: boolean,
+	/**  `null` 代表清除。TypeScript 為 `unknown`。 */
+	default_value?: unknown | null,
+	/**  `null` 代表清除。 */
+	validation?: Validation_Deserialize | null,
+	options?: SelectOption_Deserialize[] | null,
+	decimal_places?: number | null,
+	ui_widget?: string | null,
+	column_width?: number | null,
+	help_text?: string | null,
+	sort_order: number,
+	/**  停用欄位（§7.2），資料保留。系統欄位不可停用。 */
+	is_active: boolean,
+};
+
+/**
+ *  修改欄位的輸入（整筆取代可修改的屬性）。`field_key`、`storage` 不可修改。
+ * 
+ *  變更 `data_type` 依 §7.4 的規則檢查既有資料；系統欄位不可變更型態（§7.2）。
+ */
+export type UpdateFieldRequest_Serialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	label: string,
+	data_type: DataType,
+	is_required: boolean,
+	is_visible: boolean,
+	is_readonly: boolean,
+	is_searchable: boolean,
+	is_unique: boolean,
+	/**  `null` 代表清除。TypeScript 為 `unknown`。 */
+	default_value: unknown | null,
+	/**  `null` 代表清除。 */
+	validation: Validation_Serialize | null,
+	options: SelectOption_Serialize[] | null,
+	decimal_places: number | null,
+	ui_widget: string | null,
+	column_width: number | null,
+	help_text: string | null,
+	sort_order: number,
+	/**  停用欄位（§7.2），資料保留。系統欄位不可停用。 */
+	is_active: boolean,
 };
 
 /**  `PATCH /api/v1/users/{id}` 的輸入。省略或 `null` 的欄位不修改。 */
@@ -461,6 +930,57 @@ export type User_Serialize = {
 	updated_at: string,
 	/**  樂觀鎖定版本號，修改、刪除時帶回（§9.4）。 */
 	version: number,
+};
+
+/**
+ *  欄位值的驗證規則。對應 `field_definitions.validation` JSONB。沒有設定的規則省略。
+ * 
+ *  ```json
+ *  { "min": "0", "max": "100", "max_length": 50, "pattern": "^\\d{8}$" }
+ *  ```
+ * 
+ *  `min`、`max` 與 `decimal` 欄位值一樣以字串存放（D9）。
+ */
+export type Validation = Validation_Serialize | Validation_Deserialize;
+
+/**
+ *  欄位值的驗證規則。對應 `field_definitions.validation` JSONB。沒有設定的規則省略。
+ * 
+ *  ```json
+ *  { "min": "0", "max": "100", "max_length": 50, "pattern": "^\\d{8}$" }
+ *  ```
+ * 
+ *  `min`、`max` 與 `decimal` 欄位值一樣以字串存放（D9）。
+ */
+export type Validation_Deserialize = {
+	/**  最小值（含），`integer`、`decimal`、`money` 使用。 */
+	min?: string | null,
+	/**  最大值（含），`integer`、`decimal`、`money` 使用。 */
+	max?: string | null,
+	/**  文字的字元數上限，`text`、`long_text` 使用。 */
+	max_length?: number | null,
+	/**  文字必須符合的正規表示式，`text` 使用。 */
+	pattern?: string | null,
+};
+
+/**
+ *  欄位值的驗證規則。對應 `field_definitions.validation` JSONB。沒有設定的規則省略。
+ * 
+ *  ```json
+ *  { "min": "0", "max": "100", "max_length": 50, "pattern": "^\\d{8}$" }
+ *  ```
+ * 
+ *  `min`、`max` 與 `decimal` 欄位值一樣以字串存放（D9）。
+ */
+export type Validation_Serialize = {
+	/**  最小值（含），`integer`、`decimal`、`money` 使用。 */
+	min?: string,
+	/**  最大值（含），`integer`、`decimal`、`money` 使用。 */
+	max?: string,
+	/**  文字的字元數上限，`text`、`long_text` 使用。 */
+	max_length?: number,
+	/**  文字必須符合的正規表示式，`text` 使用。 */
+	pattern?: string,
 };
 
 /* Tauri Specta runtime */
