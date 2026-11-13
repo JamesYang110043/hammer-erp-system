@@ -14,6 +14,11 @@ pub enum ClientError {
     /// 伺服器回傳的錯誤（統一錯誤格式，`docs/architecture.md` §10）。
     #[error("{0}")]
     Api(ApiError),
+    /// 登入已逾時或 session 已失效（伺服器對需要登入的請求回 `401`）。
+    ///
+    /// 收到時本機的 token 已清除，前端應回到登入頁。
+    #[error("{message}")]
+    SessionExpired { message: String },
     /// 無法連線到伺服器、連線逾時。
     #[error("{message}")]
     Network { message: String },
@@ -28,7 +33,22 @@ pub enum ClientError {
     Storage { message: String },
 }
 
+/// [`ClientError::SessionExpired`] 的訊息。
+pub const SESSION_EXPIRED_MESSAGE: &str = "登入已逾時，請重新登入";
+
 impl ClientError {
+    pub fn session_expired() -> Self {
+        Self::SessionExpired {
+            message: SESSION_EXPIRED_MESSAGE.to_owned(),
+        }
+    }
+
+    pub fn storage(message: impl Into<String>) -> Self {
+        Self::Storage {
+            message: message.into(),
+        }
+    }
+
     pub fn invalid_input(message: impl Into<String>) -> Self {
         Self::InvalidInput {
             message: message.into(),
@@ -48,6 +68,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&err).unwrap(),
             json!({ "kind": "api", "code": "CLIENT_OUTDATED", "message": "請更新程式" })
+        );
+    }
+
+    #[test]
+    fn session_expired_kind_is_camel_case() {
+        assert_eq!(
+            serde_json::to_value(ClientError::session_expired()).unwrap(),
+            json!({ "kind": "sessionExpired", "message": "登入已逾時，請重新登入" })
         );
     }
 

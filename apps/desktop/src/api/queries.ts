@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { sessionKey } from '../auth/session';
 import { commands } from '../bindings';
 import { unwrap } from './client';
 
@@ -37,14 +38,17 @@ export function useTestConnection() {
   });
 }
 
-/** 儲存伺服器網址，並重新檢查連線。 */
+/** 儲存伺服器網址，並重新檢查連線與登入狀態（token 以伺服器網址區分）。 */
 export function useSaveServerUrl() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (serverUrl: string) => unwrap(commands.setServerUrl(serverUrl)),
     onSuccess: async (saved) => {
       queryClient.setQueryData(keys.serverUrl, saved);
-      await queryClient.invalidateQueries({ queryKey: keys.health });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.health }),
+        queryClient.invalidateQueries({ queryKey: sessionKey }),
+      ]);
     },
   });
 }

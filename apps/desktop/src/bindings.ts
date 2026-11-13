@@ -16,10 +16,30 @@ export const commands = {
 	getServerUrl: () => __TAURI_INVOKE<string>("get_server_url"),
 	/**  檢查並儲存伺服器網址，回傳正規化後的網址。 */
 	setServerUrl: (serverUrl: string) => typedError<string, ClientError_Serialize>(__TAURI_INVOKE("set_server_url", { serverUrl })),
+	/**  伺服器是否還沒有任何帳號（需要先建立管理者）。 */
+	setupStatus: () => typedError<SetupStatus, ClientError_Serialize>(__TAURI_INVOKE("setup_status")),
+	/**  建立第一個管理者，成功後直接登入（token 存進鑰匙圈）。 */
+	setupAdmin: (req: CreateAdminRequest) => typedError<CurrentUser, ClientError_Serialize>(__TAURI_INVOKE("setup_admin", { req })),
+	/**  登入，token 存進鑰匙圈；token 不會回傳給前端。 */
+	login: (req: LoginRequest) => typedError<CurrentUser, ClientError_Serialize>(__TAURI_INVOKE("login", { req })),
+	/**  登出並清除本機 token。伺服器連不上時仍會清除本機 token。 */
+	logout: () => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("logout")),
+	/**
+	 *  目前登入的使用者；本機沒有 token 時回傳 `null`。
+	 * 
+	 *  token 已失效時回傳 `sessionExpired` 錯誤，並清除本機 token。
+	 */
+	currentUser: () => typedError<CurrentUser | null, ClientError_Serialize>(__TAURI_INVOKE("current_user")),
+	/**  修改自己的密碼。 */
+	changePassword: (req: ChangePasswordRequest) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("change_password", { req })),
 };
 
 /* Constants */
 export const CLIENT_VERSION = "0.1.0" as const;
+
+export const MIN_PASSWORD_CHARS = 10 as const;
+
+export const PERMISSIONS = {"AUDIT_READ":"audit.read","DATA_EXPORT":"data.export","RECORD_POST":"record.post","RECORD_READ":"record.read","RECORD_WRITE":"record.write","SCHEMA_MANAGE":"schema.manage","SETTINGS_MANAGE":"settings.manage","USER_MANAGE":"user.manage"} as const;
 
 /* Types */
 /**  API 錯誤回應的內容。 */
@@ -159,7 +179,7 @@ export type AuditLogQuery_Serialize = {
 /**  `POST /api/v1/auth/change-password` 的輸入。 */
 export type ChangePasswordRequest = {
 	current_password: string,
-	/**  至少 10 個字元（§6.2）。 */
+	/**  至少 [`MIN_PASSWORD_CHARS`] 個字元（§6.2）。 */
 	new_password: string,
 };
 
@@ -170,6 +190,12 @@ export type ClientError_Deserialize =
 {
 	kind: "api",
 } & ApiError_Deserialize | 
+/**
+ *  登入已逾時或 session 已失效（伺服器對需要登入的請求回 `401`）。
+ * 
+ *  收到時本機的 token 已清除，前端應回到登入頁。
+ */
+{ kind: "sessionExpired"; message: string } | 
 /**  無法連線到伺服器、連線逾時。 */
 { kind: "network"; message: string } | 
 /**  伺服器的回應無法解析（例如網址指到別的服務）。 */
@@ -184,6 +210,12 @@ export type ClientError_Serialize =
 {
 	kind: "api",
 } & ApiError_Serialize | 
+/**
+ *  登入已逾時或 session 已失效（伺服器對需要登入的請求回 `401`）。
+ * 
+ *  收到時本機的 token 已清除，前端應回到登入頁。
+ */
+{ kind: "sessionExpired"; message: string } | 
 /**  無法連線到伺服器、連線逾時。 */
 { kind: "network"; message: string } | 
 /**  伺服器的回應無法解析（例如網址指到別的服務）。 */
@@ -192,6 +224,16 @@ export type ClientError_Serialize =
 { kind: "invalidInput"; message: string } | 
 /**  本機設定檔讀寫失敗。 */
 { kind: "storage"; message: string };
+
+/**  `POST /api/v1/setup/admin` 的輸入。 */
+export type CreateAdminRequest = {
+	/**  登入帳號（前後空白會去除）。 */
+	username: string,
+	/**  顯示名稱（前後空白會去除）。 */
+	display_name: string,
+	/**  至少 10 個字元（§6.2）。 */
+	password: string,
+};
 
 /**  `POST /api/v1/users` 的輸入。建立後 `must_change_password = true`。 */
 export type CreateUserRequest = {
@@ -280,13 +322,6 @@ export type LoginRequest = {
 	password: string,
 };
 
-/**  `POST /api/v1/auth/login` 成功時的回應。 */
-export type LoginResponse = {
-	/**  Session token。之後的請求放在 `Authorization: Bearer <token>`。 */
-	token: string,
-	user: CurrentUser,
-};
-
 /**  分頁的列表回應。 */
 export type Page<T> = {
 	/**  該頁的資料。頁碼超過最後一頁時為空陣列。 */
@@ -318,6 +353,12 @@ export type Role = {
 	name: string,
 	/**  權限代碼，對應 `permission` 模組的常數，依代碼排序。 */
 	permissions: string[],
+};
+
+/**  `GET /api/v1/setup/status` 的回應。 */
+export type SetupStatus = {
+	/**  資料庫還沒有任何帳號，需要先建立管理者。 */
+	needs_setup: boolean,
 };
 
 /**  `PATCH /api/v1/users/{id}` 的輸入。省略或 `null` 的欄位不修改。 */

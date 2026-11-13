@@ -10,8 +10,13 @@ pub mod commands;
 pub mod error;
 pub mod settings;
 pub mod state;
+pub mod token_store;
 
+use std::collections::BTreeMap;
 use std::path::Path;
+
+use hammer_shared::auth::MIN_PASSWORD_CHARS;
+use hammer_shared::permission;
 
 use specta_typescript::Typescript;
 use tauri::Manager;
@@ -19,6 +24,7 @@ use tauri_specta::{ErrorHandlingMode, collect_commands};
 
 use crate::api_client::{ApiClient, CLIENT_VERSION};
 use crate::state::AppState;
+use crate::token_store::KeyringTokenStore;
 
 /// 產生的 TypeScript 綁定檔位置（`apps/desktop/src/bindings.ts`）。
 pub const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings.ts");
@@ -33,13 +39,17 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::health_check,
             commands::get_server_url,
             commands::set_server_url,
+            commands::setup_status,
+            commands::setup_admin,
+            commands::login,
+            commands::logout,
+            commands::current_user,
+            commands::change_password,
         ])
         .constant("CLIENT_VERSION", CLIENT_VERSION)
-        // 尚未有對應 command 的 API 型別（登入畫面使用）
-        .typ::<hammer_shared::auth::LoginRequest>()
-        .typ::<hammer_shared::auth::LoginResponse>()
-        .typ::<hammer_shared::auth::CurrentUser>()
-        .typ::<hammer_shared::auth::ChangePasswordRequest>()
+        .constant("PERMISSIONS", permission_constants())
+        // `usize` 在 TypeScript 可能超出 number 範圍，specta 不允許匯出；數值很小，轉成 u32
+        .constant("MIN_PASSWORD_CHARS", MIN_PASSWORD_CHARS as u32)
         // 帳號管理
         .typ::<hammer_shared::user::Role>()
         .typ::<hammer_shared::user::User>()
@@ -54,6 +64,20 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::audit::AuditLogQuery>()
         // command 回傳 `{ status: "ok", data } | { status: "error", error }`，錯誤有型別
         .error_handling(ErrorHandlingMode::Result)
+}
+
+/// 權限代碼（`hammer_shared::permission`），前端以 `PERMISSIONS.USER_MANAGE` 等使用。
+fn permission_constants() -> BTreeMap<&'static str, &'static str> {
+    BTreeMap::from([
+        ("RECORD_READ", permission::RECORD_READ),
+        ("RECORD_WRITE", permission::RECORD_WRITE),
+        ("RECORD_POST", permission::RECORD_POST),
+        ("DATA_EXPORT", permission::DATA_EXPORT),
+        ("SCHEMA_MANAGE", permission::SCHEMA_MANAGE),
+        ("USER_MANAGE", permission::USER_MANAGE),
+        ("SETTINGS_MANAGE", permission::SETTINGS_MANAGE),
+        ("AUDIT_READ", permission::AUDIT_READ),
+    ])
 }
 
 /// 產生 TypeScript 綁定檔。
@@ -75,7 +99,11 @@ pub fn run() {
         .setup(move |app| {
             builder.mount_events(app);
             let settings_path = app.path().app_config_dir()?.join(settings::SETTINGS_FILE);
-            app.manage(AppState::new(ApiClient::new()?, settings_path));
+            app.manage(AppState::new(
+                ApiClient::new()?,
+                settings_path,
+                Box::new(KeyringTokenStore),
+            ));
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -85,6 +113,15 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_constants_cover_all_codes() {
+        let mut exported: Vec<_> = permission_constants().into_values().collect();
+        let mut all = permission::ALL.to_vec();
+        exported.sort_unstable();
+        all.sort_unstable();
+        assert_eq!(exported, all);
+    }
 
     /// `src/bindings.ts` 必須與目前的 Rust 型別一致；不一致時執行 `pnpm gen:bindings`。
     #[test]
