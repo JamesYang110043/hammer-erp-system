@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE field_definitions\n        SET label = $3, is_required = $4, is_visible = $5, is_readonly = $6,\n            is_searchable = $7, is_unique = $8, default_value = $9, validation = $10,\n            options = $11, decimal_places = $12, ui_widget = $13, column_width = $14,\n            help_text = $15, sort_order = $16, is_active = $17,\n            updated_by = $18, version = version + 1\n        WHERE id = $1 AND version = $2 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Text",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Int2",
+        "Text",
+        "Int4",
+        "Text",
+        "Int4",
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f9c3f2991d42c134b9fc92080826cd5c6270116e7ea681495def8a43e78d1b59"
+}

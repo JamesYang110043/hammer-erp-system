@@ -4,8 +4,27 @@
 //!   JSON 中為 snake_case 字串，與資料庫 CHECK 限制的值相同
 //! - 欄位設定：[`Validation`]、[`SelectOption`]，對應 `field_definitions.validation` / `options` JSONB
 //! - API 回應：[`EntityDefinition`]、[`FieldDefinition`]
+//! - API 回應：[`EntityDetail`]（資料類別與欄位定義）
 //! - API 請求：[`CreateEntityRequest`]、[`UpdateEntityRequest`]、[`CreateFieldRequest`]、
-//!   [`UpdateFieldRequest`]
+//!   [`UpdateFieldRequest`]、[`DeactivateFieldRequest`]、[`ReorderFieldsRequest`]
+//!
+//! # 端點
+//!
+//! 讀取需要登入；寫入需要 `schema.manage` 權限。
+//!
+//! | 端點 | request | 成功回應 |
+//! |---|---|---|
+//! | `GET /api/v1/entities` | | `200` [`EntityDefinition`]`[]`（有效的資料類別） |
+//! | `GET /api/v1/entities/{key}` | | `200` [`EntityDetail`] |
+//! | `POST /api/v1/entities` | [`CreateEntityRequest`] | `201` [`EntityDetail`] |
+//! | `PATCH /api/v1/entities/{key}` | [`UpdateEntityRequest`] | `200` [`EntityDetail`] |
+//! | `POST /api/v1/entities/{key}/fields` | [`CreateFieldRequest`] | `201` [`FieldDefinition`] |
+//! | `PATCH /api/v1/entities/{key}/fields/{field_key}` | [`UpdateFieldRequest`] | `200` [`FieldDefinition`] |
+//! | `POST /api/v1/entities/{key}/fields/{field_key}/deactivate` | [`DeactivateFieldRequest`] | `200` [`FieldDefinition`] |
+//! | `PUT /api/v1/entities/{key}/fields/order` | [`ReorderFieldsRequest`] | `200` [`FieldDefinition`]`[]` |
+//!
+//! 錯誤：輸入不合法 → `422 VALIDATION`，`details.field` 為 request 的欄位名稱；
+//! `version` 不符 → `409 CONFLICT`；資料類別或欄位不存在 → `404 NOT_FOUND`。
 //! - 欄位值的 JSON 存值格式：[`value`]
 //! - 代碼命名規則：[`key`]
 //!
@@ -366,6 +385,9 @@ pub struct CreateEntityRequest {
 pub struct UpdateEntityRequest {
     /// 讀取時取得的版本號；不符時回傳 `409 CONFLICT`。
     pub version: i32,
+    /// 選填。資料類別代碼不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。
+    #[serde(default)]
+    pub key: Option<String>,
     pub label: String,
     /// `null` 代表清除。
     pub icon: Option<String>,
@@ -422,12 +444,18 @@ pub struct CreateFieldRequest {
 
 /// 修改欄位的輸入（整筆取代可修改的屬性）。`field_key`、`storage` 不可修改。
 ///
-/// 變更 `data_type` 依 §7.4 的規則檢查既有資料；系統欄位不可變更型態（§7.2）。
+/// 變更 `data_type` 依 §7.4 的規則檢查既有資料（尚未支援）；系統欄位不可變更型態（§7.2）。
+/// 系統欄位只能修改顯示名稱、顯示或隱藏、排序、欄寬、說明文字、必填與預設值（§7.2），
+/// 其他屬性必須維持原值。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct UpdateFieldRequest {
     /// 讀取時取得的版本號；不符時回傳 `409 CONFLICT`。
     pub version: i32,
+    /// 選填。欄位代碼不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。
+    #[serde(default)]
+    pub field_key: Option<String>,
     pub label: String,
+    /// 目前必須與原本的型態相同（型態變更另有 API）；不同時回傳 `422 VALIDATION`。
     pub data_type: DataType,
     pub is_required: bool,
     pub is_visible: bool,
@@ -447,6 +475,37 @@ pub struct UpdateFieldRequest {
     pub sort_order: i32,
     /// 停用欄位（§7.2），資料保留。系統欄位不可停用。
     pub is_active: bool,
+}
+
+/// 停用欄位的輸入（§7.2）。資料保留；系統欄位不可停用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct DeactivateFieldRequest {
+    /// 讀取時取得的版本號；不符時回傳 `409 CONFLICT`。
+    pub version: i32,
+}
+
+/// 資料類別與其所有欄位定義（含已停用），欄位依 `sort_order` 排序。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct EntityDetail {
+    pub entity: EntityDefinition,
+    pub fields: Vec<FieldDefinition>,
+}
+
+/// 調整欄位排序的輸入。
+///
+/// `fields` 依新的順序列出該資料類別的**所有**欄位（含已停用），每個欄位恰好一次；
+/// 第 n 個欄位的 `sort_order` 設為 n（從 0 開始）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ReorderFieldsRequest {
+    pub fields: Vec<FieldOrderItem>,
+}
+
+/// [`ReorderFieldsRequest`] 的一個欄位。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct FieldOrderItem {
+    pub field_key: String,
+    /// 讀取時取得的欄位版本號；任一欄位不符時整批不寫入，回傳 `409 CONFLICT`。
+    pub version: i32,
 }
 
 fn default_true() -> bool {

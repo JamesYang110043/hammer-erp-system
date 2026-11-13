@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO field_definitions\n            (id, entity_id, field_key, label, data_type, is_system, storage,\n             is_required, is_visible, is_readonly, is_searchable, is_unique,\n             default_value, validation, options, decimal_places, ui_widget, column_width,\n             help_text, sort_order, created_at, created_by, updated_at, updated_by)\n        VALUES ($1, $2, $3, $4, $5, false, 'json', $6, $7, $8, $9, $10,\n                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $19, $20)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Int2",
+        "Text",
+        "Int4",
+        "Text",
+        "Int4",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c95f3e381c277fa71b18908d1ca5af101ff5d9928d66f0825e4a5ed245cccd5c"
+}

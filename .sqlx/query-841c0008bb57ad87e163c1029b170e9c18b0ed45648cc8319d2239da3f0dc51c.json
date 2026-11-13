@@ -1,0 +1,352 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, entity_id, field_key, label, data_type, is_system, storage, column_name,\n               is_required, is_visible, is_readonly, is_searchable, is_unique,\n               default_value, validation, options, decimal_places, relation_entity_id,\n               formula, formula_result_type, ui_widget, column_width, help_text,\n               sort_order, is_active, created_at, updated_at, version\n        FROM field_definitions\n        WHERE entity_id = $1 AND deleted_at IS NULL\n        ORDER BY sort_order, id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "entity_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "entity_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "field_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "field_key"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "data_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "data_type"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "is_system",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "is_system"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "storage",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "storage"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "column_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "column_name"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "is_required",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "is_required"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "is_visible",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "is_visible"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "is_readonly",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "is_readonly"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "is_searchable",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "is_searchable"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "is_unique",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "is_unique"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "default_value",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "default_value"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "validation",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "validation"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "options",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "options"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "decimal_places",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "decimal_places"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "relation_entity_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "relation_entity_id"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "formula",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "formula"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "formula_result_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "formula_result_type"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "ui_widget",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "ui_widget"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "column_width",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "column_width"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "help_text",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "help_text"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "sort_order",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "sort_order"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "is_active",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 27,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "841c0008bb57ad87e163c1029b170e9c18b0ed45648cc8319d2239da3f0dc51c"
+}

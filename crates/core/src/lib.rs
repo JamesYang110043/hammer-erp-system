@@ -4,6 +4,7 @@
 //! - [`audit_logs`]：操作紀錄查詢（分頁、篩選）
 //! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定、目前使用者與權限檢查
 //! - [`record_data`]：依欄位定義驗證並正規化資料的 `data`
+//! - [`schema`]：資料類別與欄位定義的管理
 //! - [`setup`]：初次啟動建立第一個管理者
 //! - [`users`]：帳號管理與最後一個管理者保護
 //! - `test_util`（`test-util` feature）：整合測試用，直接建立使用者與 session
@@ -15,6 +16,7 @@ pub mod audit_logs;
 pub mod auth;
 mod error;
 pub mod record_data;
+pub mod schema;
 pub mod setup;
 #[cfg(feature = "test-util")]
 pub mod test_util;
