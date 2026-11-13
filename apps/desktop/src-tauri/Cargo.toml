@@ -21,7 +21,7 @@ hammer-shared.workspace = true
 # 預設的 `v1` feature：macOS Keychain、Windows 認證管理員、Linux Secret Service
 keyring = "4"
 
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
@@ -33,6 +33,7 @@ url = "2"
 
 [dev-dependencies]
 axum.workspace = true
+time.workspace = true
 tokio.workspace = true
 
 [lints]

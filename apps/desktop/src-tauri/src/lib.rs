@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use hammer_shared::auth::MIN_PASSWORD_CHARS;
-use hammer_shared::permission;
+use hammer_shared::{audit, permission};
 
 use specta_typescript::Typescript;
 use tauri::Manager;
@@ -45,11 +45,21 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::logout,
             commands::current_user,
             commands::change_password,
+            commands::list_roles,
+            commands::list_users,
+            commands::create_user,
+            commands::update_user,
+            commands::reset_user_password,
+            commands::unlock_user,
+            commands::delete_user,
+            commands::list_audit_logs,
         ])
         .constant("CLIENT_VERSION", CLIENT_VERSION)
         .constant("PERMISSIONS", permission_constants())
         // `usize` 在 TypeScript 可能超出 number 範圍，specta 不允許匯出；數值很小，轉成 u32
         .constant("MIN_PASSWORD_CHARS", MIN_PASSWORD_CHARS as u32)
+        // 操作紀錄的動作代碼（`hammer_shared::audit::ALL`），前端篩選選單使用
+        .constant("AUDIT_ACTIONS", audit::ALL)
         // 帳號管理
         .typ::<hammer_shared::user::Role>()
         .typ::<hammer_shared::user::User>()

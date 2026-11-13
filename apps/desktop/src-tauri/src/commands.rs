@@ -3,9 +3,15 @@
 //! 前端不直接呼叫 HTTP API，一律經過這裡（`docs/architecture.md` §3.3）。
 //! 新增 command 後要加進 [`crate::specta_builder`]，並執行 `pnpm gen:bindings`。
 
+use hammer_shared::Id;
+use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest};
 use hammer_shared::health::HealthResponse;
+use hammer_shared::pagination::Page;
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
+use hammer_shared::user::{
+    CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
+};
 use tauri::State;
 
 use crate::error::ClientError;
@@ -99,4 +105,80 @@ pub async fn change_password(
     req: ChangePasswordRequest,
 ) -> Result<(), ClientError> {
     state.change_password(&req).await
+}
+
+/// 角色列表（需要 `user.manage`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_roles(state: State<'_, AppState>) -> Result<Vec<Role>, ClientError> {
+    state.list_roles().await
+}
+
+/// 帳號列表（需要 `user.manage`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_users(state: State<'_, AppState>) -> Result<Vec<User>, ClientError> {
+    state.list_users().await
+}
+
+/// 新增帳號（需要 `user.manage`）。建立後第一次登入必須修改密碼。
+#[tauri::command]
+#[specta::specta]
+pub async fn create_user(
+    state: State<'_, AppState>,
+    req: CreateUserRequest,
+) -> Result<User, ClientError> {
+    state.create_user(&req).await
+}
+
+/// 修改帳號的顯示名稱、角色、停用狀態（需要 `user.manage`）。
+///
+/// `req.version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn update_user(
+    state: State<'_, AppState>,
+    id: Id,
+    req: UpdateUserRequest,
+) -> Result<User, ClientError> {
+    state.update_user(id, &req).await
+}
+
+/// 管理者重設密碼為臨時密碼（需要 `user.manage`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn reset_user_password(
+    state: State<'_, AppState>,
+    id: Id,
+    req: ResetPasswordRequest,
+) -> Result<User, ClientError> {
+    state.reset_user_password(id, &req).await
+}
+
+/// 解除登入失敗鎖定（需要 `user.manage`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn unlock_user(state: State<'_, AppState>, id: Id) -> Result<User, ClientError> {
+    state.unlock_user(id).await
+}
+
+/// 刪除帳號（需要 `user.manage`）。`version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_user(
+    state: State<'_, AppState>,
+    id: Id,
+    version: i32,
+) -> Result<(), ClientError> {
+    state.delete_user(id, &DeleteUserQuery { version }).await
+}
+
+/// 查詢操作紀錄（需要 `audit.read`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_audit_logs(
+    state: State<'_, AppState>,
+    query: AuditLogQuery,
+) -> Result<Page<AuditLogEntry>, ClientError> {
+    state.list_audit_logs(&query).await
 }

@@ -7,11 +7,16 @@
 
 use std::time::Duration;
 
+use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
 use hammer_shared::constants::{API_PREFIX, CLIENT_VERSION_HEADER};
 use hammer_shared::health::HealthResponse;
+use hammer_shared::pagination::Page;
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
-use hammer_shared::{ApiError, ErrorCode};
+use hammer_shared::user::{
+    CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
+};
+use hammer_shared::{ApiError, ErrorCode, Id};
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -124,6 +129,126 @@ impl ApiClient {
             .bearer_auth(token)
             .json(req);
         authed(read_empty(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/roles`。
+    pub async fn list_roles(
+        &self,
+        server_url: &str,
+        token: &str,
+    ) -> Result<Vec<Role>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/roles"))
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/users`。
+    pub async fn list_users(
+        &self,
+        server_url: &str,
+        token: &str,
+    ) -> Result<Vec<User>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/users"))
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/users`。
+    pub async fn create_user(
+        &self,
+        server_url: &str,
+        token: &str,
+        req: &CreateUserRequest,
+    ) -> Result<User, ClientError> {
+        let builder = self
+            .http
+            .post(endpoint(server_url, "/users"))
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PATCH /api/v1/users/{id}`。
+    pub async fn update_user(
+        &self,
+        server_url: &str,
+        token: &str,
+        id: Id,
+        req: &UpdateUserRequest,
+    ) -> Result<User, ClientError> {
+        let builder = self
+            .http
+            .patch(endpoint(server_url, &format!("/users/{id}")))
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/users/{id}/reset-password`。
+    pub async fn reset_user_password(
+        &self,
+        server_url: &str,
+        token: &str,
+        id: Id,
+        req: &ResetPasswordRequest,
+    ) -> Result<User, ClientError> {
+        let builder = self
+            .http
+            .post(endpoint(server_url, &format!("/users/{id}/reset-password")))
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/users/{id}/unlock`。
+    pub async fn unlock_user(
+        &self,
+        server_url: &str,
+        token: &str,
+        id: Id,
+    ) -> Result<User, ClientError> {
+        let builder = self
+            .http
+            .post(endpoint(server_url, &format!("/users/{id}/unlock")))
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `DELETE /api/v1/users/{id}?version=N`。
+    pub async fn delete_user(
+        &self,
+        server_url: &str,
+        token: &str,
+        id: Id,
+        query: &DeleteUserQuery,
+    ) -> Result<(), ClientError> {
+        let builder = self
+            .http
+            .delete(endpoint(server_url, &format!("/users/{id}")))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_empty(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/audit-logs`。
+    ///
+    /// `None` 的條件不會放進 query string；時間的 `+` 會編碼成 `%2B`。
+    pub async fn list_audit_logs(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &AuditLogQuery,
+    ) -> Result<Page<AuditLogEntry>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/audit-logs"))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
     }
 }
 
@@ -528,5 +653,182 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.token, "first");
+    }
+
+    fn managed_user_json(version: i32) -> serde_json::Value {
+        json!({
+            "id": "0196f5a0-0000-7000-8000-000000000002",
+            "username": "editor1",
+            "display_name": "陳編輯",
+            "role": "editor",
+            "role_name": "可編輯者",
+            "is_active": true,
+            "is_locked": false,
+            "locked_until": null,
+            "must_change_password": true,
+            "last_login_at": null,
+            "created_at": "2026-11-13T01:00:00Z",
+            "updated_at": "2026-11-13T01:00:00Z",
+            "version": version,
+        })
+    }
+
+    #[tokio::test]
+    async fn user_management_endpoints() {
+        use axum::extract::{Path, RawQuery};
+        use axum::routing::patch;
+
+        let url = serve(
+            Router::new()
+                .route(
+                    "/roles",
+                    get(|| async {
+                        axum::Json(json!([{
+                            "id": "0196f5a0-0000-7000-8000-0000000000aa",
+                            "code": "editor",
+                            "name": "可編輯者",
+                            "permissions": ["record.read"],
+                        }]))
+                    }),
+                )
+                .route(
+                    "/users",
+                    get(|| async { axum::Json(json!([managed_user_json(1)])) }).post(
+                        |headers: AxumHeaders, axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(bearer(&headers), "Bearer tok");
+                            assert_eq!(body["username"], "editor1");
+                            assert_eq!(body["password"], "0123456789");
+                            (AxumStatus::CREATED, axum::Json(managed_user_json(1)))
+                        },
+                    ),
+                )
+                .route(
+                    "/users/{id}",
+                    patch(
+                        |Path(id): Path<String>, axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert!(id.ends_with("0002"));
+                            assert_eq!(
+                                body,
+                                json!({ "version": 1, "display_name": null, "role": null, "is_active": false })
+                            );
+                            (
+                                AxumStatus::CONFLICT,
+                                axum::Json(json!({ "code": "CONFLICT", "message": "此資料已被其他人修改，請重新載入" })),
+                            )
+                        },
+                    )
+                    .delete(|RawQuery(query): RawQuery| async move {
+                        assert_eq!(query.as_deref(), Some("version=3"));
+                        AxumStatus::NO_CONTENT
+                    }),
+                )
+                .route(
+                    "/users/{id}/reset-password",
+                    post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                        assert_eq!(body, json!({ "new_password": "temp-password" }));
+                        axum::Json(managed_user_json(2))
+                    }),
+                )
+                .route(
+                    "/users/{id}/unlock",
+                    post(|| async { axum::Json(managed_user_json(3)) }),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+        let id: Id = "0196f5a0-0000-7000-8000-000000000002".parse().unwrap();
+
+        assert_eq!(
+            client.list_roles(&url, "tok").await.unwrap()[0].code,
+            "editor"
+        );
+        assert_eq!(client.list_users(&url, "tok").await.unwrap()[0].version, 1);
+        let created = client
+            .create_user(
+                &url,
+                "tok",
+                &CreateUserRequest {
+                    username: "editor1".into(),
+                    display_name: "陳編輯".into(),
+                    role: "editor".into(),
+                    password: "0123456789".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(created.must_change_password);
+
+        let err = client
+            .update_user(
+                &url,
+                "tok",
+                id,
+                &UpdateUserRequest {
+                    version: 1,
+                    display_name: None,
+                    role: None,
+                    is_active: Some(false),
+                },
+            )
+            .await
+            .unwrap_err();
+        let ClientError::Api(api) = err else {
+            panic!("應該是 ApiError：{err:?}");
+        };
+        assert_eq!(api.code, ErrorCode::Conflict);
+
+        let reset = client
+            .reset_user_password(
+                &url,
+                "tok",
+                id,
+                &ResetPasswordRequest {
+                    new_password: "temp-password".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(reset.version, 2);
+        assert_eq!(
+            client.unlock_user(&url, "tok", id).await.unwrap().version,
+            3
+        );
+        client
+            .delete_user(&url, "tok", id, &DeleteUserQuery { version: 3 })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn audit_log_query_string() {
+        use axum::extract::RawQuery;
+        use time::macros::datetime;
+
+        let url = serve(Router::new().route(
+            "/audit-logs",
+            get(|RawQuery(query): RawQuery| async move {
+                // 只帶有值的條件；時間的 `+` 必須編碼成 `%2B`，否則伺服器會當成空白
+                assert_eq!(
+                    query.as_deref(),
+                    Some("from=2026-11-01T00%3A00%3A00%2B08%3A00&action=login&page=2&page_size=20")
+                );
+                axum::Json(json!({ "items": [], "total": 0, "page": 2, "page_size": 20 }))
+            }),
+        ))
+        .await;
+
+        let query = AuditLogQuery {
+            from: Some(datetime!(2026-11-01 00:00 +8)),
+            action: Some("login".into()),
+            page: Some(2),
+            page_size: Some(20),
+            ..Default::default()
+        };
+        let page = ApiClient::new()
+            .unwrap()
+            .list_audit_logs(&url, "tok", &query)
+            .await
+            .unwrap();
+        assert_eq!((page.page, page.page_size), (2, 20));
     }
 }
