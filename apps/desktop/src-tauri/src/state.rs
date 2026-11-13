@@ -6,7 +6,12 @@ use std::sync::{PoisonError, RwLock};
 use hammer_shared::Id;
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
+use hammer_shared::layout::{
+    CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
+    ViewLayout,
+};
 use hammer_shared::pagination::Page;
+use hammer_shared::record::{DeleteRecordQuery, Record, RecordListQuery};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
@@ -252,6 +257,79 @@ impl AppState {
             client
                 .change_field_type(url, token, key, field_key, req)
                 .await
+        })
+        .await
+    }
+
+    /// 資料列表。
+    pub async fn list_records(
+        &self,
+        key: &str,
+        query: &RecordListQuery,
+    ) -> Result<Page<Record>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.list_records(url, token, key, query).await
+        })
+        .await
+    }
+
+    /// 刪除資料。
+    pub async fn delete_record(
+        &self,
+        key: &str,
+        id: Id,
+        query: &DeleteRecordQuery,
+    ) -> Result<(), ClientError> {
+        self.with_token(async |client, url, token| {
+            client.delete_record(url, token, key, id, query).await
+        })
+        .await
+    }
+
+    /// 列表版面（全域版面與自己的版面）。
+    pub async fn list_layouts(&self, key: &str) -> Result<Vec<ViewLayout>, ClientError> {
+        self.with_token(async |client, url, token| client.list_layouts(url, token, key).await)
+            .await
+    }
+
+    /// 要套用的預設版面。
+    pub async fn get_default_layout(&self, key: &str) -> Result<DefaultViewLayout, ClientError> {
+        self.with_token(async |client, url, token| client.get_default_layout(url, token, key).await)
+            .await
+    }
+
+    /// 新增版面。
+    pub async fn create_layout(
+        &self,
+        key: &str,
+        req: &CreateViewLayoutRequest,
+    ) -> Result<ViewLayout, ClientError> {
+        self.with_token(async |client, url, token| client.create_layout(url, token, key, req).await)
+            .await
+    }
+
+    /// 修改版面。
+    pub async fn update_layout(
+        &self,
+        key: &str,
+        id: Id,
+        req: &UpdateViewLayoutRequest,
+    ) -> Result<ViewLayout, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.update_layout(url, token, key, id, req).await
+        })
+        .await
+    }
+
+    /// 刪除版面。
+    pub async fn delete_layout(
+        &self,
+        key: &str,
+        id: Id,
+        query: &DeleteViewLayoutQuery,
+    ) -> Result<(), ClientError> {
+        self.with_token(async |client, url, token| {
+            client.delete_layout(url, token, key, id, query).await
         })
         .await
     }

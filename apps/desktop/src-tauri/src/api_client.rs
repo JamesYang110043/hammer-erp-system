@@ -11,7 +11,12 @@ use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
 use hammer_shared::constants::{API_PREFIX, CLIENT_VERSION_HEADER};
 use hammer_shared::health::HealthResponse;
+use hammer_shared::layout::{
+    CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
+    ViewLayout,
+};
 use hammer_shared::pagination::Page;
+use hammer_shared::record::{DeleteRecordQuery, Record, RecordListQuery};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
@@ -389,6 +394,134 @@ impl ApiClient {
             .bearer_auth(token)
             .json(req);
         authed(read_json(send(builder).await?).await)
+    }
+    /// `GET /api/v1/entities/{key}/records`。
+    ///
+    /// 篩選參數名稱是動態的（`filter.<field_key>.<op>`），以 [`RecordListQuery::to_pairs`]
+    /// 產生 query string。
+    pub async fn list_records(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        query: &RecordListQuery,
+    ) -> Result<Page<Record>, ClientError> {
+        let builder = self
+            .http
+            .get(entity_endpoint(server_url, key, None, "/records")?)
+            .bearer_auth(token)
+            .query(&query.to_pairs());
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `DELETE /api/v1/entities/{key}/records/{id}?version=N`。
+    pub async fn delete_record(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        id: Id,
+        query: &DeleteRecordQuery,
+    ) -> Result<(), ClientError> {
+        let builder = self
+            .http
+            .delete(entity_endpoint(
+                server_url,
+                key,
+                None,
+                &format!("/records/{id}"),
+            )?)
+            .bearer_auth(token)
+            .query(query);
+        authed(read_empty(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/entities/{key}/layouts`。
+    pub async fn list_layouts(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+    ) -> Result<Vec<ViewLayout>, ClientError> {
+        let builder = self
+            .http
+            .get(entity_endpoint(server_url, key, None, "/layouts")?)
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/entities/{key}/layouts/default`。
+    pub async fn get_default_layout(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+    ) -> Result<DefaultViewLayout, ClientError> {
+        let builder = self
+            .http
+            .get(entity_endpoint(server_url, key, None, "/layouts/default")?)
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/entities/{key}/layouts`。
+    pub async fn create_layout(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        req: &CreateViewLayoutRequest,
+    ) -> Result<ViewLayout, ClientError> {
+        let builder = self
+            .http
+            .post(entity_endpoint(server_url, key, None, "/layouts")?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PATCH /api/v1/entities/{key}/layouts/{id}`。
+    pub async fn update_layout(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        id: Id,
+        req: &UpdateViewLayoutRequest,
+    ) -> Result<ViewLayout, ClientError> {
+        let builder = self
+            .http
+            .patch(entity_endpoint(
+                server_url,
+                key,
+                None,
+                &format!("/layouts/{id}"),
+            )?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `DELETE /api/v1/entities/{key}/layouts/{id}?version=N`。
+    pub async fn delete_layout(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        id: Id,
+        query: &DeleteViewLayoutQuery,
+    ) -> Result<(), ClientError> {
+        let builder = self
+            .http
+            .delete(entity_endpoint(
+                server_url,
+                key,
+                None,
+                &format!("/layouts/{id}"),
+            )?)
+            .bearer_auth(token)
+            .query(query);
+        authed(read_empty(send(builder).await?).await)
     }
 }
 
@@ -1277,6 +1410,218 @@ mod tests {
         // 不合法的代碼不送出請求
         assert!(matches!(
             client.get_entity(&url, "tok", "../users").await,
+            Err(ClientError::InvalidInput { .. })
+        ));
+    }
+
+    fn layout_json(version: i32) -> serde_json::Value {
+        json!({
+            "id": "0196f5a0-0000-7000-8000-000000000301",
+            "user_id": "0196f5a0-0000-7000-8000-000000000001",
+            "name": "我的版面",
+            "config": { "columns": [{ "field_key": "qty", "width": 120 }], "sort": null, "filters": [] },
+            "is_default": true,
+            "created_at": "2026-11-13T01:00:00Z",
+            "updated_at": "2026-11-13T01:00:00Z",
+            "version": version,
+        })
+    }
+
+    #[tokio::test]
+    async fn record_and_layout_endpoints() {
+        use axum::extract::{Path, RawQuery};
+        use axum::routing::patch;
+        use hammer_shared::layout::LayoutConfig;
+        use hammer_shared::record::{FilterOp, RecordFilter, RecordSort};
+
+        let record_id: Id = "0196f5a0-0000-7000-8000-000000000201".parse().unwrap();
+        let layout_id: Id = "0196f5a0-0000-7000-8000-000000000301".parse().unwrap();
+
+        let url = serve(
+            Router::new()
+                .route(
+                    "/entities/{key}/records",
+                    get(|Path(key): Path<String>, RawQuery(query): RawQuery| async move {
+                        assert_eq!(key, "repair");
+                        // 動態的篩選參數名稱；值經過 URL 編碼
+                        assert_eq!(
+                            query.as_deref(),
+                            Some(
+                                "page=2&page_size=20&sort=-qty&filter.name.contains=%E8%BB%8A\
+                                 &filter.tags.any=a&filter.tags.any=b"
+                            )
+                        );
+                        axum::Json(json!({
+                            "items": [{
+                                "id": "0196f5a0-0000-7000-8000-000000000201",
+                                "data": { "qty": 3, "price": "12.5000" },
+                                "created_at": "2026-11-13T01:00:00Z",
+                                "created_by": null,
+                                "updated_at": "2026-11-13T01:00:00Z",
+                                "updated_by": null,
+                                "version": 1,
+                            }],
+                            "total": 21, "page": 2, "page_size": 20,
+                        }))
+                    }),
+                )
+                .route(
+                    "/entities/{key}/records/{id}",
+                    axum::routing::delete(
+                        |Path((_, id)): Path<(String, String)>, RawQuery(query): RawQuery| async move {
+                            assert_eq!(id, "0196f5a0-0000-7000-8000-000000000201");
+                            assert_eq!(query.as_deref(), Some("version=4"));
+                            AxumStatus::NO_CONTENT
+                        },
+                    ),
+                )
+                .route(
+                    "/entities/{key}/layouts",
+                    get(|| async { axum::Json(json!([layout_json(1)])) }).post(
+                        |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(body["name"], "我的版面");
+                            assert_eq!(body["is_global"], false);
+                            assert_eq!(body["is_default"], true);
+                            (AxumStatus::CREATED, axum::Json(layout_json(1)))
+                        },
+                    ),
+                )
+                .route(
+                    "/entities/{key}/layouts/default",
+                    get(|| async {
+                        axum::Json(json!({
+                            "source": "generated",
+                            "layout": null,
+                            "config": { "columns": [], "sort": null, "filters": [] },
+                        }))
+                    }),
+                )
+                .route(
+                    "/entities/{key}/layouts/{id}",
+                    patch(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                        assert_eq!(body["version"], 1);
+                        assert_eq!(body["config"]["sort"], json!({ "field_key": "qty", "descending": true }));
+                        axum::Json(layout_json(2))
+                    })
+                    .delete(|RawQuery(query): RawQuery| async move {
+                        assert_eq!(query.as_deref(), Some("version=2"));
+                        AxumStatus::NO_CONTENT
+                    }),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+
+        let query = RecordListQuery {
+            page: Some(2),
+            page_size: Some(20),
+            sort: Some(RecordSort {
+                field_key: "qty".into(),
+                descending: true,
+            }),
+            filters: vec![
+                RecordFilter {
+                    field_key: "name".into(),
+                    op: FilterOp::Contains,
+                    value: "車".into(),
+                },
+                RecordFilter {
+                    field_key: "tags".into(),
+                    op: FilterOp::Any,
+                    value: "a".into(),
+                },
+                RecordFilter {
+                    field_key: "tags".into(),
+                    op: FilterOp::Any,
+                    value: "b".into(),
+                },
+            ],
+        };
+        let page = client
+            .list_records(&url, "tok", "repair", &query)
+            .await
+            .unwrap();
+        assert_eq!(
+            (page.total, page.items[0].data["price"].clone()),
+            (21, json!("12.5000"))
+        );
+
+        client
+            .delete_record(
+                &url,
+                "tok",
+                "repair",
+                record_id,
+                &DeleteRecordQuery { version: 4 },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            client.list_layouts(&url, "tok", "repair").await.unwrap()[0].version,
+            1
+        );
+        let default = client
+            .get_default_layout(&url, "tok", "repair")
+            .await
+            .unwrap();
+        assert!(default.layout.is_none());
+
+        let created = client
+            .create_layout(
+                &url,
+                "tok",
+                "repair",
+                &CreateViewLayoutRequest {
+                    name: "我的版面".into(),
+                    is_global: false,
+                    config: LayoutConfig::default(),
+                    is_default: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.config.columns[0].width, Some(120));
+
+        let updated = client
+            .update_layout(
+                &url,
+                "tok",
+                "repair",
+                layout_id,
+                &UpdateViewLayoutRequest {
+                    version: 1,
+                    name: None,
+                    config: Some(LayoutConfig {
+                        sort: Some(RecordSort {
+                            field_key: "qty".into(),
+                            descending: true,
+                        }),
+                        ..LayoutConfig::default()
+                    }),
+                    is_default: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.version, 2);
+
+        client
+            .delete_layout(
+                &url,
+                "tok",
+                "repair",
+                layout_id,
+                &DeleteViewLayoutQuery { version: 2 },
+            )
+            .await
+            .unwrap();
+
+        // 不合法的代碼不送出請求
+        assert!(matches!(
+            client
+                .list_records(&url, "tok", "Repair", &RecordListQuery::default())
+                .await,
             Err(ClientError::InvalidInput { .. })
         ));
     }

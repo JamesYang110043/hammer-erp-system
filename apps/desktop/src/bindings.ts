@@ -72,6 +72,20 @@ export const commands = {
 	 *  有資料無法轉換時回傳 `422 VALIDATION`，`details.records` 列出失敗的資料。
 	 */
 	changeFieldType: (key: string, fieldKey: string, req: ChangeFieldTypeRequest_Deserialize) => typedError<FieldDefinition_Serialize, ClientError_Serialize>(__TAURI_INVOKE("change_field_type", { key, fieldKey, req })),
+	/**  資料列表（需要 `record.read`）。分頁、排序與篩選見 [`RecordListQuery`]。 */
+	listRecords: (key: string, query: RecordListQuery_Deserialize) => typedError<Page<Record_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_records", { key, query })),
+	/**  刪除資料（需要 `record.write`）。`version` 不符時回傳 `409 CONFLICT`。 */
+	deleteRecord: (key: string, id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_record", { key, id, version })),
+	/**  列表版面：全域版面與自己的個人版面（需要 `record.read`）。 */
+	listLayouts: (key: string) => typedError<ViewLayout_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_layouts", { key })),
+	/**  要套用的預設版面：自己的預設 → 全域預設 → 依欄位定義產生。 */
+	getDefaultLayout: (key: string) => typedError<DefaultViewLayout_Serialize, ClientError_Serialize>(__TAURI_INVOKE("get_default_layout", { key })),
+	/**  新增版面。個人版面需要 `record.read`；全域版面需要 `schema.manage`。 */
+	createLayout: (key: string, req: CreateViewLayoutRequest_Deserialize) => typedError<ViewLayout_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_layout", { key, req })),
+	/**  修改版面。`req.version` 不符時回傳 `409 CONFLICT`。 */
+	updateLayout: (key: string, id: string, req: UpdateViewLayoutRequest_Deserialize) => typedError<ViewLayout_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_layout", { key, id, req })),
+	/**  刪除版面。`version` 不符時回傳 `409 CONFLICT`。 */
+	deleteLayout: (key: string, id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_layout", { key, id, version })),
 };
 
 /* Constants */
@@ -980,6 +994,9 @@ export type Page<T> = {
 	page_size: number,
 };
 
+/**  一筆自訂資料類別的資料。 */
+export type Record = Record_Serialize | Record_Deserialize;
+
 /**  一個篩選條件：`filter.<field_key>.<op>=<value>`。 */
 export type RecordFilter = {
 	field_key: string,
@@ -991,11 +1008,78 @@ export type RecordFilter = {
 	value: string,
 };
 
+/**
+ *  `GET /api/v1/entities/{key}/records` 的 query string（格式見模組說明）。
+ * 
+ *  query string 的參數名稱是動態的，用 [`Self::from_pairs`] 解析、[`Self::to_pairs`] 產生。
+ */
+export type RecordListQuery = RecordListQuery_Serialize | RecordListQuery_Deserialize;
+
+/**
+ *  `GET /api/v1/entities/{key}/records` 的 query string（格式見模組說明）。
+ * 
+ *  query string 的參數名稱是動態的，用 [`Self::from_pairs`] 解析、[`Self::to_pairs`] 產生。
+ */
+export type RecordListQuery_Deserialize = {
+	/**  頁碼，從 1 開始（預設 1）。 */
+	page?: number | null,
+	/**  每頁筆數（預設 50，上限 200）。 */
+	page_size?: number | null,
+	sort?: RecordSort | null,
+	/**  依 query string 的順序。 */
+	filters: RecordFilter[],
+};
+
+/**
+ *  `GET /api/v1/entities/{key}/records` 的 query string（格式見模組說明）。
+ * 
+ *  query string 的參數名稱是動態的，用 [`Self::from_pairs`] 解析、[`Self::to_pairs`] 產生。
+ */
+export type RecordListQuery_Serialize = {
+	/**  頁碼，從 1 開始（預設 1）。 */
+	page: number | null,
+	/**  每頁筆數（預設 50，上限 200）。 */
+	page_size: number | null,
+	sort: RecordSort | null,
+	/**  依 query string 的順序。 */
+	filters: RecordFilter[],
+};
+
 /**  排序：`sort=<field_key>` 或 `sort=-<field_key>`。 */
 export type RecordSort = {
 	field_key: string,
 	/**  `true`：由大到小。 */
 	descending: boolean,
+};
+
+/**  一筆自訂資料類別的資料。 */
+export type Record_Deserialize = {
+	id: string,
+	/**  所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。 */
+	data: { [key in string]: unknown },
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	created_by?: string | null,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	updated_by?: string | null,
+	/**  樂觀鎖定版本號（§9.4）。 */
+	version: number,
+};
+
+/**  一筆自訂資料類別的資料。 */
+export type Record_Serialize = {
+	id: string,
+	/**  所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。 */
+	data: { [key in string]: unknown },
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	created_by: string | null,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	updated_by: string | null,
+	/**  樂觀鎖定版本號（§9.4）。 */
+	version: number,
 };
 
 /**
