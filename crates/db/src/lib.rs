@@ -4,6 +4,7 @@
 //! - [`run_migrations`]：套用 `crates/db/migrations/` 的 migration
 //! - [`ensure_version_matched`]：樂觀鎖定檢查，版本不符時回傳 [`DbError::Conflict`]
 //! - [`audit`]：寫入與查詢 `audit_logs`
+//! - [`dynamic_index`]：自訂欄位的動態索引（可搜尋、不可重複）
 //! - [`lock`]：advisory lock
 //! - [`record`]：自訂資料類別的資料（`custom_records`）
 //! - [`role`]：角色與權限查詢
@@ -16,6 +17,7 @@
 //! 相依方向見 `docs/architecture.md` §4。
 
 pub mod audit;
+pub mod dynamic_index;
 mod error;
 pub mod lock;
 mod migrate;

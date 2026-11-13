@@ -16,6 +16,11 @@ pub enum DbError {
     #[error("資料庫 migration 失敗：{0}")]
     Migrate(#[from] MigrateError),
 
+    /// 要拼接進 DDL 的識別字含有不允許的字元（[`crate::dynamic_index`]）。
+    /// 上層應先檢查命名規則，發生時視為內部錯誤。
+    #[error("不安全的識別字：{0:?}")]
+    UnsafeIdentifier(String),
+
     /// 其他資料庫錯誤。
     #[error("資料庫錯誤：{0}")]
     Sqlx(#[from] sqlx::Error),

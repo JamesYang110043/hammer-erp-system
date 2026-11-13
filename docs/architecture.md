@@ -240,6 +240,12 @@ desktop(src-tauri) ──▶ shared, formula
 - 欄位設為「不可重複」時，自動建立部分唯一索引：
   `UNIQUE (entity_id, (data->>'field_key')) WHERE deleted_at IS NULL`。
 - 建立索引前會先檢查既有資料，有重複就拒絕並列出衝突的資料。
+- 自訂資料類別（`custom_records`）的動態索引都加上 `entity_id = '<資料類別 id>'` 條件，限定在單一資料類別：不同資料類別即使有相同的 `field_key`，索引與唯一性也互不影響。
+- 索引只存在於**啟用中**的欄位：停用欄位時移除，重新啟用時再建立（不可重複的欄位重新啟用前一樣先檢查重複）。修改欄位定義與建立、移除索引在同一個交易內。
+- 索引名稱：`{前綴}_{entity_key}_{field_key}_{雜湊}`，前綴為 `cfs`（可搜尋）或 `cfu`（不可重複）；前綴與代碼的部分超過 54 個字元時截斷，雜湊為兩個代碼的 SHA-256 前 8 碼，名稱最長 63 個字元（PostgreSQL 識別字上限）。規則在 `crates/core/src/schema/index.rs`。
+- DDL 無法使用 bind 參數：`field_key` 與索引名稱拼接前一律檢查只含 `a-z`、`0-9`、`_` 並加上引號（`crates/db/src/dynamic_index.rs`）。
+- 有重複而無法開啟「不可重複」時回傳 `422 VALIDATION`，`details` 為 `{ "field": "is_unique", "total", "values": [{ "value", "count", "record_ids" }] }`。
+- 系統資料表 `custom_data` 的動態索引在 M3 建立系統資料表時處理。
 
 ### 7.6 公式引擎（crates/formula）
 

@@ -8,11 +8,16 @@
 //! 欄位變更依序進行；檢查 `version`（§9.4）；每個有變動的定義寫入一筆 `schema_change_logs`
 //! （完整的 before / after）與一筆 `audit_logs`（只有變動的屬性）。沒有任何變動時不寫入。
 //!
-//! 輸入檢查在 [`rules`]，型態轉換在 [`type_change`]（純邏輯，有單元測試）。
+//! 欄位的「可搜尋」、「不可重複」與啟用狀態改變時，在同一個 transaction 內建立或移除動態索引
+//! （§7.5，[`index`]）。
+//!
+//! 輸入檢查在 [`rules`]，型態轉換在 [`type_change`]，索引規劃在 [`index`]（純邏輯，有單元測試）。
 
+pub mod index;
 pub mod rules;
 pub mod type_change;
 
+use hammer_db::dynamic_index::{self, ExpressionIndex};
 use hammer_db::record as record_db;
 use hammer_db::schema::{
     self as db, ENTITY_KEY_UNIQUE, EntityRow, EntityUpdate, FIELD_KEY_UNIQUE, FieldAttributes,
@@ -23,7 +28,8 @@ use hammer_db::{DbError, ensure_version_matched};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DataType, EntityDefinition,
     EntityDetail, EntityKind, EntityStorage, FieldDefinition, FieldStorage,
-    MAX_CONVERSION_FAILURES, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
+    MAX_CONVERSION_FAILURES, MAX_DUPLICATE_VALUES, ReorderFieldsRequest, UpdateEntityRequest,
+    UpdateFieldRequest,
 };
 use hammer_shared::{Id, audit as action, new_id, permission};
 use serde::Serialize;
@@ -33,6 +39,7 @@ use time::OffsetDateTime;
 use crate::CoreError;
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
+use index::{DuplicateValue, IndexChange, IndexKind};
 use rules::field;
 use type_change::StoredRecord;
 
@@ -414,6 +421,7 @@ pub async fn update_entity(
 // ---------------------------------------------------------------------------
 
 /// 新增自訂欄位（`storage = json`）。設定必須與型態相符（[`rules::validate_field_config`]）。
+/// 「可搜尋」、「不可重複」時建立對應的索引（§7.5）。
 ///
 /// - 資料類別不存在或已刪除 → [`CoreError::NotFound`]
 /// - 欄位代碼與該資料類別的既有欄位（含已停用）重複 → [`CoreError::InvalidField`]（`field_key`）
@@ -452,6 +460,7 @@ pub async fn create_field(
         }
     })?;
     let created = fetch_field(&mut tx, entity.id, &def.field_key).await?;
+    sync_indexes(&mut tx, &entity, None, &created).await?;
     log_change(
         &mut tx,
         ctx,
@@ -476,6 +485,8 @@ pub async fn create_field(
 /// - `version` 不符 → `Conflict`（§9.4）
 /// - 修改代碼、型態，或違反系統欄位的限制（§7.2）→ [`CoreError::InvalidField`]
 /// - `is_active` 由 `true` 改為 `false` 時，變更紀錄的動作為 `deactivate`
+/// - 「可搜尋」、「不可重複」、啟用狀態改變時建立或移除索引（§7.5）；開啟「不可重複」
+///   （或重新啟用不可重複的欄位）時，未刪除的資料已有重複的值 → [`CoreError::DuplicateValues`]
 /// - 沒有任何變動時不寫入，回傳目前的資料（`version` 不變）
 pub async fn update_field(
     pool: &PgPool,
@@ -493,12 +504,22 @@ pub async fn update_field(
     let current = lock_field(&mut tx, entity.id, field_key).await?;
     ensure_version(current.version, req.version)?;
     let next = rules::plan_update_field(&current, req)?;
-    let result = write_field(&mut tx, ctx, &current, &next, req.version, client_info, now).await?;
+    let result = write_field(
+        &mut tx,
+        ctx,
+        &entity,
+        &current,
+        &next,
+        req.version,
+        client_info,
+        now,
+    )
+    .await?;
     commit(tx).await?;
     Ok(result)
 }
 
-/// 停用欄位（`is_active = false`），資料保留（§7.2）。
+/// 停用欄位（`is_active = false`），資料保留（§7.2），並移除欄位的索引（§7.5）。
 ///
 /// - 系統欄位 → [`CoreError::InvalidField`]（`is_active`）
 /// - 已經停用時不寫入，回傳目前的資料
@@ -525,7 +546,17 @@ pub async fn deactivate_field(
         is_active: false,
         ..current.clone()
     };
-    let result = write_field(&mut tx, ctx, &current, &next, version, client_info, now).await?;
+    let result = write_field(
+        &mut tx,
+        ctx,
+        &entity,
+        &current,
+        &next,
+        version,
+        client_info,
+        now,
+    )
+    .await?;
     commit(tx).await?;
     Ok(result)
 }
@@ -715,10 +746,12 @@ pub async fn change_field_type(
     Ok(result)
 }
 
-/// 寫入欄位的修改並留紀錄。沒有變動時回傳 `current`。
+/// 寫入欄位的修改、同步索引並留紀錄。沒有變動時回傳 `current`。
+#[allow(clippy::too_many_arguments)]
 async fn write_field(
     tx: &mut PgTransaction<'_>,
     ctx: &AuthContext,
+    entity: &EntityDefinition,
     current: &FieldDefinition,
     next: &FieldDefinition,
     version: i32,
@@ -742,6 +775,7 @@ async fn write_field(
         )
         .await?,
     )?;
+    sync_indexes(tx, entity, Some(current), next).await?;
     log_change(
         tx,
         ctx,
@@ -756,6 +790,78 @@ async fn write_field(
     .await?;
     tracing::info!(actor = %ctx.user_id, field_id = %current.id, field = %current.field_key, "已修改欄位");
     fetch_field(tx, current.entity_id, &current.field_key).await
+}
+
+/// 依欄位定義的變化建立或移除動態索引（§7.5，[`index::plan_index_changes`]）。
+///
+/// 建立唯一索引前先檢查未刪除的資料，有重複的值 → [`CoreError::DuplicateValues`]。
+/// 呼叫端已用 `FOR UPDATE` 鎖定資料類別，寫入資料時以 `FOR SHARE` 鎖定（[`crate::records`]），
+/// 所以檢查與建立之間不會有新的資料寫入。
+///
+/// 系統資料類別（`storage = table`）的 `custom_data` 索引在 M3 處理，目前不建立。
+async fn sync_indexes(
+    tx: &mut PgTransaction<'_>,
+    entity: &EntityDefinition,
+    current: Option<&FieldDefinition>,
+    next: &FieldDefinition,
+) -> Result<(), CoreError> {
+    let changes = index::plan_index_changes(current, next);
+    if changes.is_empty() || entity.storage != EntityStorage::CustomRecords {
+        return Ok(());
+    }
+    for change in changes {
+        match change {
+            IndexChange::Drop(kind) => {
+                let name = index::index_name(kind, &entity.key, &next.field_key)?;
+                dynamic_index::drop_index(&mut **tx, &name).await?;
+                tracing::info!(entity = %entity.key, field = %next.field_key, index = %name, "已移除欄位索引");
+            }
+            IndexChange::Create(kind) => {
+                let unique = kind == IndexKind::Unique;
+                if unique {
+                    ensure_no_duplicates(tx, entity.id, &next.field_key).await?;
+                }
+                let name = index::index_name(kind, &entity.key, &next.field_key)?;
+                dynamic_index::create_index(
+                    &mut **tx,
+                    &ExpressionIndex {
+                        name: &name,
+                        entity_id: entity.id,
+                        field_key: &next.field_key,
+                        unique,
+                    },
+                )
+                .await?;
+                tracing::info!(entity = %entity.key, field = %next.field_key, index = %name, "已建立欄位索引");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 未刪除的資料中，欄位值不可重複。有重複 → [`CoreError::DuplicateValues`]。
+async fn ensure_no_duplicates(
+    tx: &mut PgTransaction<'_>,
+    entity_id: Id,
+    field_key: &str,
+) -> Result<(), CoreError> {
+    // 常數很小，不會溢位
+    let limit = MAX_DUPLICATE_VALUES as i32;
+    let rows = dynamic_index::find_duplicate_values(&mut **tx, entity_id, field_key, limit).await?;
+    let Some(first) = rows.first() else {
+        return Ok(());
+    };
+    let total = usize::try_from(first.total)
+        .map_err(|_| CoreError::Internal(format!("重複值的個數不正確：{}", first.total)))?;
+    let duplicates = rows
+        .into_iter()
+        .map(|r| DuplicateValue {
+            value: r.value,
+            count: r.count,
+            record_ids: r.record_ids,
+        })
+        .collect();
+    Err(CoreError::DuplicateValues { duplicates, total })
 }
 
 // ---------------------------------------------------------------------------

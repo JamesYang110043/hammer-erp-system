@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            (array_agg(data -> $2 ORDER BY id))[1] AS \"value!\",\n            count(*) AS \"count!\",\n            (array_agg(id ORDER BY id))[1:$3] AS \"record_ids!\",\n            count(*) OVER () AS \"total!\"\n        FROM custom_records\n        WHERE entity_id = $1 AND deleted_at IS NULL AND data ->> $2 IS NOT NULL\n        GROUP BY data ->> $2\n        HAVING count(*) > 1\n        ORDER BY data ->> $2\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value!",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "record_ids!",
+        "type_info": "UuidArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d4ea11fae7f3a61d540bbd53431043f5c941c1c07b45fa6618e1fa4a78644564"
+}

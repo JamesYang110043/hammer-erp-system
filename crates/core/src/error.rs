@@ -3,6 +3,7 @@
 //! 每個錯誤都對應一個 [`ErrorCode`]，由 `server` 轉成統一的 API 錯誤格式（§10）。
 
 use crate::record_data::FieldError;
+use crate::schema::index::DuplicateValue;
 use crate::schema::type_change::ConversionFailure;
 use hammer_db::DbError;
 use hammer_shared::{ApiError, ErrorCode};
@@ -47,6 +48,16 @@ pub enum CoreError {
     #[error("有 {total} 筆資料無法轉換成新的資料型態")]
     ConversionFailed {
         failures: Vec<ConversionFailure>,
+        total: usize,
+    },
+
+    /// 開啟「不可重複」（或重新啟用不可重複的欄位）時，未刪除的資料已有重複的值（§7.5）。
+    /// `duplicates` 最多 [`hammer_shared::schema::MAX_DUPLICATE_VALUES`] 個值，`total` 為重複的值的總數。
+    /// API 回應為 `VALIDATION`，`details` 為
+    /// `{ "field": "is_unique", "total", "values": [{ "value", "count", "record_ids" }] }`。
+    #[error("此欄位已有 {total} 個值重複，無法設定為不可重複，請先修正重複的資料")]
+    DuplicateValues {
+        duplicates: Vec<DuplicateValue>,
         total: usize,
     },
 
@@ -108,6 +119,7 @@ impl CoreError {
             | Self::InvalidParam { .. }
             | Self::InvalidFields(_)
             | Self::ConversionFailed { .. }
+            | Self::DuplicateValues { .. }
             | Self::LastAdmin => ErrorCode::Validation,
             Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::NotFound(_) => ErrorCode::NotFound,
@@ -168,6 +180,22 @@ impl From<CoreError> for ApiError {
                 "field": "data_type",
                 "total": total,
                 "records": records,
+            }))
+        } else if let CoreError::DuplicateValues { duplicates, total } = &err {
+            let values: Vec<_> = duplicates
+                .iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "value": d.value,
+                        "count": d.count,
+                        "record_ids": d.record_ids,
+                    })
+                })
+                .collect();
+            ApiError::new(code, err.to_string()).with_details(serde_json::json!({
+                "field": "is_unique",
+                "total": total,
+                "values": values,
             }))
         } else if let CoreError::LastAdmin = err {
             ApiError::new(code, err.to_string())
@@ -273,6 +301,31 @@ mod tests {
                 "records": [
                     { "id": id, "value": "abc", "deleted": true, "message": "「abc」不是整數" },
                 ],
+            }))
+        );
+    }
+
+    #[test]
+    fn duplicate_values_list_values_and_records() {
+        let a = hammer_shared::new_id();
+        let b = hammer_shared::new_id();
+        let err = CoreError::DuplicateValues {
+            duplicates: vec![DuplicateValue {
+                value: serde_json::json!("A001"),
+                count: 2,
+                record_ids: vec![a, b],
+            }],
+            total: 1,
+        };
+        assert_eq!(err.code(), ErrorCode::Validation);
+        let api: ApiError = err.into();
+        assert!(api.message.contains("1 個值重複"), "{}", api.message);
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({
+                "field": "is_unique",
+                "total": 1,
+                "values": [{ "value": "A001", "count": 2, "record_ids": [a, b] }],
             }))
         );
     }
