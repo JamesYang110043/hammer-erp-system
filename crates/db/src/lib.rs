@@ -3,7 +3,7 @@
 //! - [`connect`]：依 [`PoolConfig`] 建立連線池
 //! - [`run_migrations`]：套用 `crates/db/migrations/` 的 migration
 //! - [`ensure_version_matched`]：樂觀鎖定檢查，版本不符時回傳 [`DbError::Conflict`]
-//! - [`audit`]：寫入 `audit_logs`
+//! - [`audit`]：寫入與查詢 `audit_logs`
 //! - [`lock`]：advisory lock
 //! - [`role`]：角色與權限查詢
 //! - [`session`]：`sessions` 的新增、查詢、更新與撤銷

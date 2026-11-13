@@ -47,6 +47,11 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::user::UpdateUserRequest>()
         .typ::<hammer_shared::user::ResetPasswordRequest>()
         .typ::<hammer_shared::user::DeleteUserQuery>()
+        // 分頁（列表 API 共用）
+        .typ::<hammer_shared::pagination::Page<hammer_shared::audit::AuditLogEntry>>()
+        // 操作紀錄
+        .typ::<hammer_shared::audit::AuditLogEntry>()
+        .typ::<hammer_shared::audit::AuditLogQuery>()
         // command 回傳 `{ status: "ok", data } | { status: "error", error }`，錯誤有型別
         .error_handling(ErrorHandlingMode::Result)
 }

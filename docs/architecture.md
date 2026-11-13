@@ -900,6 +900,16 @@ GROUP BY product_id;
   ```json
   { "code": "STOCK_INSUFFICIENT", "message": "商品 A001 庫存不足，尚缺 5", "details": { … } }
   ```
+- 分頁：資料量會持續增加的列表 API（操作紀錄、單據、業務資料等）一律分頁。型別與常數在 `hammer_shared::pagination`。
+  - 參數（query string）：`page` 從 1 開始，預設 1；`page_size` 預設 50、上限 200，超過上限時套用上限（不是錯誤）。小於 1 時回傳 `422 VALIDATION`，`details.field` 為參數名稱；不是整數時回傳 `400 BAD_REQUEST`。
+  - 回應：
+    ```json
+    { "items": [ … ], "total": 128, "page": 1, "page_size": 50 }
+    ```
+    `total` 是符合篩選條件的總筆數；`page`、`page_size` 是實際套用的值。頁碼超過最後一頁時 `items` 為空陣列。
+  - 排序必須是確定的：主要排序欄位之後加上 `id` 作為次要排序（uuid v7 依時間遞增），避免同值的資料在頁與頁之間重複或遺漏。
+  - 篩選條件與分頁參數放在同一個 query 型別，不使用 `#[serde(flatten)]`（query string 搭配 flatten 時數字欄位無法解析）。空字串的文字條件視為未指定；時間使用 RFC 3339，區間為「含開始、不含結束」。
+  - 筆數很少、不會持續增加的列表（角色、帳號、幣別等）可以不分頁，直接回傳陣列。
 
 ---
 

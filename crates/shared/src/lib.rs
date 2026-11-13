@@ -10,6 +10,7 @@ pub mod decimal;
 pub mod error;
 pub mod health;
 pub mod id;
+pub mod pagination;
 pub mod permission;
 pub mod role;
 pub mod setup;

@@ -10,6 +10,7 @@
 //!   （或改密碼、登出、`/auth/me` 使用的 [`AuthUserAllowPasswordChange`](crate::AuthUserAllowPasswordChange)）
 //!   參數，並以 `auth.require(...)` 檢查權限（§6.2）。
 
+pub mod audit_logs;
 pub mod auth;
 pub mod health;
 pub mod setup;
@@ -81,6 +82,7 @@ fn protected_routes() -> Router<AppState> {
         )
         .route("/users/{id}/reset-password", post(users::reset_password))
         .route("/users/{id}/unlock", post(users::unlock))
+        .route("/audit-logs", get(audit_logs::list))
 }
 
 async fn not_found() -> AppError {

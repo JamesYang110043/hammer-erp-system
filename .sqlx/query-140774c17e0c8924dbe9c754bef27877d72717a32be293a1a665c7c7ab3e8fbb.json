@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*) AS \"count!\"\n        FROM audit_logs a\n        WHERE ($1::timestamptz IS NULL OR a.occurred_at >= $1)\n          AND ($2::timestamptz IS NULL OR a.occurred_at < $2)\n          AND ($3::uuid IS NULL OR a.user_id = $3)\n          AND ($4::text IS NULL OR a.action = $4)\n          AND ($5::text IS NULL OR a.entity_key = $5)\n          AND ($6::uuid IS NULL OR a.record_id = $6)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "140774c17e0c8924dbe9c754bef27877d72717a32be293a1a665c7c7ab3e8fbb"
+}
