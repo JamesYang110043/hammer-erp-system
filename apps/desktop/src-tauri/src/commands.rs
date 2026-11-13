@@ -8,6 +8,10 @@ use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest};
 use hammer_shared::health::HealthResponse;
 use hammer_shared::pagination::Page;
+use hammer_shared::schema::{
+    ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
+    EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
+};
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use hammer_shared::user::{
     CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
@@ -181,4 +185,95 @@ pub async fn list_audit_logs(
     query: AuditLogQuery,
 ) -> Result<Page<AuditLogEntry>, ClientError> {
     state.list_audit_logs(&query).await
+}
+
+/// 資料類別列表（有效的資料類別）。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_entities(
+    state: State<'_, AppState>,
+) -> Result<Vec<EntityDefinition>, ClientError> {
+    state.list_entities().await
+}
+
+/// 資料類別與其所有欄位定義（含已停用），欄位依排序。
+#[tauri::command]
+#[specta::specta]
+pub async fn get_entity(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<EntityDetail, ClientError> {
+    state.get_entity(&key).await
+}
+
+/// 新增自訂資料類別（需要 `schema.manage`）。M2a 只能建立主檔。
+#[tauri::command]
+#[specta::specta]
+pub async fn create_entity(
+    state: State<'_, AppState>,
+    req: CreateEntityRequest,
+) -> Result<EntityDetail, ClientError> {
+    state.create_entity(&req).await
+}
+
+/// 新增欄位（需要 `schema.manage`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn create_field(
+    state: State<'_, AppState>,
+    key: String,
+    req: CreateFieldRequest,
+) -> Result<FieldDefinition, ClientError> {
+    state.create_field(&key, &req).await
+}
+
+/// 修改欄位（需要 `schema.manage`）。`req.version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn update_field(
+    state: State<'_, AppState>,
+    key: String,
+    field_key: String,
+    req: UpdateFieldRequest,
+) -> Result<FieldDefinition, ClientError> {
+    state.update_field(&key, &field_key, &req).await
+}
+
+/// 停用欄位，資料保留（需要 `schema.manage`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn deactivate_field(
+    state: State<'_, AppState>,
+    key: String,
+    field_key: String,
+    version: i32,
+) -> Result<FieldDefinition, ClientError> {
+    state
+        .deactivate_field(&key, &field_key, &DeactivateFieldRequest { version })
+        .await
+}
+
+/// 調整欄位排序（需要 `schema.manage`）。任一欄位版本不符時整批不寫入，回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn reorder_fields(
+    state: State<'_, AppState>,
+    key: String,
+    req: ReorderFieldsRequest,
+) -> Result<Vec<FieldDefinition>, ClientError> {
+    state.reorder_fields(&key, &req).await
+}
+
+/// 變更欄位資料型態（需要 `schema.manage`）。
+///
+/// 有資料無法轉換時回傳 `422 VALIDATION`，`details.records` 列出失敗的資料。
+#[tauri::command]
+#[specta::specta]
+pub async fn change_field_type(
+    state: State<'_, AppState>,
+    key: String,
+    field_key: String,
+    req: ChangeFieldTypeRequest,
+) -> Result<FieldDefinition, ClientError> {
+    state.change_field_type(&key, &field_key, &req).await
 }

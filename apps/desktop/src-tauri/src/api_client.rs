@@ -12,6 +12,11 @@ use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, Logi
 use hammer_shared::constants::{API_PREFIX, CLIENT_VERSION_HEADER};
 use hammer_shared::health::HealthResponse;
 use hammer_shared::pagination::Page;
+use hammer_shared::schema::{
+    ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
+    EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
+    validate_key,
+};
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use hammer_shared::user::{
     CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
@@ -250,6 +255,141 @@ impl ApiClient {
             .query(query);
         authed(read_json(send(builder).await?).await)
     }
+
+    /// `GET /api/v1/entities`。
+    pub async fn list_entities(
+        &self,
+        server_url: &str,
+        token: &str,
+    ) -> Result<Vec<EntityDefinition>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/entities"))
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/entities/{key}`。
+    pub async fn get_entity(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+    ) -> Result<EntityDetail, ClientError> {
+        let builder = self
+            .http
+            .get(entity_endpoint(server_url, key, None, "")?)
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/entities`。
+    pub async fn create_entity(
+        &self,
+        server_url: &str,
+        token: &str,
+        req: &CreateEntityRequest,
+    ) -> Result<EntityDetail, ClientError> {
+        let builder = self
+            .http
+            .post(endpoint(server_url, "/entities"))
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/entities/{key}/fields`。
+    pub async fn create_field(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        req: &CreateFieldRequest,
+    ) -> Result<FieldDefinition, ClientError> {
+        let builder = self
+            .http
+            .post(entity_endpoint(server_url, key, None, "/fields")?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PATCH /api/v1/entities/{key}/fields/{field_key}`。
+    pub async fn update_field(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        field_key: &str,
+        req: &UpdateFieldRequest,
+    ) -> Result<FieldDefinition, ClientError> {
+        let builder = self
+            .http
+            .patch(entity_endpoint(server_url, key, Some(field_key), "")?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/entities/{key}/fields/{field_key}/deactivate`。
+    pub async fn deactivate_field(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        field_key: &str,
+        req: &DeactivateFieldRequest,
+    ) -> Result<FieldDefinition, ClientError> {
+        let builder = self
+            .http
+            .post(entity_endpoint(
+                server_url,
+                key,
+                Some(field_key),
+                "/deactivate",
+            )?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PUT /api/v1/entities/{key}/fields/order`。
+    pub async fn reorder_fields(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        req: &ReorderFieldsRequest,
+    ) -> Result<Vec<FieldDefinition>, ClientError> {
+        let builder = self
+            .http
+            .put(entity_endpoint(server_url, key, None, "/fields/order")?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/entities/{key}/fields/{field_key}/change-type`。
+    pub async fn change_field_type(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        field_key: &str,
+        req: &ChangeFieldTypeRequest,
+    ) -> Result<FieldDefinition, ClientError> {
+        let builder = self
+            .http
+            .post(entity_endpoint(
+                server_url,
+                key,
+                Some(field_key),
+                "/change-type",
+            )?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
 }
 
 async fn send(builder: RequestBuilder) -> Result<Response, ClientError> {
@@ -270,6 +410,29 @@ fn authed<T>(result: Result<T, ClientError>) -> Result<T, ClientError> {
 /// `http://host:8080` + `/health` → `http://host:8080/api/v1/health`。
 fn endpoint(server_url: &str, path: &str) -> String {
     format!("{}{API_PREFIX}{path}", server_url.trim_end_matches('/'))
+}
+
+/// `/api/v1/entities/{key}`，有 `field_key` 時加上 `/fields/{field_key}`，最後加上 `suffix`。
+///
+/// 代碼（`key`、`field_key`）必須符合命名規則（只有 `a-z`、`0-9`、`_`），因此不需要編碼，
+/// 也不會改變路徑結構；不符合時回傳 [`ClientError::InvalidInput`]，不送出請求。
+fn entity_endpoint(
+    server_url: &str,
+    key: &str,
+    field_key: Option<&str>,
+    suffix: &str,
+) -> Result<String, ClientError> {
+    let mut path = String::from("/entities/");
+    for (i, code) in std::iter::once(key).chain(field_key).enumerate() {
+        validate_key(code)
+            .map_err(|e| ClientError::invalid_input(format!("代碼「{code}」不正確：{e}")))?;
+        if i > 0 {
+            path.push_str("/fields/");
+        }
+        path.push_str(code);
+    }
+    path.push_str(suffix);
+    Ok(endpoint(server_url, &path))
 }
 
 /// 成功時解析成 `T`；失敗時轉成 [`ClientError`]。
@@ -363,6 +526,28 @@ mod tests {
             endpoint("http://h/erp/", "/health"),
             "http://h/erp/api/v1/health"
         );
+    }
+
+    #[test]
+    fn entity_endpoint_checks_codes() {
+        assert_eq!(
+            entity_endpoint("http://h", "repair", None, "").unwrap(),
+            "http://h/api/v1/entities/repair"
+        );
+        assert_eq!(
+            entity_endpoint("http://h", "repair", Some("order"), "/change-type").unwrap(),
+            "http://h/api/v1/entities/repair/fields/order/change-type"
+        );
+        assert_eq!(
+            entity_endpoint("http://h", "repair", None, "/fields/order").unwrap(),
+            "http://h/api/v1/entities/repair/fields/order"
+        );
+        for (key, field_key) in [("..", None), ("a/b", None), ("repair", Some("../x"))] {
+            assert!(matches!(
+                entity_endpoint("http://h", key, field_key, ""),
+                Err(ClientError::InvalidInput { .. })
+            ));
+        }
     }
 
     #[tokio::test]
@@ -830,5 +1015,269 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((page.page, page.page_size), (2, 20));
+    }
+
+    fn entity_json() -> serde_json::Value {
+        json!({
+            "id": "0196f5a0-0000-7000-8000-000000000100",
+            "key": "repair",
+            "label": "維修單",
+            "icon": null,
+            "kind": "master",
+            "is_system": false,
+            "storage": "custom_records",
+            "parent_entity_id": null,
+            "numbering_pattern": null,
+            "title_template": null,
+            "sort_order": 0,
+            "is_active": true,
+            "created_at": "2026-11-13T01:00:00Z",
+            "updated_at": "2026-11-13T01:00:00Z",
+            "version": 1,
+        })
+    }
+
+    fn field_json(field_key: &str, version: i32) -> serde_json::Value {
+        json!({
+            "id": "0196f5a0-0000-7000-8000-000000000101",
+            "entity_id": "0196f5a0-0000-7000-8000-000000000100",
+            "field_key": field_key,
+            "label": "欄位",
+            "data_type": "text",
+            "is_system": false,
+            "storage": "json",
+            "is_required": false,
+            "is_visible": true,
+            "is_readonly": false,
+            "is_searchable": false,
+            "is_unique": false,
+            "default_value": null,
+            "validation": null,
+            "options": null,
+            "decimal_places": null,
+            "relation_entity_id": null,
+            "formula": null,
+            "formula_result_type": null,
+            "ui_widget": null,
+            "column_width": null,
+            "help_text": null,
+            "sort_order": 0,
+            "is_active": true,
+            "created_at": "2026-11-13T01:00:00Z",
+            "updated_at": "2026-11-13T01:00:00Z",
+            "version": version,
+        })
+    }
+
+    #[tokio::test]
+    async fn schema_endpoints() {
+        use axum::extract::Path;
+        use axum::routing::{patch, put};
+        use hammer_shared::schema::{DataType, EntityKind, FieldOrderItem};
+
+        let url = serve(
+            Router::new()
+                .route(
+                    "/entities",
+                    get(|| async { axum::Json(json!([entity_json()])) }).post(
+                        |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(body["key"], "repair");
+                            assert_eq!(body["kind"], "master");
+                            (
+                                AxumStatus::CREATED,
+                                axum::Json(json!({ "entity": entity_json(), "fields": [] })),
+                            )
+                        },
+                    ),
+                )
+                .route(
+                    "/entities/{key}",
+                    get(|Path(key): Path<String>| async move {
+                        assert_eq!(key, "repair");
+                        axum::Json(
+                            json!({ "entity": entity_json(), "fields": [field_json("name", 1)] }),
+                        )
+                    }),
+                )
+                .route(
+                    "/entities/{key}/fields",
+                    post(
+                        |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(body["data_type"], "integer");
+                            (AxumStatus::CREATED, axum::Json(field_json("qty", 1)))
+                        },
+                    ),
+                )
+                .route(
+                    "/entities/{key}/fields/order",
+                    put(
+                        |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(
+                                body,
+                                json!({ "fields": [{ "field_key": "name", "version": 1 }] })
+                            );
+                            axum::Json(json!([field_json("name", 2)]))
+                        },
+                    )
+                    // 代碼為 `order` 的欄位：伺服器的 PATCH 轉給修改欄位
+                    .patch(
+                        |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(body["version"], 4);
+                            axum::Json(field_json("order", 5))
+                        },
+                    ),
+                )
+                .route(
+                    "/entities/{key}/fields/{field_key}",
+                    patch(|Path((_, field_key)): Path<(String, String)>| async move {
+                        axum::Json(field_json(&field_key, 2))
+                    }),
+                )
+                .route(
+                    "/entities/{key}/fields/{field_key}/deactivate",
+                    post(
+                        |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(body, json!({ "version": 2 }));
+                            let mut f = field_json("name", 3);
+                            f["is_active"] = json!(false);
+                            axum::Json(f)
+                        },
+                    ),
+                )
+                .route(
+                    "/entities/{key}/fields/{field_key}/change-type",
+                    post(|| async {
+                        (
+                            AxumStatus::UNPROCESSABLE_ENTITY,
+                            axum::Json(json!({
+                                "code": "VALIDATION",
+                                "message": "有 1 筆資料無法轉換",
+                                "details": { "field": "data_type", "total": 1, "records": [] },
+                            })),
+                        )
+                    }),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+
+        assert_eq!(
+            client.list_entities(&url, "tok").await.unwrap()[0].key,
+            "repair"
+        );
+        let detail = client.get_entity(&url, "tok", "repair").await.unwrap();
+        assert_eq!(detail.fields[0].field_key, "name");
+        let created = client
+            .create_entity(
+                &url,
+                "tok",
+                &CreateEntityRequest {
+                    key: "repair".into(),
+                    label: "維修單".into(),
+                    icon: None,
+                    kind: EntityKind::Master,
+                    title_template: None,
+                    sort_order: 0,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(created.fields.is_empty());
+
+        let field: CreateFieldRequest = serde_json::from_value(json!({
+            "field_key": "qty", "label": "數量", "data_type": "integer",
+        }))
+        .unwrap();
+        assert_eq!(
+            client
+                .create_field(&url, "tok", "repair", &field)
+                .await
+                .unwrap()
+                .field_key,
+            "qty"
+        );
+
+        let mut update: UpdateFieldRequest = serde_json::from_value(json!({
+            "version": 4, "label": "排序", "data_type": "text",
+            "is_required": false, "is_visible": true, "is_readonly": false,
+            "is_searchable": false, "is_unique": false, "default_value": null,
+            "validation": null, "options": null, "decimal_places": null,
+            "ui_widget": null, "column_width": null, "help_text": null,
+            "sort_order": 0, "is_active": true,
+        }))
+        .unwrap();
+        assert_eq!(
+            client
+                .update_field(&url, "tok", "repair", "order", &update)
+                .await
+                .unwrap()
+                .version,
+            5
+        );
+        update.version = 1;
+        assert_eq!(
+            client
+                .update_field(&url, "tok", "repair", "name", &update)
+                .await
+                .unwrap()
+                .version,
+            2
+        );
+
+        let deactivated = client
+            .deactivate_field(
+                &url,
+                "tok",
+                "repair",
+                "name",
+                &DeactivateFieldRequest { version: 2 },
+            )
+            .await
+            .unwrap();
+        assert!(!deactivated.is_active);
+
+        let reordered = client
+            .reorder_fields(
+                &url,
+                "tok",
+                "repair",
+                &ReorderFieldsRequest {
+                    fields: vec![FieldOrderItem {
+                        field_key: "name".into(),
+                        version: 1,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(reordered[0].version, 2);
+
+        let err = client
+            .change_field_type(
+                &url,
+                "tok",
+                "repair",
+                "name",
+                &ChangeFieldTypeRequest {
+                    version: 3,
+                    data_type: DataType::Integer,
+                    decimal_places: None,
+                    options: None,
+                    validation: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        let ClientError::Api(api) = err else {
+            panic!("應該是 ApiError：{err:?}");
+        };
+        assert_eq!(api.code, ErrorCode::Validation);
+        assert_eq!(api.details.unwrap()["field"], "data_type");
+
+        // 不合法的代碼不送出請求
+        assert!(matches!(
+            client.get_entity(&url, "tok", "../users").await,
+            Err(ClientError::InvalidInput { .. })
+        ));
     }
 }

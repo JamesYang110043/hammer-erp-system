@@ -52,12 +52,34 @@ export const commands = {
 	deleteUser: (id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_user", { id, version })),
 	/**  查詢操作紀錄（需要 `audit.read`）。 */
 	listAuditLogs: (query: AuditLogQuery_Deserialize) => typedError<Page<AuditLogEntry_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_audit_logs", { query })),
+	/**  資料類別列表（有效的資料類別）。 */
+	listEntities: () => typedError<EntityDefinition_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_entities")),
+	/**  資料類別與其所有欄位定義（含已停用），欄位依排序。 */
+	getEntity: (key: string) => typedError<EntityDetail_Serialize, ClientError_Serialize>(__TAURI_INVOKE("get_entity", { key })),
+	/**  新增自訂資料類別（需要 `schema.manage`）。M2a 只能建立主檔。 */
+	createEntity: (req: CreateEntityRequest_Deserialize) => typedError<EntityDetail_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_entity", { req })),
+	/**  新增欄位（需要 `schema.manage`）。 */
+	createField: (key: string, req: CreateFieldRequest_Deserialize) => typedError<FieldDefinition_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_field", { key, req })),
+	/**  修改欄位（需要 `schema.manage`）。`req.version` 不符時回傳 `409 CONFLICT`。 */
+	updateField: (key: string, fieldKey: string, req: UpdateFieldRequest_Deserialize) => typedError<FieldDefinition_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_field", { key, fieldKey, req })),
+	/**  停用欄位，資料保留（需要 `schema.manage`）。 */
+	deactivateField: (key: string, fieldKey: string, version: number) => typedError<FieldDefinition_Serialize, ClientError_Serialize>(__TAURI_INVOKE("deactivate_field", { key, fieldKey, version })),
+	/**  調整欄位排序（需要 `schema.manage`）。任一欄位版本不符時整批不寫入，回傳 `409 CONFLICT`。 */
+	reorderFields: (key: string, req: ReorderFieldsRequest) => typedError<FieldDefinition_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("reorder_fields", { key, req })),
+	/**
+	 *  變更欄位資料型態（需要 `schema.manage`）。
+	 * 
+	 *  有資料無法轉換時回傳 `422 VALIDATION`，`details.records` 列出失敗的資料。
+	 */
+	changeFieldType: (key: string, fieldKey: string, req: ChangeFieldTypeRequest_Deserialize) => typedError<FieldDefinition_Serialize, ClientError_Serialize>(__TAURI_INVOKE("change_field_type", { key, fieldKey, req })),
 };
 
 /* Constants */
 export const AUDIT_ACTIONS = ["create","update","delete","post","void","login","login_failed","logout","password_change","export"] as const;
 
 export const CLIENT_VERSION = "0.1.0" as const;
+
+export const MAX_KEY_LEN = 30 as const;
 
 export const MIN_PASSWORD_CHARS = 10 as const;
 
