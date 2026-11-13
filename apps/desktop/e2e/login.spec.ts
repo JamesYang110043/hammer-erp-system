@@ -11,8 +11,9 @@ const ADMIN = {
   must_change_password: false,
 };
 
-// antd 會在兩個中文字的按鈕中間插入空白
-const LOGIN_BUTTON = /^登\s?入$/;
+// antd 會在兩個中文字的按鈕中間插入空白（「登 入」）；按鈕剛結束 loading 時，
+// 旋轉圖示會在收合動畫期間留在按鈕內，名稱變成「loading 登 入」，所以開頭不錨定
+const LOGIN_BUTTON = /(^|\s)登\s?入$/;
 
 test('setup admin, logout, login, and stay logged in after reload', async ({ page }) => {
   // 模擬伺服器與鑰匙圈：`loggedIn` 代表 Rust 端是否存有 token

@@ -9,8 +9,9 @@ import { commandError, mockCommands } from './test/ipc';
 import type { CommandHandler } from './test/ipc';
 import { renderWithProviders } from './test/render';
 
-// antd 會在兩個中文字的按鈕中間插入空白（「登 入」）
-const LOGIN_BUTTON = /^登\s?入$/;
+// antd 會在兩個中文字的按鈕中間插入空白（「登 入」）；按鈕剛結束 loading 時，
+// 旋轉圖示會在收合動畫期間留在按鈕內，名稱變成「loading 登 入」，所以開頭不錨定
+const LOGIN_BUTTON = /(^|\s)登\s?入$/;
 
 // 路由是模組層級的 hash router，每個測試從首頁開始
 beforeEach(() => {
@@ -89,7 +90,7 @@ describe('啟動流程', () => {
     expect(
       await screen.findByText('無法連線到伺服器，請確認伺服器已啟動、網址正確'),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^重\s?試$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /(^|\s)重\s?試$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /連線設定/ })).toBeInTheDocument();
   });
 });
