@@ -152,6 +152,9 @@ jobs:
       SQLX_OFFLINE: "true"
     steps:
       - uses: actions/checkout@v5
+      # llvm-cov 的 target 很大，Cargo.lock 變動時 rust-cache 收尾會空間不足（#41）
+      - name: 清出 runner 磁碟空間
+        run: ./.github/scripts/free-disk-space.sh
       - name: 安裝 Tauri 的 Linux 系統相依套件
         run: ./.github/scripts/install-tauri-linux-deps.sh
       - uses: dtolnay/rust-toolchain@stable
