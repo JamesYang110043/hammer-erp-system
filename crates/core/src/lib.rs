@@ -1,6 +1,7 @@
 //! 商業邏輯：單據流程、庫存 FIFO、匯率換算、權限判斷。
 //!
 //! - [`audit`]：操作紀錄的 diff 與寫入
+//! - [`audit_logs`]：操作紀錄查詢（分頁、篩選）
 //! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定、目前使用者與權限檢查
 //! - [`setup`]：初次啟動建立第一個管理者
 //! - [`users`]：帳號管理與最後一個管理者保護
@@ -9,6 +10,7 @@
 //! 相依方向見 `docs/architecture.md` §4。
 
 pub mod audit;
+pub mod audit_logs;
 pub mod auth;
 mod error;
 pub mod setup;

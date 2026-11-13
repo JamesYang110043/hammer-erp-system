@@ -51,6 +51,111 @@ export type ApiError_Serialize = {
 	details?: unknown,
 };
 
+/**  操作紀錄的一筆資料（`GET /api/v1/audit-logs`）。 */
+export type AuditLogEntry = AuditLogEntry_Serialize | AuditLogEntry_Deserialize;
+
+/**  操作紀錄的一筆資料（`GET /api/v1/audit-logs`）。 */
+export type AuditLogEntry_Deserialize = {
+	id: string,
+	/**  發生時間（RFC 3339）。 */
+	occurred_at: string,
+	/**  操作者；帳號不存在的登入失敗為 `null`。 */
+	user_id?: string | null,
+	/**  操作者的登入帳號；沒有操作者時為 `null`。 */
+	username?: string | null,
+	/**  操作者的顯示名稱；沒有操作者時為 `null`。 */
+	user_display_name?: string | null,
+	/**  動作代碼（本模組的常數）。 */
+	action: string,
+	/**  資料類別代碼。 */
+	entity_key?: string | null,
+	record_id?: string | null,
+	/**  變更前（只包含有變動的欄位）。任意 JSON，TypeScript 為 `unknown`。 */
+	before_data?: unknown | null,
+	/**  變更後（只包含有變動的欄位）。任意 JSON，TypeScript 為 `unknown`。 */
+	after_data?: unknown | null,
+	client_info?: string | null,
+};
+
+/**  操作紀錄的一筆資料（`GET /api/v1/audit-logs`）。 */
+export type AuditLogEntry_Serialize = {
+	id: string,
+	/**  發生時間（RFC 3339）。 */
+	occurred_at: string,
+	/**  操作者；帳號不存在的登入失敗為 `null`。 */
+	user_id: string | null,
+	/**  操作者的登入帳號；沒有操作者時為 `null`。 */
+	username: string | null,
+	/**  操作者的顯示名稱；沒有操作者時為 `null`。 */
+	user_display_name: string | null,
+	/**  動作代碼（本模組的常數）。 */
+	action: string,
+	/**  資料類別代碼。 */
+	entity_key: string | null,
+	record_id: string | null,
+	/**  變更前（只包含有變動的欄位）。任意 JSON，TypeScript 為 `unknown`。 */
+	before_data: unknown | null,
+	/**  變更後（只包含有變動的欄位）。任意 JSON，TypeScript 為 `unknown`。 */
+	after_data: unknown | null,
+	client_info: string | null,
+};
+
+/**
+ *  `GET /api/v1/audit-logs` 的 query string。所有條件都可省略，有多個條件時須全部符合。
+ * 
+ *  時間使用 RFC 3339。query string 中的 `+` 會被當成空白，時區位移請寫成 `%2B08:00`，
+ *  或改用 UTC（`Z`）。
+ */
+export type AuditLogQuery = AuditLogQuery_Serialize | AuditLogQuery_Deserialize;
+
+/**
+ *  `GET /api/v1/audit-logs` 的 query string。所有條件都可省略，有多個條件時須全部符合。
+ * 
+ *  時間使用 RFC 3339。query string 中的 `+` 會被當成空白，時區位移請寫成 `%2B08:00`，
+ *  或改用 UTC（`Z`）。
+ */
+export type AuditLogQuery_Deserialize = {
+	/**  發生時間 >= `from`。 */
+	from?: string | null,
+	/**  發生時間 < `to`（不含）。 */
+	to?: string | null,
+	/**  操作者。 */
+	user_id?: string | null,
+	/**  動作代碼，必須是本模組定義的代碼。 */
+	action?: string | null,
+	/**  資料類別代碼。 */
+	entity_key?: string | null,
+	record_id?: string | null,
+	/**  頁碼，從 1 開始（預設 1）。 */
+	page?: number | null,
+	/**  每頁筆數（預設 50，上限 200）。 */
+	page_size?: number | null,
+};
+
+/**
+ *  `GET /api/v1/audit-logs` 的 query string。所有條件都可省略，有多個條件時須全部符合。
+ * 
+ *  時間使用 RFC 3339。query string 中的 `+` 會被當成空白，時區位移請寫成 `%2B08:00`，
+ *  或改用 UTC（`Z`）。
+ */
+export type AuditLogQuery_Serialize = {
+	/**  發生時間 >= `from`。 */
+	from: string | null,
+	/**  發生時間 < `to`（不含）。 */
+	to: string | null,
+	/**  操作者。 */
+	user_id: string | null,
+	/**  動作代碼，必須是本模組定義的代碼。 */
+	action: string | null,
+	/**  資料類別代碼。 */
+	entity_key: string | null,
+	record_id: string | null,
+	/**  頁碼，從 1 開始（預設 1）。 */
+	page: number | null,
+	/**  每頁筆數（預設 50，上限 200）。 */
+	page_size: number | null,
+};
+
 /**  `POST /api/v1/auth/change-password` 的輸入。 */
 export type ChangePasswordRequest = {
 	current_password: string,
@@ -180,6 +285,18 @@ export type LoginResponse = {
 	/**  Session token。之後的請求放在 `Authorization: Bearer <token>`。 */
 	token: string,
 	user: CurrentUser,
+};
+
+/**  分頁的列表回應。 */
+export type Page<T> = {
+	/**  該頁的資料。頁碼超過最後一頁時為空陣列。 */
+	items: T[],
+	/**  符合條件的總筆數（不受分頁影響）。 */
+	total: number,
+	/**  實際使用的頁碼。 */
+	page: number,
+	/**  實際使用的每頁筆數（已套用預設值與上限）。 */
+	page_size: number,
 };
 
 /**
