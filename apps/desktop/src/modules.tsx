@@ -13,6 +13,7 @@ import type { ReactNode } from 'react';
 
 import type { Permission } from './auth/permission';
 import { PERMISSIONS } from './bindings';
+import type { EntityDefinition } from './bindings';
 import { AuditLogsPage } from './pages/audit/AuditLogsPage';
 import { EntitiesPage } from './pages/schema/EntitiesPage';
 import { FieldsPage } from './pages/schema/FieldsPage';
@@ -71,6 +72,32 @@ export const MODULES: readonly ModuleEntry[] = [
     permission: PERMISSIONS.SETTINGS_MANAGE,
   },
 ];
+
+/**
+ * 自訂資料類別列表的路由前綴：`/entities/:key`（需要 `record.read`）。
+ *
+ * 左側選單依有效的資料類別自動產生，放在 {@link ENTITY_MENU_AFTER} 模組之後。
+ */
+export const ENTITIES_PATH = 'entities';
+
+/** 資料類別選單插入在哪個模組之後。 */
+export const ENTITY_MENU_AFTER = 'finance';
+
+/**
+ * 左側選單列出的資料類別：自訂資料類別（`custom_records`）的主檔與單據，依排序。
+ *
+ * 明細子表從所屬的主表開啟，不放在選單；系統資料類別有各自的模組頁面（M3 起）。
+ */
+export function menuEntities(entities: readonly EntityDefinition[]): EntityDefinition[] {
+  return entities
+    .filter((e) => e.is_active && e.storage === 'custom_records' && e.kind !== 'detail')
+    .sort((a, b) => a.sort_order - b.sort_order);
+}
+
+/** 新增資料頁（表單在 #54 實作）。 */
+export function newRecordPath(entityKey: string): string {
+  return `/${ENTITIES_PATH}/${entityKey}/new`;
+}
 
 /** 連線設定頁（本機設定，任何人都可以修改）。 */
 export const CONNECTION_SETTINGS_PATH = 'connection';

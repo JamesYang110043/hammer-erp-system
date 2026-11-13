@@ -7,7 +7,12 @@ use hammer_shared::Id;
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest};
 use hammer_shared::health::HealthResponse;
+use hammer_shared::layout::{
+    CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
+    ViewLayout,
+};
 use hammer_shared::pagination::Page;
+use hammer_shared::record::{DeleteRecordQuery, Record, RecordListQuery};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
@@ -276,4 +281,86 @@ pub async fn change_field_type(
     req: ChangeFieldTypeRequest,
 ) -> Result<FieldDefinition, ClientError> {
     state.change_field_type(&key, &field_key, &req).await
+}
+
+/// 資料列表（需要 `record.read`）。分頁、排序與篩選見 [`RecordListQuery`]。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_records(
+    state: State<'_, AppState>,
+    key: String,
+    query: RecordListQuery,
+) -> Result<Page<Record>, ClientError> {
+    state.list_records(&key, &query).await
+}
+
+/// 刪除資料（需要 `record.write`）。`version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_record(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+    version: i32,
+) -> Result<(), ClientError> {
+    state
+        .delete_record(&key, id, &DeleteRecordQuery { version })
+        .await
+}
+
+/// 列表版面：全域版面與自己的個人版面（需要 `record.read`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_layouts(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<Vec<ViewLayout>, ClientError> {
+    state.list_layouts(&key).await
+}
+
+/// 要套用的預設版面：自己的預設 → 全域預設 → 依欄位定義產生。
+#[tauri::command]
+#[specta::specta]
+pub async fn get_default_layout(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<DefaultViewLayout, ClientError> {
+    state.get_default_layout(&key).await
+}
+
+/// 新增版面。個人版面需要 `record.read`；全域版面需要 `schema.manage`。
+#[tauri::command]
+#[specta::specta]
+pub async fn create_layout(
+    state: State<'_, AppState>,
+    key: String,
+    req: CreateViewLayoutRequest,
+) -> Result<ViewLayout, ClientError> {
+    state.create_layout(&key, &req).await
+}
+
+/// 修改版面。`req.version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn update_layout(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+    req: UpdateViewLayoutRequest,
+) -> Result<ViewLayout, ClientError> {
+    state.update_layout(&key, id, &req).await
+}
+
+/// 刪除版面。`version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_layout(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+    version: i32,
+) -> Result<(), ClientError> {
+    state
+        .delete_layout(&key, id, &DeleteViewLayoutQuery { version })
+        .await
 }

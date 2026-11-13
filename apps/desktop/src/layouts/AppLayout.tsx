@@ -6,17 +6,29 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import { App, Button, Dropdown, Layout, Menu, Modal, Space, Typography, theme } from 'antd';
+import type { MenuProps } from 'antd';
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 
 import { errorMessage } from '../api/client';
+import { useEntities } from '../api/schema';
 import { useCurrentUser, usePermissions } from '../auth/permission';
 import { useLogout } from '../auth/session';
 import { ChangePasswordForm } from '../components/ChangePasswordForm';
 import { StatusBar } from '../components/StatusBar';
-import { CONNECTION_SETTINGS_PATH, MODULES } from '../modules';
+import { PERMISSIONS } from '../bindings';
+import {
+  CONNECTION_SETTINGS_PATH,
+  ENTITIES_PATH,
+  ENTITY_MENU_AFTER,
+  MODULES,
+  menuEntities,
+} from '../modules';
+import { entityIcon } from '../pages/schema/entityIcons';
 
 const { Header, Sider, Content, Footer } = Layout;
+
+type MenuItem = NonNullable<MenuProps['items']>[number];
 
 /** 主畫面框架：左側模組選單、上方標題列（連線設定、使用者選單）、中間內容、底部狀態列。 */
 export function AppLayout() {
@@ -29,11 +41,28 @@ export function AppLayout() {
   const logout = useLogout();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
-  // 選單依權限顯示；頁面本身也有檢查（router.tsx 的 RequirePermission）
-  const modules = MODULES.filter((m) => !m.permission || can(m.permission));
+  // 資料類別選單需要 `record.read`；新增或修改資料類別後（invalidate `entities`）自動更新
+  const canReadRecords = can(PERMISSIONS.RECORD_READ);
+  const entities = useEntities({ enabled: canReadRecords });
+  const entityItems: MenuItem[] = canReadRecords
+    ? menuEntities(entities.data ?? []).map((e) => ({
+        key: `${ENTITIES_PATH}/${e.key}`,
+        icon: entityIcon(e.icon),
+        label: e.label,
+      }))
+    : [];
 
-  // `/customers/123` → `customers`
-  const selected = location.pathname.split('/')[1] ?? '';
+  // 選單依權限顯示；頁面本身也有檢查（router.tsx 的 RequirePermission）
+  const menuItems: MenuItem[] = MODULES.filter((m) => !m.permission || can(m.permission)).flatMap(
+    (m) => {
+      const item: MenuItem = { key: m.path, icon: m.icon, label: m.label };
+      return m.path === ENTITY_MENU_AFTER ? [item, ...entityItems] : [item];
+    },
+  );
+
+  // `/customers/123` → `customers`；`/entities/repair` → `entities/repair`
+  const [first = '', second = ''] = location.pathname.split('/').slice(1);
+  const selected = first === ENTITIES_PATH ? `${first}/${second}` : first;
 
   return (
     <Layout style={{ height: '100vh' }}>
@@ -46,7 +75,7 @@ export function AppLayout() {
         <Menu
           mode="inline"
           selectedKeys={[selected]}
-          items={modules.map((m) => ({ key: m.path, icon: m.icon, label: m.label }))}
+          items={menuItems}
           onClick={({ key }) => navigate(`/${key}`)}
           style={{ borderInlineEnd: 'none' }}
         />

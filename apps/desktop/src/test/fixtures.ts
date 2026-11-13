@@ -22,7 +22,7 @@ export const VIEWER: CurrentUser = {
   must_change_password: false,
 };
 
-/** 啟動流程與狀態列需要的 command。`user` 為 `null` 表示鑰匙圈沒有 token。 */
+/** 啟動流程、狀態列與左側選單需要的 command。`user` 為 `null` 表示鑰匙圈沒有 token。 */
 export function startupCommands(
   user: CurrentUser | null,
   { needsSetup = false }: { needsSetup?: boolean } = {},
@@ -32,6 +32,8 @@ export function startupCommands(
     current_user: () => user,
     health_check: () => ({ status: 'ok', version: '0.1.0', database: 'ok' }),
     get_server_url: () => 'http://localhost:8080',
+    // 左側選單的資料類別
+    list_entities: () => [],
   };
 }
 

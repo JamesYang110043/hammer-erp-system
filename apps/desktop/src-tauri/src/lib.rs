@@ -62,6 +62,13 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::deactivate_field,
             commands::reorder_fields,
             commands::change_field_type,
+            commands::list_records,
+            commands::delete_record,
+            commands::list_layouts,
+            commands::get_default_layout,
+            commands::create_layout,
+            commands::update_layout,
+            commands::delete_layout,
         ])
         .constant("CLIENT_VERSION", CLIENT_VERSION)
         .constant("PERMISSIONS", permission_constants())
@@ -101,6 +108,13 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::schema::EntityDetail>()
         .typ::<hammer_shared::schema::ReorderFieldsRequest>()
         .typ::<hammer_shared::schema::FieldOrderItem>()
+        // 自訂資料類別的資料
+        .typ::<hammer_shared::record::Record>()
+        .typ::<hammer_shared::record::FilterOp>()
+        .typ::<hammer_shared::record::RecordFilter>()
+        .typ::<hammer_shared::record::RecordSort>()
+        .typ::<hammer_shared::record::RecordListQuery>()
+        .typ::<hammer_shared::pagination::Page<hammer_shared::record::Record>>()
         // 列表版面
         .typ::<hammer_shared::layout::LayoutColumn>()
         .typ::<hammer_shared::layout::LayoutConfig>()
