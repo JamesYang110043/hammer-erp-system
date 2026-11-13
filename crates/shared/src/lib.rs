@@ -13,6 +13,7 @@ pub mod id;
 pub mod pagination;
 pub mod permission;
 pub mod role;
+pub mod schema;
 pub mod setup;
 pub mod time;
 pub mod user;

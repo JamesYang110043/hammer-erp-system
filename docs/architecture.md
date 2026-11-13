@@ -442,7 +442,7 @@ products ───────────────────────�
 | is_required / is_visible / is_readonly | BOOLEAN | |
 | is_searchable / is_unique | BOOLEAN | 會觸發建立索引（7.5） |
 | default_value | JSONB | |
-| validation | JSONB | 例如 `{"min":0,"max":100,"max_length":50,"pattern":"^\\d{8}$"}` |
+| validation | JSONB | 例如 `{"min":"0","max":"100","max_length":50,"pattern":"^\\d{8}$"}`；`min`、`max` 與 decimal 值一樣存成字串（D9） |
 | options | JSONB | select 的選項：`[{"value":"a","label":"A","color":"blue"}]` |
 | decimal_places | SMALLINT | decimal / money 使用 |
 | relation_entity_id | UUID FK → entity_definitions | relation 使用 |
