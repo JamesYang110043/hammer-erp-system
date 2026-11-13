@@ -2,6 +2,7 @@
 //!
 //! 每個錯誤都對應一個 [`ErrorCode`]，由 `server` 轉成統一的 API 錯誤格式（§10）。
 
+use crate::record_data::FieldError;
 use hammer_db::DbError;
 use hammer_shared::{ApiError, ErrorCode};
 use time::OffsetDateTime;
@@ -23,6 +24,11 @@ pub enum CoreError {
         field: &'static str,
         message: String,
     },
+
+    /// 資料的多個欄位不符合欄位定義（[`crate::record_data`]）。
+    /// API 回應為 `VALIDATION`，`details.fields` 為 `[{ "field_key", "message" }]`，列出所有出錯的欄位。
+    #[error("資料有 {} 個欄位不正確，請修正後再送出", .0.len())]
+    InvalidFields(Vec<FieldError>),
 
     /// 操作後系統沒有任何有效（啟用、未刪除）的管理者（§6.2）。
     /// API 回應為 `VALIDATION`，`details.reason` 為 [`LAST_ADMIN_REASON`]。
@@ -77,9 +83,10 @@ impl CoreError {
     /// 對應的錯誤碼。
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Validation(_) | Self::InvalidField { .. } | Self::LastAdmin => {
-                ErrorCode::Validation
-            }
+            Self::Validation(_)
+            | Self::InvalidField { .. }
+            | Self::InvalidFields(_)
+            | Self::LastAdmin => ErrorCode::Validation,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::Unauthorized => ErrorCode::Unauthorized,
             Self::Forbidden(_) => ErrorCode::Forbidden,
@@ -113,6 +120,13 @@ impl From<CoreError> for ApiError {
         let code = err.code();
         if let CoreError::InvalidField { field, message } = err {
             ApiError::new(code, message).with_details(serde_json::json!({ "field": field }))
+        } else if let CoreError::InvalidFields(errors) = &err {
+            let fields: Vec<_> = errors
+                .iter()
+                .map(|e| serde_json::json!({ "field_key": e.field_key, "message": e.message }))
+                .collect();
+            ApiError::new(code, err.to_string())
+                .with_details(serde_json::json!({ "fields": fields }))
         } else if let CoreError::LastAdmin = err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "reason": LAST_ADMIN_REASON }))
@@ -148,6 +162,30 @@ mod tests {
         let api: ApiError = err.into();
         assert_eq!(api.code, ErrorCode::Validation);
         assert_eq!(api.message, "密碼至少需要 10 個字元");
+    }
+
+    #[test]
+    fn invalid_fields_lists_all_fields_in_details() {
+        let err = CoreError::InvalidFields(vec![
+            FieldError {
+                field_key: "name".into(),
+                message: "此欄位為必填".into(),
+            },
+            FieldError {
+                field_key: "qty".into(),
+                message: "不可小於 1".into(),
+            },
+        ]);
+        assert_eq!(err.code(), ErrorCode::Validation);
+        let api: ApiError = err.into();
+        assert_eq!(api.message, "資料有 2 個欄位不正確，請修正後再送出");
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "fields": [
+                { "field_key": "name", "message": "此欄位為必填" },
+                { "field_key": "qty", "message": "不可小於 1" },
+            ] }))
+        );
     }
 
     #[test]
