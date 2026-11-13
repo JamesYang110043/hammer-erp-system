@@ -27,6 +27,13 @@
 //!
 //! 錯誤：輸入不合法 → `422 VALIDATION`，`details.field` 為 request 的欄位名稱；
 //! `version` 不符 → `409 CONFLICT`；資料類別或欄位不存在 → `404 NOT_FOUND`。
+//!
+//! 新增、修改、停用欄位時，依「可搜尋」、「不可重複」與啟用狀態建立或移除動態索引（§7.5）。
+//! 開啟「不可重複」（或重新啟用不可重複的欄位）時，未刪除的資料已有重複的值 →
+//! `422 VALIDATION`，`details` 為
+//! `{ "field": "is_unique", "total": 重複的值的個數, "values": [{ "value", "count", "record_ids" }] }`，
+//! `values` 依值排序，最多 [`MAX_DUPLICATE_VALUES`] 個；每個值的 `record_ids` 依 id 排序，
+//! 最多 [`MAX_DUPLICATE_VALUES`] 筆。
 //! - 欄位值的 JSON 存值格式：[`value`]
 //! - 代碼命名規則：[`key`]
 //!
@@ -530,6 +537,9 @@ pub struct ChangeFieldTypeRequest {
 
 /// 型態變更失敗時，`details.records` 最多列出的筆數。
 pub const MAX_CONVERSION_FAILURES: usize = 100;
+
+/// 無法開啟「不可重複」時，`details.values` 最多列出的值的個數，以及每個值最多列出的資料 id 筆數。
+pub const MAX_DUPLICATE_VALUES: usize = 100;
 
 /// 資料類別與其所有欄位定義（含已停用），欄位依 `sort_order` 排序。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
