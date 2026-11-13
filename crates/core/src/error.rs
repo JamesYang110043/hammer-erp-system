@@ -25,6 +25,15 @@ pub enum CoreError {
         message: String,
     },
 
+    /// query string 的參數不合法（例如列表的篩選條件）。API 回應為 `VALIDATION`，
+    /// `details.field` 為參數名稱（例如 `filter.qty.gte`）。
+    #[error("{message}")]
+    InvalidParam { param: String, message: String },
+
+    /// 請求格式錯誤（例如 query string 的頁碼不是整數），訊息直接顯示給使用者（繁體中文）。
+    #[error("{0}")]
+    BadRequest(String),
+
     /// 資料的多個欄位不符合欄位定義（[`crate::record_data`]）。
     /// API 回應為 `VALIDATION`，`details.fields` 為 `[{ "field_key", "message" }]`，列出所有出錯的欄位。
     #[error("資料有 {} 個欄位不正確，請修正後再送出", .0.len())]
@@ -85,8 +94,10 @@ impl CoreError {
         match self {
             Self::Validation(_)
             | Self::InvalidField { .. }
+            | Self::InvalidParam { .. }
             | Self::InvalidFields(_)
             | Self::LastAdmin => ErrorCode::Validation,
+            Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::Unauthorized => ErrorCode::Unauthorized,
             Self::Forbidden(_) => ErrorCode::Forbidden,
@@ -120,6 +131,8 @@ impl From<CoreError> for ApiError {
         let code = err.code();
         if let CoreError::InvalidField { field, message } = err {
             ApiError::new(code, message).with_details(serde_json::json!({ "field": field }))
+        } else if let CoreError::InvalidParam { param, message } = err {
+            ApiError::new(code, message).with_details(serde_json::json!({ "field": param }))
         } else if let CoreError::InvalidFields(errors) = &err {
             let fields: Vec<_> = errors
                 .iter()
@@ -186,6 +199,26 @@ mod tests {
                 { "field_key": "qty", "message": "不可小於 1" },
             ] }))
         );
+    }
+
+    #[test]
+    fn invalid_param_and_bad_request() {
+        let api: ApiError = CoreError::InvalidParam {
+            param: "filter.qty.gte".into(),
+            message: "必須是整數".into(),
+        }
+        .into();
+        assert_eq!(api.code, ErrorCode::Validation);
+        assert_eq!(api.message, "必須是整數");
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "field": "filter.qty.gte" }))
+        );
+
+        let api: ApiError = CoreError::BadRequest("page 必須是整數".into()).into();
+        assert_eq!(api.code, ErrorCode::BadRequest);
+        assert_eq!(api.message, "page 必須是整數");
+        assert_eq!(api.details, None);
     }
 
     #[test]

@@ -730,7 +730,7 @@ async fn load_fields(
 }
 
 /// 版本號不符時回傳 `Conflict`（§9.4）。
-fn ensure_version(current: i32, expected: i32) -> Result<(), CoreError> {
+pub(crate) fn ensure_version(current: i32, expected: i32) -> Result<(), CoreError> {
     if current == expected {
         Ok(())
     } else {
