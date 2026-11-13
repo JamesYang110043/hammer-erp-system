@@ -25,6 +25,11 @@ if (!window.matchMedia) {
   });
 }
 
+// dnd-kit 的鍵盤拖曳會呼叫 scrollIntoView，jsdom 沒有實作
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 afterEach(() => {
   cleanup();
   // 清除 mockIPC 設定，避免影響下一個測試
