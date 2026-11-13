@@ -318,6 +318,7 @@ pub async fn create_entity(
             icon: plan.icon.as_deref(),
             kind: plan.kind.as_str(),
             storage: plan.storage.as_str(),
+            numbering_pattern: plan.numbering_pattern.as_deref(),
             title_template: plan.title_template.as_deref(),
             sort_order: plan.sort_order,
             created_by: ctx.user_id,
@@ -354,7 +355,7 @@ pub async fn create_entity(
     })
 }
 
-/// 修改資料類別的顯示名稱、圖示、標題範本、排序、是否啟用。
+/// 修改資料類別的顯示名稱、圖示、單號規則、標題範本、排序、是否啟用。
 ///
 /// - 不存在或已刪除 → [`CoreError::NotFound`]
 /// - `version` 不符 → `Conflict`（§9.4）
@@ -388,6 +389,7 @@ pub async fn update_entity(
                     version: req.version,
                     label: &next.label,
                     icon: next.icon.as_deref(),
+                    numbering_pattern: next.numbering_pattern.as_deref(),
                     title_template: next.title_template.as_deref(),
                     sort_order: next.sort_order,
                     is_active: next.is_active,

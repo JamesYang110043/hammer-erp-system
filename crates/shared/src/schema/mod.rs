@@ -371,7 +371,7 @@ pub struct FieldDefinition {
 
 /// 建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
 ///
-/// M2a 只接受 `kind = master`；明細子表與單號規則在 M2b 支援。
+/// M2a 只接受 `kind = master`；明細子表在 M2b 支援。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct CreateEntityRequest {
     /// 資料類別代碼，須符合 [`validate_key`]；建立後不可修改。
@@ -381,6 +381,10 @@ pub struct CreateEntityRequest {
     #[serde(default)]
     pub icon: Option<String>,
     pub kind: EntityKind,
+    /// 單號規則，例如 `SO{yyyyMM}-{0000}`（格式見 architecture.md §8.4）；空白或 `null` 代表不使用單號。
+    /// 格式不合法時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
+    #[serde(default)]
+    pub numbering_pattern: Option<String>,
     /// 資料標題範本。
     #[serde(default)]
     pub title_template: Option<String>,
@@ -400,6 +404,10 @@ pub struct UpdateEntityRequest {
     pub label: String,
     /// `null` 代表清除。
     pub icon: Option<String>,
+    /// 單號規則（格式同 [`CreateEntityRequest::numbering_pattern`]）；`null` 或空白代表清除。
+    /// 修改後只影響之後新增的資料，既有的單號不變。
+    #[serde(default)]
+    pub numbering_pattern: Option<String>,
     /// `null` 代表清除。
     pub title_template: Option<String>,
     pub sort_order: i32,

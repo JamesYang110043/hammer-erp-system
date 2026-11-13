@@ -4,6 +4,7 @@
 //! - [`audit_logs`]：操作紀錄查詢（分頁、篩選）
 //! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定、目前使用者與權限檢查
 //! - [`layouts`]：列表版面（`view_layouts`）
+//! - [`numbering`]：單號規則的解析與產生
 //! - [`record_data`]：依欄位定義驗證並正規化資料的 `data`
 //! - [`records`]：自訂資料類別的資料（通用資料 API）
 //! - [`schema`]：資料類別與欄位定義的管理
@@ -18,6 +19,7 @@ pub mod audit_logs;
 pub mod auth;
 mod error;
 pub mod layouts;
+pub mod numbering;
 pub mod record_data;
 pub mod records;
 pub mod schema;

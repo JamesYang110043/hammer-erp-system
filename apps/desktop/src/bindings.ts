@@ -419,14 +419,14 @@ export type CreateAdminRequest = {
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
- *  M2a 只接受 `kind = master`；明細子表與單號規則在 M2b 支援。
+ *  M2a 只接受 `kind = master`；明細子表在 M2b 支援。
  */
 export type CreateEntityRequest = CreateEntityRequest_Serialize | CreateEntityRequest_Deserialize;
 
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
- *  M2a 只接受 `kind = master`；明細子表與單號規則在 M2b 支援。
+ *  M2a 只接受 `kind = master`；明細子表在 M2b 支援。
  */
 export type CreateEntityRequest_Deserialize = {
 	/**  資料類別代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -435,6 +435,11 @@ export type CreateEntityRequest_Deserialize = {
 	label: string,
 	icon?: string | null,
 	kind: EntityKind,
+	/**
+	 *  單號規則，例如 `SO{yyyyMM}-{0000}`（格式見 architecture.md §8.4）；空白或 `null` 代表不使用單號。
+	 *  格式不合法時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
+	 */
+	numbering_pattern?: string | null,
 	/**  資料標題範本。 */
 	title_template?: string | null,
 	/**  選單排序（預設 0）。 */
@@ -444,7 +449,7 @@ export type CreateEntityRequest_Deserialize = {
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
- *  M2a 只接受 `kind = master`；明細子表與單號規則在 M2b 支援。
+ *  M2a 只接受 `kind = master`；明細子表在 M2b 支援。
  */
 export type CreateEntityRequest_Serialize = {
 	/**  資料類別代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -453,6 +458,11 @@ export type CreateEntityRequest_Serialize = {
 	label: string,
 	icon: string | null,
 	kind: EntityKind,
+	/**
+	 *  單號規則，例如 `SO{yyyyMM}-{0000}`（格式見 architecture.md §8.4）；空白或 `null` 代表不使用單號。
+	 *  格式不合法時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
+	 */
+	numbering_pattern: string | null,
 	/**  資料標題範本。 */
 	title_template: string | null,
 	/**  選單排序（預設 0）。 */
@@ -528,15 +538,15 @@ export type CreateFieldRequest_Serialize = {
 	sort_order: number,
 };
 
-/**  新增資料的輸入。沒有帶到的欄位套用預設值。 */
+/**  新增資料的輸入。沒有帶到的欄位套用預設值。單號由伺服器產生，request 中的 `record_no` 會被忽略。 */
 export type CreateRecordRequest = CreateRecordRequest_Serialize | CreateRecordRequest_Deserialize;
 
-/**  新增資料的輸入。沒有帶到的欄位套用預設值。 */
+/**  新增資料的輸入。沒有帶到的欄位套用預設值。單號由伺服器產生，request 中的 `record_no` 會被忽略。 */
 export type CreateRecordRequest_Deserialize = {
 	data?: { [key in string]: unknown },
 };
 
-/**  新增資料的輸入。沒有帶到的欄位套用預設值。 */
+/**  新增資料的輸入。沒有帶到的欄位套用預設值。單號由伺服器產生，request 中的 `record_no` 會被忽略。 */
 export type CreateRecordRequest_Serialize = {
 	data: { [key in string]: unknown },
 };
@@ -1082,6 +1092,8 @@ export type RecordSort = {
 /**  一筆自訂資料類別的資料。 */
 export type Record_Deserialize = {
 	id: string,
+	/**  單號，由伺服器依資料類別的單號規則產生；沒有單號時為 `null`。 */
+	record_no?: string | null,
 	/**  所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。 */
 	data: { [key in string]: unknown },
 	/**  建立時間（RFC 3339）。 */
@@ -1097,6 +1109,8 @@ export type Record_Deserialize = {
 /**  一筆自訂資料類別的資料。 */
 export type Record_Serialize = {
 	id: string,
+	/**  單號，由伺服器依資料類別的單號規則產生；沒有單號時為 `null`。 */
+	record_no: string | null,
 	/**  所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。 */
 	data: { [key in string]: unknown },
 	/**  建立時間（RFC 3339）。 */
@@ -1181,6 +1195,11 @@ export type UpdateEntityRequest_Deserialize = {
 	label: string,
 	/**  `null` 代表清除。 */
 	icon?: string | null,
+	/**
+	 *  單號規則（格式同 [`CreateEntityRequest::numbering_pattern`]）；`null` 或空白代表清除。
+	 *  修改後只影響之後新增的資料，既有的單號不變。
+	 */
+	numbering_pattern?: string | null,
 	/**  `null` 代表清除。 */
 	title_template?: string | null,
 	sort_order: number,
@@ -1197,6 +1216,11 @@ export type UpdateEntityRequest_Serialize = {
 	label: string,
 	/**  `null` 代表清除。 */
 	icon: string | null,
+	/**
+	 *  單號規則（格式同 [`CreateEntityRequest::numbering_pattern`]）；`null` 或空白代表清除。
+	 *  修改後只影響之後新增的資料，既有的單號不變。
+	 */
+	numbering_pattern: string | null,
 	/**  `null` 代表清除。 */
 	title_template: string | null,
 	sort_order: number,
@@ -1281,17 +1305,17 @@ export type UpdateFieldRequest_Serialize = {
 	is_active: boolean,
 };
 
-/**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。 */
+/**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。單號不可修改，`record_no` 會被忽略。 */
 export type UpdateRecordRequest = UpdateRecordRequest_Serialize | UpdateRecordRequest_Deserialize;
 
-/**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。 */
+/**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。單號不可修改，`record_no` 會被忽略。 */
 export type UpdateRecordRequest_Deserialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
 	data?: { [key in string]: unknown },
 };
 
-/**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。 */
+/**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。單號不可修改，`record_no` 會被忽略。 */
 export type UpdateRecordRequest_Serialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,

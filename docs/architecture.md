@@ -402,10 +402,38 @@ products ───────────────────────�
 | id | UUID PK | |
 | entity_id | UUID FK → entity_definitions | |
 | period_key | TEXT | 依單號規則產生，例如 `202611` |
-| current_value | INTEGER | 用 `SELECT … FOR UPDATE` 取號 |
+| current_value | INTEGER | 該期間最後取出的流水號 |
 | | | UNIQUE (entity_id, period_key) |
 
 > 單號規則存在 `entity_definitions.numbering_pattern`，例如 `SO{yyyyMM}-{0000}` 會產生 `SO202611-0001`。
+
+**單號規則**（解析在 `hammer_core::numbering`）：
+
+| 代碼 | 說明 |
+|---|---|
+| `{yyyy}`、`{yy}` | 西元年 4 位、末 2 位 |
+| `{MM}`、`{dd}` | 月、日，2 位 |
+| `{000…}` | 流水號，3–8 個 `0`，位數不足時補零 |
+
+- 日期代碼可以寫在同一個 `{}` 內（`{yyyyMM}`）；`{}` 以外的文字原樣保留；長度上限 50 字元。
+- 必須**恰好一個**流水號。不認得的代碼、沒有或有多個流水號、單獨的 `{` `}`、控制字元 → 資料類別 API 回傳 `422 VALIDATION`（`details.field = numbering_pattern`）。空白視為不使用單號。
+- `period_key` 由規則中的日期代碼依序組成（`SO{yyyyMM}-{0000}` → `202611`）；沒有日期代碼時為空字串，流水號永不重置。
+- 日期以建立當下的 Asia/Taipei 日期為準（D13）。
+- 流水號超過位數時繼續遞增，不截斷：`{000}` 的第 1000 號為 `1000`。
+
+**取號**：在新增資料的同一個 transaction 內執行
+`INSERT … ON CONFLICT (entity_id, period_key) DO UPDATE SET current_value = current_value + 1 RETURNING current_value`。
+沒有該期間的列時新增（從 1 開始），有則遞增並鎖定該列直到 transaction 結束，效果與 `SELECT … FOR UPDATE` 後再更新相同；並行新增時依序取號，不會重複。資料寫入失敗 rollback 時號碼一併還原（不跳號）。
+
+**規則**：
+
+- 資料類別有設定規則時，通用資料 API 新增資料自動寫入 `custom_records.record_no`。
+- `record_no` 不可由客戶端指定或修改：request 中帶了一律**忽略**；`data` 內帶 `record_no` 鍵視為未定義的欄位（422）。`record_no` 是保留的欄位代碼。
+- 規則可以在使用後修改，只影響之後新增的資料，既有單號不變；改回原規則時接續該期間原本的流水號。
+- 已刪除資料的單號不重複使用（流水號只增不減；唯一索引包含已刪除的資料）。
+- 修改規則後產生的單號與既有單號重複時（例如 `{yy}-{000}` 改成 `26-{000}`），新增失敗並回傳 `422 VALIDATION`，需要調整規則。
+- 列表可依 `record_no` 排序（文字排序）與篩選（`eq`、`contains`），見 §10。
+- 第一版自訂資料類別沒有作廢狀態；系統資料類別的單號在 M4 處理。
 
 #### `attachments`
 | 欄位 | 型態 | 說明 |
@@ -500,11 +528,11 @@ products ───────────────────────�
 | id | UUID PK | |
 | entity_id | UUID FK → entity_definitions | |
 | parent_record_id | UUID FK → self | 明細子表指向主表的資料 |
-| record_no | TEXT | 依單號規則產生（如果有設定） |
+| record_no | TEXT | 依單號規則產生（如果有設定），見 §8.4 `number_sequences` |
 | data | JSONB | 所有欄位的值，鍵為 field_key |
 | ＋共通欄位 | | |
 
-索引：`(entity_id)`、`(parent_record_id)`、`GIN(data)`，以及第 7.5 節所述的動態索引。
+索引：`(entity_id)`、`(parent_record_id)`、`GIN(data)`、部分唯一索引 `(entity_id, record_no) WHERE record_no IS NOT NULL`（含已刪除的資料），以及第 7.5 節所述的動態索引。
 
 ---
 
@@ -940,6 +968,7 @@ GROUP BY product_id;
     | `any` | 包含任一選項；可重複帶多個（`filter.tags.any=a&filter.tags.any=b`），符合任一個即可 | `multi_select` |
   - 值的格式：數值 `12.5`、日期 `YYYY-MM-DD`、日期時間 RFC 3339、勾選 `true` / `false`。值為空字串的條件視為未指定。
   - 欄位不存在或已停用、運算子不適用於該型態、值的格式錯誤 → `422 VALIDATION`，`details.field` 為參數名稱（例如 `filter.qty.gte`）。不認得的參數名稱忽略。
+  - 單號：`sort` 與 `filter` 可使用 `record_no`（保留的代碼，不是欄位），依文字排序，篩選只支援 `eq`、`contains`（§8.4）。
 
 ---
 

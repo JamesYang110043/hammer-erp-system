@@ -6,6 +6,7 @@
 //! - [`audit`]：寫入與查詢 `audit_logs`
 //! - [`dynamic_index`]：自訂欄位的動態索引（可搜尋、不可重複）
 //! - [`lock`]：advisory lock
+//! - [`number_sequence`]：單號流水號（`number_sequences`）的取號
 //! - [`record`]：自訂資料類別的資料（`custom_records`）
 //! - [`role`]：角色與權限查詢
 //! - [`schema`]：資料類別、欄位定義與定義變更紀錄
@@ -22,6 +23,7 @@ pub mod dynamic_index;
 mod error;
 pub mod lock;
 mod migrate;
+pub mod number_sequence;
 mod optimistic;
 mod pool;
 pub mod record;
