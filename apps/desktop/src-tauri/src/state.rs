@@ -11,7 +11,9 @@ use hammer_shared::layout::{
     ViewLayout,
 };
 use hammer_shared::pagination::Page;
-use hammer_shared::record::{DeleteRecordQuery, Record, RecordListQuery};
+use hammer_shared::record::{
+    CreateRecordRequest, DeleteRecordQuery, Record, RecordListQuery, UpdateRecordRequest,
+};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
@@ -269,6 +271,35 @@ impl AppState {
     ) -> Result<Page<Record>, ClientError> {
         self.with_token(async |client, url, token| {
             client.list_records(url, token, key, query).await
+        })
+        .await
+    }
+
+    /// 取得一筆資料。
+    pub async fn get_record(&self, key: &str, id: Id) -> Result<Record, ClientError> {
+        self.with_token(async |client, url, token| client.get_record(url, token, key, id).await)
+            .await
+    }
+
+    /// 新增資料。
+    pub async fn create_record(
+        &self,
+        key: &str,
+        req: &CreateRecordRequest,
+    ) -> Result<Record, ClientError> {
+        self.with_token(async |client, url, token| client.create_record(url, token, key, req).await)
+            .await
+    }
+
+    /// 修改資料。
+    pub async fn update_record(
+        &self,
+        key: &str,
+        id: Id,
+        req: &UpdateRecordRequest,
+    ) -> Result<Record, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.update_record(url, token, key, id, req).await
         })
         .await
     }

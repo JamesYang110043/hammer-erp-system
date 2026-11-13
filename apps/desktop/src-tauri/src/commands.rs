@@ -12,7 +12,9 @@ use hammer_shared::layout::{
     ViewLayout,
 };
 use hammer_shared::pagination::Page;
-use hammer_shared::record::{DeleteRecordQuery, Record, RecordListQuery};
+use hammer_shared::record::{
+    CreateRecordRequest, DeleteRecordQuery, Record, RecordListQuery, UpdateRecordRequest,
+};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
@@ -292,6 +294,44 @@ pub async fn list_records(
     query: RecordListQuery,
 ) -> Result<Page<Record>, ClientError> {
     state.list_records(&key, &query).await
+}
+
+/// 取得一筆資料（需要 `record.read`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn get_record(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+) -> Result<Record, ClientError> {
+    state.get_record(&key, id).await
+}
+
+/// 新增資料（需要 `record.write`）。沒有帶到的欄位由伺服器套用預設值。
+///
+/// 資料不符合欄位定義時回傳 `422 VALIDATION`，`details.fields` 列出出錯的欄位。
+#[tauri::command]
+#[specta::specta]
+pub async fn create_record(
+    state: State<'_, AppState>,
+    key: String,
+    req: CreateRecordRequest,
+) -> Result<Record, ClientError> {
+    state.create_record(&key, &req).await
+}
+
+/// 修改資料（需要 `record.write`）。只合併有帶到的欄位，`null` 代表清空。
+///
+/// `version` 不符時回傳 `409 CONFLICT`；資料不符合欄位定義時回傳 `422 VALIDATION`。
+#[tauri::command]
+#[specta::specta]
+pub async fn update_record(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+    req: UpdateRecordRequest,
+) -> Result<Record, ClientError> {
+    state.update_record(&key, id, &req).await
 }
 
 /// 刪除資料（需要 `record.write`）。`version` 不符時回傳 `409 CONFLICT`。

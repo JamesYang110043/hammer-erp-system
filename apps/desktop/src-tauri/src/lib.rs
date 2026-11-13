@@ -63,6 +63,9 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::reorder_fields,
             commands::change_field_type,
             commands::list_records,
+            commands::get_record,
+            commands::create_record,
+            commands::update_record,
             commands::delete_record,
             commands::list_layouts,
             commands::get_default_layout,
@@ -114,6 +117,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::record::RecordFilter>()
         .typ::<hammer_shared::record::RecordSort>()
         .typ::<hammer_shared::record::RecordListQuery>()
+        .typ::<hammer_shared::record::CreateRecordRequest>()
+        .typ::<hammer_shared::record::UpdateRecordRequest>()
         .typ::<hammer_shared::pagination::Page<hammer_shared::record::Record>>()
         // 列表版面
         .typ::<hammer_shared::layout::LayoutColumn>()

@@ -16,7 +16,9 @@ use hammer_shared::layout::{
     ViewLayout,
 };
 use hammer_shared::pagination::Page;
-use hammer_shared::record::{DeleteRecordQuery, Record, RecordListQuery};
+use hammer_shared::record::{
+    CreateRecordRequest, DeleteRecordQuery, Record, RecordListQuery, UpdateRecordRequest,
+};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
@@ -411,6 +413,64 @@ impl ApiClient {
             .get(entity_endpoint(server_url, key, None, "/records")?)
             .bearer_auth(token)
             .query(&query.to_pairs());
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/entities/{key}/records/{id}`。
+    pub async fn get_record(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        id: Id,
+    ) -> Result<Record, ClientError> {
+        let builder = self
+            .http
+            .get(entity_endpoint(
+                server_url,
+                key,
+                None,
+                &format!("/records/{id}"),
+            )?)
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/entities/{key}/records`。
+    pub async fn create_record(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        req: &CreateRecordRequest,
+    ) -> Result<Record, ClientError> {
+        let builder = self
+            .http
+            .post(entity_endpoint(server_url, key, None, "/records")?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PATCH /api/v1/entities/{key}/records/{id}`。
+    pub async fn update_record(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        id: Id,
+        req: &UpdateRecordRequest,
+    ) -> Result<Record, ClientError> {
+        let builder = self
+            .http
+            .patch(entity_endpoint(
+                server_url,
+                key,
+                None,
+                &format!("/records/{id}"),
+            )?)
+            .bearer_auth(token)
+            .json(req);
         authed(read_json(send(builder).await?).await)
     }
 
@@ -1427,6 +1487,18 @@ mod tests {
         })
     }
 
+    fn record_json(version: i32) -> serde_json::Value {
+        json!({
+            "id": "0196f5a0-0000-7000-8000-000000000201",
+            "data": { "name": "冷氣", "price": "0.10" },
+            "created_at": "2026-11-13T01:00:00Z",
+            "created_by": null,
+            "updated_at": "2026-11-13T01:00:00Z",
+            "updated_by": null,
+            "version": version,
+        })
+    }
+
     #[tokio::test]
     async fn record_and_layout_endpoints() {
         use axum::extract::{Path, RawQuery};
@@ -1463,11 +1535,27 @@ mod tests {
                             }],
                             "total": 21, "page": 2, "page_size": 20,
                         }))
+                    })
+                    .post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                        assert_eq!(body, json!({ "data": { "name": "冷氣", "price": "0.1" } }));
+                        (AxumStatus::CREATED, axum::Json(record_json(1)))
                     }),
                 )
                 .route(
                     "/entities/{key}/records/{id}",
-                    axum::routing::delete(
+                    get(|Path((_, id)): Path<(String, String)>| async move {
+                        assert_eq!(id, "0196f5a0-0000-7000-8000-000000000201");
+                        axum::Json(record_json(3))
+                    })
+                    .patch(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                        // 小數以字串送出；null 代表清空
+                        assert_eq!(
+                            body,
+                            json!({ "version": 3, "data": { "price": "0.3", "memo": null } })
+                        );
+                        axum::Json(record_json(4))
+                    })
+                    .delete(
                         |Path((_, id)): Path<(String, String)>, RawQuery(query): RawQuery| async move {
                             assert_eq!(id, "0196f5a0-0000-7000-8000-000000000201");
                             assert_eq!(query.as_deref(), Some("version=4"));
@@ -1545,6 +1633,46 @@ mod tests {
             (page.total, page.items[0].data["price"].clone()),
             (21, json!("12.5000"))
         );
+
+        let fetched = client
+            .get_record(&url, "tok", "repair", record_id)
+            .await
+            .unwrap();
+        assert_eq!(fetched.version, 3);
+
+        let created = client
+            .create_record(
+                &url,
+                "tok",
+                "repair",
+                &CreateRecordRequest {
+                    data: json!({ "name": "冷氣", "price": "0.1" })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.version, 1);
+
+        let updated = client
+            .update_record(
+                &url,
+                "tok",
+                "repair",
+                record_id,
+                &UpdateRecordRequest {
+                    version: 3,
+                    data: json!({ "price": "0.3", "memo": null })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.version, 4);
 
         client
             .delete_record(
