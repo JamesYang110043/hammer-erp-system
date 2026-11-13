@@ -111,6 +111,31 @@ pub async fn find_entity_by_key_for_update<'e>(
     Ok(row)
 }
 
+/// 同 [`find_entity_by_key`]，並以共用鎖鎖定該列（`FOR SHARE`）。必須在 transaction 內呼叫。
+///
+/// 寫入資料時使用：可與其他寫入資料的 transaction 同時進行，但會等待持有 `FOR UPDATE` 的
+/// 定義變更（例如變更欄位型態）完成，避免依舊的欄位定義寫入資料。
+pub async fn find_entity_by_key_for_share<'e>(
+    executor: impl PgExecutor<'e>,
+    key: &str,
+) -> Result<Option<EntityRow>, DbError> {
+    let row = sqlx::query_as!(
+        EntityRow,
+        r#"
+        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,
+               numbering_pattern, title_template, sort_order, is_active,
+               created_at, updated_at, version
+        FROM entity_definitions
+        WHERE key = $1 AND deleted_at IS NULL
+        FOR SHARE
+        "#,
+        key,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
 /// 新增資料類別所需的資料。
 #[derive(Debug, Clone)]
 pub struct NewEntity<'a> {
@@ -446,6 +471,45 @@ pub async fn update_field<'e>(
         a.sort_order,
         is_active,
         updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result)
+}
+
+/// 變更欄位型態所需的資料（§7.4）。
+#[derive(Debug, Clone)]
+pub struct FieldTypeUpdate<'a> {
+    pub id: Uuid,
+    pub version: i32,
+    pub data_type: &'a str,
+    pub decimal_places: Option<i16>,
+    pub options: Option<&'a Value>,
+    pub validation: Option<&'a Value>,
+    pub default_value: Option<&'a Value>,
+    pub updated_by: Uuid,
+}
+
+/// 修改欄位的 `data_type` 與相關設定，並遞增 `version`。版本號不符時影響 0 筆。
+pub async fn update_field_type<'e>(
+    executor: impl PgExecutor<'e>,
+    update: &FieldTypeUpdate<'_>,
+) -> Result<PgQueryResult, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE field_definitions
+        SET data_type = $3, decimal_places = $4, options = $5, validation = $6,
+            default_value = $7, updated_by = $8, version = version + 1
+        WHERE id = $1 AND version = $2 AND deleted_at IS NULL
+        "#,
+        update.id,
+        update.version,
+        update.data_type,
+        update.decimal_places,
+        update.options,
+        update.validation,
+        update.default_value,
+        update.updated_by,
     )
     .execute(executor)
     .await?;

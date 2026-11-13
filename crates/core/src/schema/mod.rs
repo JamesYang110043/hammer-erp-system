@@ -2,26 +2,28 @@
 //!
 //! - 查詢（需要登入，不需特定權限）：[`list_entities`]、[`get_entity`]
 //! - 寫入（需要 `schema.manage`）：[`create_entity`]、[`update_entity`]、[`create_field`]、
-//!   [`update_field`]、[`deactivate_field`]、[`reorder_fields`]
+//!   [`update_field`]、[`deactivate_field`]、[`reorder_fields`]、[`change_field_type`]
 //!
 //! 寫入都在單一 transaction 內完成：先鎖定資料類別（`FOR UPDATE`），讓同一個資料類別的
 //! 欄位變更依序進行；檢查 `version`（§9.4）；每個有變動的定義寫入一筆 `schema_change_logs`
 //! （完整的 before / after）與一筆 `audit_logs`（只有變動的屬性）。沒有任何變動時不寫入。
 //!
-//! 輸入檢查在 [`rules`]（純邏輯，有單元測試）。
+//! 輸入檢查在 [`rules`]，型態轉換在 [`type_change`]（純邏輯，有單元測試）。
 
 pub mod rules;
+pub mod type_change;
 
+use hammer_db::record as record_db;
 use hammer_db::schema::{
     self as db, ENTITY_KEY_UNIQUE, EntityRow, EntityUpdate, FIELD_KEY_UNIQUE, FieldAttributes,
-    FieldRow, NewEntity, NewField, NewSchemaChangeLog,
+    FieldRow, FieldTypeUpdate, NewEntity, NewField, NewSchemaChangeLog,
 };
 use hammer_db::sqlx::{PgPool, PgTransaction};
 use hammer_db::{DbError, ensure_version_matched};
 use hammer_shared::schema::{
-    CreateEntityRequest, CreateFieldRequest, DataType, EntityDefinition, EntityDetail, EntityKind,
-    EntityStorage, FieldDefinition, FieldStorage, ReorderFieldsRequest, UpdateEntityRequest,
-    UpdateFieldRequest,
+    ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DataType, EntityDefinition,
+    EntityDetail, EntityKind, EntityStorage, FieldDefinition, FieldStorage,
+    MAX_CONVERSION_FAILURES, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
 };
 use hammer_shared::{Id, audit as action, new_id, permission};
 use serde::Serialize;
@@ -32,6 +34,7 @@ use crate::CoreError;
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
 use rules::field;
+use type_change::StoredRecord;
 
 /// 資料類別定義在 `audit_logs.entity_key` 的值。
 pub const ENTITY_DEFINITION_KEY: &str = "entity_definition";
@@ -587,6 +590,129 @@ pub async fn reorder_fields(
 
     tracing::info!(actor = %ctx.user_id, entity = %entity_key, "已調整欄位排序");
     Ok(fields)
+}
+
+/// 變更自訂欄位的資料型態（§7.4）。
+///
+/// 在同一個 transaction 內：
+///
+/// 1. 鎖定資料類別（`FOR UPDATE`）。寫入資料時以 `FOR SHARE` 鎖定資料類別
+///    （[`crate::records`]），所以會等進行中的寫入完成，轉換期間也不會有新的寫入
+/// 2. 檢查 `version` 與新的設定（[`rules::plan_change_type`]）
+/// 3. 轉換該資料類別的所有資料（含已軟刪除，[`type_change::convert_records`]）；
+///    有任何一筆失敗 → [`CoreError::ConversionFailed`]，不修改任何資料
+/// 4. 寫入轉換後有變動的資料（遞增各筆的 `version`）與新的欄位定義
+/// 5. 寫入一筆 `schema_change_logs`（`update`，完整的 before / after）與欄位定義的 `audit_logs`
+///
+/// 動態索引（§7.5）的運算式是 `data->>'field_key'`，與型態無關，PostgreSQL 在更新資料時
+/// 一併維護，不需重建。「不可重複」的欄位在第 3 步先檢查轉換後的值不重複。
+///
+/// 錯誤：資料類別或欄位不存在 → [`CoreError::NotFound`]；`version` 不符 → `Conflict`；
+/// 系統欄位、型態相同或不支援、設定不合法 → [`CoreError::InvalidField`]。
+pub async fn change_field_type(
+    pool: &PgPool,
+    ctx: &AuthContext,
+    entity_key: &str,
+    field_key: &str,
+    req: &ChangeFieldTypeRequest,
+    client_info: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<FieldDefinition, CoreError> {
+    ctx.require(permission::SCHEMA_MANAGE)?;
+
+    let mut tx = pool.begin().await.map_err(DbError::from)?;
+    let entity = lock_entity(&mut tx, entity_key).await?;
+    let current = lock_field(&mut tx, entity.id, field_key).await?;
+    ensure_version(current.version, req.version)?;
+    let (next, _) = rules::plan_change_type(&current, req)?;
+
+    let rows = if entity.storage == EntityStorage::CustomRecords {
+        record_db::list_all_record_data_for_update(&mut *tx, entity.id).await?
+    } else {
+        // 系統資料表的 custom_data 在 M3 支援；目前系統資料類別沒有自訂欄位
+        return Err(invalid(
+            field::DATA_TYPE,
+            "系統資料類別的欄位目前不能變更資料型態",
+        ));
+    };
+    let records = rows
+        .iter()
+        .map(|row| {
+            Ok(StoredRecord {
+                id: row.id,
+                data: row.data.as_object().ok_or_else(|| {
+                    CoreError::Internal("custom_records.data 不是 JSON 物件".into())
+                })?,
+                deleted: row.deleted,
+            })
+        })
+        .collect::<Result<Vec<_>, CoreError>>()?;
+    let converted = match type_change::convert_records(&current, &next, &records) {
+        Ok(converted) => converted,
+        Err(mut failures) => {
+            let total = failures.len();
+            failures.truncate(MAX_CONVERSION_FAILURES);
+            return Err(CoreError::ConversionFailed { failures, total });
+        }
+    };
+
+    let (ids, data): (Vec<Id>, Vec<Value>) = converted
+        .into_iter()
+        .map(|r| (r.id, Value::Object(r.data)))
+        .unzip();
+    if !ids.is_empty() {
+        let updated =
+            record_db::update_records_data(&mut *tx, entity.id, &ids, &data, ctx.user_id).await?;
+        if updated != ids.len() as u64 {
+            return Err(CoreError::Internal(format!(
+                "轉換資料時應更新 {} 筆，實際更新 {updated} 筆",
+                ids.len()
+            )));
+        }
+    }
+
+    let json = FieldJson::of(&next)?;
+    ensure_version_matched(
+        db::update_field_type(
+            &mut *tx,
+            &FieldTypeUpdate {
+                id: current.id,
+                version: req.version,
+                data_type: next.data_type.as_str(),
+                decimal_places: next.decimal_places,
+                options: json.options.as_ref(),
+                validation: json.validation.as_ref(),
+                default_value: next.default_value.as_ref(),
+                updated_by: ctx.user_id,
+            },
+        )
+        .await?,
+    )?;
+    log_change(
+        &mut tx,
+        ctx,
+        ChangeTarget::Field,
+        current.id,
+        ChangeAction::Update,
+        Some(&snapshot(&current)?),
+        Some(&snapshot(&next)?),
+        client_info,
+        now,
+    )
+    .await?;
+    let result = fetch_field(&mut tx, entity.id, field_key).await?;
+    commit(tx).await?;
+
+    tracing::info!(
+        actor = %ctx.user_id,
+        entity = %entity_key,
+        field = %field_key,
+        from = current.data_type.as_str(),
+        to = next.data_type.as_str(),
+        converted = ids.len(),
+        "已變更欄位資料型態"
+    );
+    Ok(result)
 }
 
 /// 寫入欄位的修改並留紀錄。沒有變動時回傳 `current`。

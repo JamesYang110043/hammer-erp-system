@@ -86,6 +86,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::schema::CreateFieldRequest>()
         .typ::<hammer_shared::schema::UpdateFieldRequest>()
         .typ::<hammer_shared::schema::DeactivateFieldRequest>()
+        .typ::<hammer_shared::schema::ChangeFieldTypeRequest>()
         .typ::<hammer_shared::schema::EntityDetail>()
         .typ::<hammer_shared::schema::ReorderFieldsRequest>()
         .typ::<hammer_shared::schema::FieldOrderItem>()

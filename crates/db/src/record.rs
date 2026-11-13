@@ -4,6 +4,7 @@
 //!   [`soft_delete_record`]
 //! - 列表：[`list_records`]、[`count_records`]，條件為 [`RecordListFilter`]
 //! - 唯一性：[`value_taken`]
+//! - 欄位型態變更（含已軟刪除的資料）：[`list_all_record_data_for_update`]、[`update_records_data`]
 //!
 //! 已軟刪除（`deleted_at IS NOT NULL`）的資料一律視為不存在。
 //! 欄位代碼與比較值一律以 bind 參數傳入，不拼接進 SQL；欄位型態檢查與值的格式檢查在
@@ -178,6 +179,68 @@ pub async fn value_taken<'e>(
     .fetch_one(executor)
     .await?;
     Ok(taken)
+}
+
+// ---------------------------------------------------------------------------
+// 欄位型態變更
+// ---------------------------------------------------------------------------
+
+/// 資料的 `data`（含已軟刪除的資料）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordDataRow {
+    pub id: Uuid,
+    pub data: Value,
+    /// 已軟刪除。
+    pub deleted: bool,
+}
+
+/// 列出資料類別的所有資料（**含已軟刪除**）的 `data`，依 `id` 排序，並鎖定這些列（`FOR UPDATE`）。
+/// 必須在 transaction 內呼叫。
+pub async fn list_all_record_data_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_id: Uuid,
+) -> Result<Vec<RecordDataRow>, DbError> {
+    let rows = sqlx::query_as!(
+        RecordDataRow,
+        r#"
+        SELECT id, data, deleted_at IS NOT NULL AS "deleted!"
+        FROM custom_records
+        WHERE entity_id = $1
+        ORDER BY id
+        FOR UPDATE
+        "#,
+        entity_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 一次取代多筆資料（**含已軟刪除**）的 `data`，並遞增 `version`。回傳影響的筆數。
+///
+/// `ids` 與 `data` 依序對應，長度必須相同。
+pub async fn update_records_data<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_id: Uuid,
+    ids: &[Uuid],
+    data: &[Value],
+    updated_by: Uuid,
+) -> Result<u64, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE custom_records AS r
+        SET data = u.data, updated_by = $4, version = r.version + 1
+        FROM UNNEST($2::uuid[], $3::jsonb[]) AS u(id, data)
+        WHERE r.id = u.id AND r.entity_id = $1
+        "#,
+        entity_id,
+        ids,
+        data,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 // ---------------------------------------------------------------------------

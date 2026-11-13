@@ -8,8 +8,9 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use hammer_core::schema;
 use hammer_shared::schema::{
-    CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest, EntityDefinition,
-    EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
+    ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
+    EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateEntityRequest,
+    UpdateFieldRequest,
 };
 use time::OffsetDateTime;
 
@@ -144,6 +145,28 @@ pub async fn deactivate_field(
         &key,
         &field_key,
         req.version,
+        info.as_deref(),
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(Json(field))
+}
+
+/// `POST /api/v1/entities/{key}/fields/{field_key}/change-type`
+pub async fn change_field_type(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    Path((key, field_key)): Path<(String, String)>,
+    Json(req): Json<ChangeFieldTypeRequest>,
+) -> Result<Json<FieldDefinition>, AppError> {
+    let info = request_client_info(&headers);
+    let field = schema::change_field_type(
+        &state.pool,
+        &auth,
+        &key,
+        &field_key,
+        &req,
         info.as_deref(),
         OffsetDateTime::now_utc(),
     )
