@@ -88,6 +88,18 @@ export type ClientError_Serialize =
 /**  本機設定檔讀寫失敗。 */
 { kind: "storage"; message: string };
 
+/**  `POST /api/v1/users` 的輸入。建立後 `must_change_password = true`。 */
+export type CreateUserRequest = {
+	/**  登入帳號（前後空白會去除）。不可與既有帳號（含已刪除）重複。 */
+	username: string,
+	/**  顯示名稱（前後空白會去除）。 */
+	display_name: string,
+	/**  角色代碼。 */
+	role: string,
+	/**  初始密碼，至少 10 個字元（§6.2）。 */
+	password: string,
+};
+
 /**  目前登入的使用者（`GET /api/v1/auth/me`，以及登入回應中的 `user`）。 */
 export type CurrentUser = {
 	id: string,
@@ -99,6 +111,12 @@ export type CurrentUser = {
 	permissions: string[],
 	/**  為 `true` 時必須先修改密碼，其他 API 會回傳 `PASSWORD_CHANGE_REQUIRED`。 */
 	must_change_password: boolean,
+};
+
+/**  `DELETE /api/v1/users/{id}` 的 query string。 */
+export type DeleteUserQuery = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
 };
 
 /**
@@ -162,6 +180,107 @@ export type LoginResponse = {
 	/**  Session token。之後的請求放在 `Authorization: Bearer <token>`。 */
 	token: string,
 	user: CurrentUser,
+};
+
+/**
+ *  `POST /api/v1/users/{id}/reset-password` 的輸入。
+ * 
+ *  設定新的臨時密碼、`must_change_password = true`、解除鎖定，並撤銷該使用者所有 session。
+ */
+export type ResetPasswordRequest = {
+	/**  臨時密碼，至少 10 個字元（§6.2）。 */
+	new_password: string,
+};
+
+/**  角色與其權限（`GET /api/v1/roles`）。 */
+export type Role = {
+	id: string,
+	/**  角色代碼，對應 `role` 模組的常數（`admin` / `editor` / `viewer`）。 */
+	code: string,
+	/**  顯示名稱，例如「管理者」。 */
+	name: string,
+	/**  權限代碼，對應 `permission` 模組的常數，依代碼排序。 */
+	permissions: string[],
+};
+
+/**  `PATCH /api/v1/users/{id}` 的輸入。省略或 `null` 的欄位不修改。 */
+export type UpdateUserRequest = UpdateUserRequest_Serialize | UpdateUserRequest_Deserialize;
+
+/**  `PATCH /api/v1/users/{id}` 的輸入。省略或 `null` 的欄位不修改。 */
+export type UpdateUserRequest_Deserialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	display_name?: string | null,
+	/**  角色代碼。 */
+	role?: string | null,
+	is_active?: boolean | null,
+};
+
+/**  `PATCH /api/v1/users/{id}` 的輸入。省略或 `null` 的欄位不修改。 */
+export type UpdateUserRequest_Serialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	display_name: string | null,
+	/**  角色代碼。 */
+	role: string | null,
+	is_active: boolean | null,
+};
+
+/**  帳號（帳號管理畫面使用）。 */
+export type User = User_Serialize | User_Deserialize;
+
+/**  帳號（帳號管理畫面使用）。 */
+export type User_Deserialize = {
+	id: string,
+	username: string,
+	display_name: string,
+	/**  角色代碼。 */
+	role: string,
+	/**  角色顯示名稱。 */
+	role_name: string,
+	/**  `false` 代表已停用，無法登入。 */
+	is_active: boolean,
+	/**  目前是否因連續登入失敗而鎖定。 */
+	is_locked: boolean,
+	/**  鎖定到此時間（RFC 3339）；沒有鎖定時為 `null`。 */
+	locked_until: string | null,
+	/**  下次登入必須修改密碼。 */
+	must_change_password: boolean,
+	/**  最後登入時間（RFC 3339）；從未登入時為 `null`。 */
+	last_login_at: string | null,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號，修改、刪除時帶回（§9.4）。 */
+	version: number,
+};
+
+/**  帳號（帳號管理畫面使用）。 */
+export type User_Serialize = {
+	id: string,
+	username: string,
+	display_name: string,
+	/**  角色代碼。 */
+	role: string,
+	/**  角色顯示名稱。 */
+	role_name: string,
+	/**  `false` 代表已停用，無法登入。 */
+	is_active: boolean,
+	/**  目前是否因連續登入失敗而鎖定。 */
+	is_locked: boolean,
+	/**  鎖定到此時間（RFC 3339）；沒有鎖定時為 `null`。 */
+	locked_until: string | null,
+	/**  下次登入必須修改密碼。 */
+	must_change_password: boolean,
+	/**  最後登入時間（RFC 3339）；從未登入時為 `null`。 */
+	last_login_at: string | null,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號，修改、刪除時帶回（§9.4）。 */
+	version: number,
 };
 
 /* Tauri Specta runtime */

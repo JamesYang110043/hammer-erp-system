@@ -40,6 +40,13 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::auth::LoginResponse>()
         .typ::<hammer_shared::auth::CurrentUser>()
         .typ::<hammer_shared::auth::ChangePasswordRequest>()
+        // 帳號管理
+        .typ::<hammer_shared::user::Role>()
+        .typ::<hammer_shared::user::User>()
+        .typ::<hammer_shared::user::CreateUserRequest>()
+        .typ::<hammer_shared::user::UpdateUserRequest>()
+        .typ::<hammer_shared::user::ResetPasswordRequest>()
+        .typ::<hammer_shared::user::DeleteUserQuery>()
         // command 回傳 `{ status: "ok", data } | { status: "error", error }`，錯誤有型別
         .error_handling(ErrorHandlingMode::Result)
 }

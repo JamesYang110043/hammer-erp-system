@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE users\n        SET password_hash = $2,\n            must_change_password = true,\n            failed_login_count = 0,\n            locked_until = NULL,\n            updated_by = $3,\n            version = version + 1\n        WHERE id = $1 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4916ec2495017abb3dc0a81c4667859b0386ee256bcdb11430470d453e60c785"
+}

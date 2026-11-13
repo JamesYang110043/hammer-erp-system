@@ -14,6 +14,7 @@ pub mod permission;
 pub mod role;
 pub mod setup;
 pub mod time;
+pub mod user;
 
 pub use error::{ApiError, ErrorCode};
 pub use id::{Id, new_id};

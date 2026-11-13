@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE users\n        SET display_name = $3,\n            role_id = (SELECT id FROM roles WHERE code = $4),\n            is_active = $5,\n            updated_by = $6,\n            version = version + 1\n        WHERE id = $1 AND version = $2 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Text",
+        "Text",
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7f38e0ad8ba60b101170ce2d3ebddc8be6a1d79258ce2a8e763b6cf4f01a4248"
+}

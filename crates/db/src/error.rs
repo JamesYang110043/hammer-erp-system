@@ -26,4 +26,12 @@ impl DbError {
     pub fn is_conflict(&self) -> bool {
         matches!(self, Self::Conflict)
     }
+
+    /// 違反 UNIQUE 限制時，回傳限制名稱（例如 `users_username_key`）。
+    pub fn unique_violation(&self) -> Option<&str> {
+        match self {
+            Self::Sqlx(sqlx::Error::Database(e)) if e.is_unique_violation() => e.constraint(),
+            _ => None,
+        }
+    }
 }
