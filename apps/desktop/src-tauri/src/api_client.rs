@@ -1369,6 +1369,7 @@ mod tests {
                     label: "維修單".into(),
                     icon: None,
                     kind: EntityKind::Master,
+                    numbering_pattern: None,
                     title_template: None,
                     sort_order: 0,
                 },

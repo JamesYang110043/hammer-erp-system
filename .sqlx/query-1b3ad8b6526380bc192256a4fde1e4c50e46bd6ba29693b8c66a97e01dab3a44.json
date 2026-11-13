@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, entity_id, data, created_at, created_by, updated_at, updated_by, version\n        FROM custom_records\n        WHERE id = $1 AND entity_id = $2 AND deleted_at IS NULL\n        FOR UPDATE\n        ",
+  "query": "\n        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,\n               version\n        FROM custom_records\n        WHERE id = $1 AND entity_id = $2 AND deleted_at IS NULL\n        ",
   "describe": {
     "columns": [
       {
@@ -27,6 +27,17 @@
       },
       {
         "ordinal": 2,
+        "name": "record_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "record_no"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
         "name": "data",
         "type_info": "Jsonb",
         "origin": {
@@ -37,7 +48,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "updated_by",
         "type_info": "Uuid",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "version",
         "type_info": "Int4",
         "origin": {
@@ -101,6 +112,7 @@
     "nullable": [
       false,
       false,
+      true,
       false,
       false,
       true,
@@ -109,5 +121,5 @@
       false
     ]
   },
-  "hash": "398a0bb2e1ac2bc7d80b550ed2eb4effbcac23df7a9d79be24bee228b5fff26e"
+  "hash": "1b3ad8b6526380bc192256a4fde1e4c50e46bd6ba29693b8c66a97e01dab3a44"
 }

@@ -12,6 +12,17 @@
 //!
 //! 讀取需要 `record.read`，寫入需要 `record.write`。`data` 的格式見 [`crate::schema::value`]。
 //!
+//! # 單號（`record_no`）
+//!
+//! 資料類別有設定單號規則（`numbering_pattern`）時，新增資料由伺服器依規則產生單號
+//! （§8.4 `number_sequences`），回應的 [`Record::record_no`] 為產生的單號；沒有規則時為 `null`。
+//!
+//! - 單號**不可由客戶端指定或修改**：新增、修改的 request 中帶了 `record_no` 一律忽略；
+//!   `data` 內帶 `record_no` 鍵則視為未定義的欄位（`422 VALIDATION`）
+//! - [`RECORD_NO`] 為保留的代碼，不可作為欄位代碼
+//! - 修改規則只影響之後新增的資料，既有的單號不變；已刪除資料的單號不會再被使用
+//! - 修改規則後產生的單號與既有的單號重複時，新增失敗（`422 VALIDATION`），需要調整規則
+//!
 //! 錯誤：
 //!
 //! - 資料類別不存在、已停用或不是自訂資料類別；資料不存在或已刪除 → `404 NOT_FOUND`
@@ -28,6 +39,9 @@
 //! | `page`、`page_size` | 分頁，見 [`crate::pagination`] |
 //! | `sort` | 排序欄位代碼；前面加 `-` 代表由大到小，例如 `sort=-qty`。省略時依建立順序由新到舊 |
 //! | `filter.<field_key>.<op>` | 篩選條件，運算子見 [`FilterOp`]，例如 `filter.qty.gte=10` |
+//!
+//! `sort` 與 `filter` 可以使用 [`RECORD_NO`] 代表單號：依文字排序（沒有單號的資料排在最後），
+//! 篩選只支援 `eq`、`contains`，例如 `sort=-record_no`、`filter.record_no.contains=2611`。
 //!
 //! - 多個篩選條件須全部符合（AND）；同一個欄位的多個 `any` 合併為一個條件（符合任一個即可）
 //! - 值為空字串的條件視為未指定
@@ -46,10 +60,15 @@ use time::OffsetDateTime;
 use crate::Id;
 use crate::pagination::field as page_field;
 
+/// 單號在列表排序、篩選中使用的代碼，也是保留的欄位代碼（不可作為 `field_key`）。
+pub const RECORD_NO: &str = "record_no";
+
 /// 一筆自訂資料類別的資料。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub struct Record {
     pub id: Id,
+    /// 單號，由伺服器依資料類別的單號規則產生；沒有單號時為 `null`。
+    pub record_no: Option<String>,
     /// 所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。
     #[specta(type = std::collections::HashMap<String, specta_typescript::Unknown>)]
     pub data: Map<String, Value>,
@@ -67,7 +86,7 @@ pub struct Record {
     pub version: i32,
 }
 
-/// 新增資料的輸入。沒有帶到的欄位套用預設值。
+/// 新增資料的輸入。沒有帶到的欄位套用預設值。單號由伺服器產生，request 中的 `record_no` 會被忽略。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
 pub struct CreateRecordRequest {
     #[serde(default)]
@@ -75,7 +94,7 @@ pub struct CreateRecordRequest {
     pub data: Map<String, Value>,
 }
 
-/// 修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。
+/// 修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。單號不可修改，`record_no` 會被忽略。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub struct UpdateRecordRequest {
     /// 讀取時取得的版本號；不符時回傳 `409 CONFLICT`。
@@ -455,6 +474,7 @@ mod tests {
     fn record_json_shape() {
         let r = Record {
             id: crate::new_id(),
+            record_no: Some("SO202611-0001".into()),
             data: json!({ "qty": 1 }).as_object().unwrap().clone(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,
@@ -464,6 +484,7 @@ mod tests {
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["data"], json!({ "qty": 1 }));
+        assert_eq!(v["record_no"], json!("SO202611-0001"));
         assert_eq!(v["created_at"], json!("1970-01-01T00:00:00Z"));
         assert_eq!(serde_json::from_value::<Record>(v).unwrap(), r);
 
@@ -471,5 +492,9 @@ mod tests {
         assert!(req.data.is_empty());
         let req: CreateRecordRequest = serde_json::from_value(json!({})).unwrap();
         assert!(req.data.is_empty());
+        // 客戶端帶的單號被忽略
+        let req: CreateRecordRequest =
+            serde_json::from_value(json!({ "record_no": "X-001", "data": {} })).unwrap();
+        assert_eq!(req, CreateRecordRequest::default());
     }
 }

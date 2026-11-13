@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO number_sequences (id, entity_id, period_key, current_value)\n        VALUES ($1, $2, $3, 1)\n        ON CONFLICT (entity_id, period_key)\n            DO UPDATE SET current_value = number_sequences.current_value + 1\n        RETURNING current_value\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "current_value",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "number_sequences",
+            "name": "current_value"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "87ba8ce8d2613123107f93ad5080a15dab249bb9eef64ec117da52497e2a3c97"
+}

@@ -145,6 +145,7 @@ pub struct NewEntity<'a> {
     pub icon: Option<&'a str>,
     pub kind: &'a str,
     pub storage: &'a str,
+    pub numbering_pattern: Option<&'a str>,
     pub title_template: Option<&'a str>,
     pub sort_order: i32,
     pub created_by: Uuid,
@@ -161,9 +162,9 @@ pub async fn insert_entity<'e>(
     sqlx::query!(
         r#"
         INSERT INTO entity_definitions
-            (id, key, label, icon, kind, is_system, storage, title_template, sort_order,
-             created_at, created_by, updated_at, updated_by)
-        VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, $10, $9, $10)
+            (id, key, label, icon, kind, is_system, storage, numbering_pattern, title_template,
+             sort_order, created_at, created_by, updated_at, updated_by)
+        VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, $10, $11, $10, $11)
         "#,
         new.id,
         new.key,
@@ -171,6 +172,7 @@ pub async fn insert_entity<'e>(
         new.icon,
         new.kind,
         new.storage,
+        new.numbering_pattern,
         new.title_template,
         new.sort_order,
         new.created_at,
@@ -189,6 +191,7 @@ pub struct EntityUpdate<'a> {
     pub version: i32,
     pub label: &'a str,
     pub icon: Option<&'a str>,
+    pub numbering_pattern: Option<&'a str>,
     pub title_template: Option<&'a str>,
     pub sort_order: i32,
     pub is_active: bool,
@@ -203,14 +206,15 @@ pub async fn update_entity<'e>(
     let result = sqlx::query!(
         r#"
         UPDATE entity_definitions
-        SET label = $3, icon = $4, title_template = $5, sort_order = $6, is_active = $7,
-            updated_by = $8, version = version + 1
+        SET label = $3, icon = $4, numbering_pattern = $5, title_template = $6, sort_order = $7,
+            is_active = $8, updated_by = $9, version = version + 1
         WHERE id = $1 AND version = $2 AND deleted_at IS NULL
         "#,
         update.id,
         update.version,
         update.label,
         update.icon,
+        update.numbering_pattern,
         update.title_template,
         update.sort_order,
         update.is_active,

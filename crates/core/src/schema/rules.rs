@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use hammer_shared::record::RECORD_NO;
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DataType, EntityDefinition,
     EntityKind, EntityStorage, FieldDefinition, FieldOrderItem, FieldStorage, UpdateEntityRequest,
@@ -20,6 +21,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 
 use crate::CoreError;
+use crate::numbering::normalize_pattern;
 use crate::record_data::normalize_field_value;
 
 use super::type_change::{self, TypeChange};
@@ -29,6 +31,7 @@ pub mod field {
     pub const KEY: &str = "key";
     pub const LABEL: &str = "label";
     pub const KIND: &str = "kind";
+    pub const NUMBERING_PATTERN: &str = "numbering_pattern";
     pub const IS_ACTIVE: &str = "is_active";
     pub const FIELD_KEY: &str = "field_key";
     pub const DATA_TYPE: &str = "data_type";
@@ -56,11 +59,13 @@ pub struct NewEntityPlan {
     pub icon: Option<String>,
     pub kind: EntityKind,
     pub storage: EntityStorage,
+    pub numbering_pattern: Option<String>,
     pub title_template: Option<String>,
     pub sort_order: i32,
 }
 
 /// 檢查新增資料類別的輸入。M2a 只允許 `kind = master`，儲存方式固定為 `custom_records`。
+/// 單號規則依 [`normalize_pattern`] 檢查。
 pub fn plan_create_entity(req: &CreateEntityRequest) -> Result<NewEntityPlan, CoreError> {
     validate_key(&req.key).map_err(|e| invalid(field::KEY, e.message()))?;
     let label = validate_label(&req.label)?;
@@ -76,6 +81,7 @@ pub fn plan_create_entity(req: &CreateEntityRequest) -> Result<NewEntityPlan, Co
         icon: optional_text(req.icon.as_deref()),
         kind: EntityKind::Master,
         storage: EntityStorage::CustomRecords,
+        numbering_pattern: validate_numbering_pattern(req.numbering_pattern.as_deref())?,
         title_template: optional_text(req.title_template.as_deref()),
         sort_order: req.sort_order,
     })
@@ -85,6 +91,7 @@ pub fn plan_create_entity(req: &CreateEntityRequest) -> Result<NewEntityPlan, Co
 ///
 /// - `key` 有帶且與目前不同 → 錯誤（`key`）
 /// - 系統資料類別不可停用（`is_active`）
+/// - 單號規則依 [`normalize_pattern`] 檢查；修改後只影響之後新增的資料
 pub fn plan_update_entity(
     current: &EntityDefinition,
     req: &UpdateEntityRequest,
@@ -100,6 +107,7 @@ pub fn plan_update_entity(
     Ok(EntityDefinition {
         label: validate_label(&req.label)?,
         icon: optional_text(req.icon.as_deref()),
+        numbering_pattern: validate_numbering_pattern(req.numbering_pattern.as_deref())?,
         title_template: optional_text(req.title_template.as_deref()),
         sort_order: req.sort_order,
         is_active: req.is_active,
@@ -107,13 +115,25 @@ pub fn plan_update_entity(
     })
 }
 
+fn validate_numbering_pattern(pattern: Option<&str>) -> Result<Option<String>, CoreError> {
+    normalize_pattern(pattern).map_err(|e| invalid(field::NUMBERING_PATTERN, &e.message()))
+}
+
 /// 檢查新增欄位的輸入，回傳要寫入的欄位定義（自訂欄位、`storage = json`、啟用中）。
+///
+/// [`RECORD_NO`] 為保留的代碼（單號），不可作為欄位代碼。
 pub fn plan_create_field(
     entity_id: Id,
     req: &CreateFieldRequest,
     now: OffsetDateTime,
 ) -> Result<FieldDefinition, CoreError> {
     validate_key(&req.field_key).map_err(|e| invalid(field::FIELD_KEY, e.message()))?;
+    if req.field_key == RECORD_NO {
+        return Err(invalid(
+            field::FIELD_KEY,
+            "record_no 是系統保留的代碼（單號），請使用其他代碼",
+        ));
+    }
     let def = FieldDefinition {
         id: new_id(),
         entity_id,
@@ -587,6 +607,7 @@ mod tests {
             key: None,
             label: e.label.clone(),
             icon: e.icon.clone(),
+            numbering_pattern: e.numbering_pattern.clone(),
             title_template: e.title_template.clone(),
             sort_order: e.sort_order,
             is_active: e.is_active,
@@ -602,12 +623,14 @@ mod tests {
             label: " 維修單 ".into(),
             icon: Some("  ".into()),
             kind: EntityKind::Master,
+            numbering_pattern: Some(" RO{yyyyMM}-{000} ".into()),
             title_template: Some(" {name} ".into()),
             sort_order: 5,
         })
         .unwrap();
         assert_eq!(plan.label, "維修單");
         assert_eq!(plan.icon, None);
+        assert_eq!(plan.numbering_pattern.as_deref(), Some("RO{yyyyMM}-{000}"));
         assert_eq!(plan.title_template.as_deref(), Some("{name}"));
         assert_eq!(plan.storage, EntityStorage::CustomRecords);
         assert_eq!(plan.sort_order, 5);
@@ -620,6 +643,7 @@ mod tests {
             label: "維修單".into(),
             icon: None,
             kind: EntityKind::Master,
+            numbering_pattern: None,
             title_template: None,
             sort_order: 0,
         };
@@ -652,6 +676,20 @@ mod tests {
                 },
                 field::KIND,
             ),
+            (
+                CreateEntityRequest {
+                    numbering_pattern: Some("RO-{00}".into()),
+                    ..base.clone()
+                },
+                field::NUMBERING_PATTERN,
+            ),
+            (
+                CreateEntityRequest {
+                    numbering_pattern: Some("RO-{yyyy}".into()),
+                    ..base.clone()
+                },
+                field::NUMBERING_PATTERN,
+            ),
         ];
         for (req, expected) in cases {
             assert_eq!(field_of(&plan_create_entity(&req).unwrap_err()), expected);
@@ -679,6 +717,36 @@ mod tests {
         assert!(!next.is_active);
         assert_eq!(next.key, current.key);
         assert_eq!(next.version, current.version);
+    }
+
+    #[test]
+    fn update_entity_sets_changes_and_clears_numbering_pattern() {
+        let current = EntityDefinition {
+            numbering_pattern: Some("RO-{000}".into()),
+            ..entity(false)
+        };
+        let update = |pattern: Option<&str>| {
+            plan_update_entity(
+                &current,
+                &UpdateEntityRequest {
+                    numbering_pattern: pattern.map(str::to_owned),
+                    ..entity_update(&current)
+                },
+            )
+        };
+        assert_eq!(
+            update(Some(" RO{yy}-{0000} "))
+                .unwrap()
+                .numbering_pattern
+                .as_deref(),
+            Some("RO{yy}-{0000}")
+        );
+        assert_eq!(update(Some(" ")).unwrap().numbering_pattern, None);
+        assert_eq!(update(None).unwrap().numbering_pattern, None);
+        assert_eq!(
+            field_of(&update(Some("RO-{000}{000}")).unwrap_err()),
+            field::NUMBERING_PATTERN
+        );
     }
 
     #[test]
@@ -744,6 +812,11 @@ mod tests {
     fn create_field_rejects_invalid_key_and_unsupported_types() {
         assert_eq!(
             create_err(&create_req("1abc", DataType::Text)),
+            field::FIELD_KEY
+        );
+        // 單號的保留代碼
+        assert_eq!(
+            create_err(&create_req("record_no", DataType::Text)),
             field::FIELD_KEY
         );
         for t in [DataType::Relation, DataType::File, DataType::Formula] {

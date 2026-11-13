@@ -3,7 +3,7 @@
 //! - 單筆：[`find_record`]、[`find_record_for_update`]、[`insert_record`]、[`update_record_data`]、
 //!   [`soft_delete_record`]
 //! - 列表：[`list_records`]、[`count_records`]，條件為 [`RecordListFilter`]
-//! - 唯一性：[`value_taken`]
+//! - 唯一性：[`value_taken`]；單號不可重複的索引為 [`RECORD_NO_UNIQUE`]
 //! - 欄位型態變更（含已軟刪除的資料）：[`list_all_record_data_for_update`]、[`update_records_data`]
 //!
 //! 已軟刪除（`deleted_at IS NOT NULL`）的資料一律視為不存在。
@@ -18,11 +18,16 @@ use uuid::Uuid;
 
 use crate::DbError;
 
-/// `custom_records` 的資料列（不含 `parent_record_id`、`record_no`、`deleted_at`）。
+/// 同一個資料類別的單號不可重複的部分唯一索引（含已軟刪除的資料）。
+pub const RECORD_NO_UNIQUE: &str = "uq_custom_records_entity_record_no";
+
+/// `custom_records` 的資料列（不含 `parent_record_id`、`deleted_at`）。
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct RecordRow {
     pub id: Uuid,
     pub entity_id: Uuid,
+    /// 單號；資料類別沒有設定單號規則時為 `None`。
+    pub record_no: Option<String>,
     pub data: Value,
     pub created_at: OffsetDateTime,
     pub created_by: Option<Uuid>,
@@ -40,7 +45,8 @@ pub async fn find_record<'e>(
     let row = sqlx::query_as!(
         RecordRow,
         r#"
-        SELECT id, entity_id, data, created_at, created_by, updated_at, updated_by, version
+        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,
+               version
         FROM custom_records
         WHERE id = $1 AND entity_id = $2 AND deleted_at IS NULL
         "#,
@@ -61,7 +67,8 @@ pub async fn find_record_for_update<'e>(
     let row = sqlx::query_as!(
         RecordRow,
         r#"
-        SELECT id, entity_id, data, created_at, created_by, updated_at, updated_by, version
+        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,
+               version
         FROM custom_records
         WHERE id = $1 AND entity_id = $2 AND deleted_at IS NULL
         FOR UPDATE
@@ -79,13 +86,16 @@ pub async fn find_record_for_update<'e>(
 pub struct NewRecord<'a> {
     pub id: Uuid,
     pub entity_id: Uuid,
+    /// 依單號規則產生的單號；沒有規則時為 `None`。
+    pub record_no: Option<&'a str>,
     /// JSON 物件。
     pub data: &'a Value,
     pub created_by: Uuid,
     pub created_at: OffsetDateTime,
 }
 
-/// 新增一筆資料。違反「不可重複」的唯一索引（§7.5）時回傳違反 UNIQUE 限制的 [`DbError::Sqlx`]。
+/// 新增一筆資料。違反「不可重複」的唯一索引（§7.5）或單號重複（[`RECORD_NO_UNIQUE`]）時
+/// 回傳違反 UNIQUE 限制的 [`DbError::Sqlx`]。
 pub async fn insert_record<'e>(
     executor: impl PgExecutor<'e>,
     new: &NewRecord<'_>,
@@ -93,11 +103,12 @@ pub async fn insert_record<'e>(
     sqlx::query!(
         r#"
         INSERT INTO custom_records
-            (id, entity_id, data, created_at, created_by, updated_at, updated_by)
-        VALUES ($1, $2, $3, $4, $5, $4, $5)
+            (id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $5, $6)
         "#,
         new.id,
         new.entity_id,
+        new.record_no,
         new.data,
         new.created_at,
         new.created_by,
@@ -319,13 +330,25 @@ pub enum RecordCondition {
         field_key: String,
         values: Vec<String>,
     },
+    /// 單號等於（`record_no = value`）。
+    RecordNoEq(String),
+    /// 單號包含（不分大小寫，`ILIKE`）。`%`、`_`、`\` 視為一般字元。
+    RecordNoContains(String),
+}
+
+/// 排序的對象。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrderTarget {
+    /// `data` 的欄位，依 `cast` 轉型後比較。
+    Field { field_key: String, cast: JsonCast },
+    /// 單號（`record_no`，文字比較）。
+    RecordNo,
 }
 
 /// 排序方式。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordOrder {
-    pub field_key: String,
-    pub cast: JsonCast,
+    pub target: OrderTarget,
     pub descending: bool,
 }
 
@@ -349,15 +372,20 @@ pub async fn list_records<'e>(
     offset: i64,
 ) -> Result<Vec<RecordRow>, DbError> {
     let mut qb = QueryBuilder::<Postgres>::new(
-        "SELECT id, entity_id, data, created_at, created_by, updated_at, updated_by, version \
-         FROM custom_records",
+        "SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by, \
+         version FROM custom_records",
     );
     push_where(&mut qb, filter);
     match &filter.order {
         Some(order) => {
             let dir = if order.descending { " DESC" } else { " ASC" };
             qb.push(" ORDER BY ");
-            push_value(&mut qb, &order.field_key, order.cast);
+            match &order.target {
+                OrderTarget::Field { field_key, cast } => push_value(&mut qb, field_key, *cast),
+                OrderTarget::RecordNo => {
+                    qb.push("record_no");
+                }
+            }
             qb.push(dir).push(" NULLS LAST, id").push(dir);
         }
         None => {
@@ -420,6 +448,14 @@ fn push_where(qb: &mut QueryBuilder<Postgres>, filter: &RecordListFilter) {
                     .push(" ?| ")
                     .push_bind(values.clone())
                     .push("::text[])");
+            }
+            RecordCondition::RecordNoEq(value) => {
+                qb.push("record_no = ").push_bind(value.clone());
+            }
+            RecordCondition::RecordNoContains(text) => {
+                qb.push("record_no ILIKE ")
+                    .push_bind(format!("%{}%", escape_like(text)))
+                    .push(" ESCAPE '\\'");
             }
         }
     }
@@ -493,6 +529,8 @@ mod tests {
                     field_key: "tags".into(),
                     values: vec!["a".into()],
                 },
+                RecordCondition::RecordNoEq("SO-001".into()),
+                RecordCondition::RecordNoContains("0%".into()),
             ],
             order: None,
         };
@@ -504,7 +542,9 @@ mod tests {
              AND ((data ->> $2)::numeric) >= $3::numeric \
              AND (data ->> $4) ILIKE $5 ESCAPE '\\' \
              AND NOT (data ? $6) \
-             AND (data -> $7 ?| $8::text[])"
+             AND (data -> $7 ?| $8::text[]) \
+             AND record_no = $9 \
+             AND record_no ILIKE $10 ESCAPE '\\'"
         );
     }
 }

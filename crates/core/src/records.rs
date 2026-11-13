@@ -12,20 +12,24 @@
 //! 違反「不可重複」欄位的唯一索引（§7.5）時，找出與其他資料重複的欄位，回傳
 //! [`CoreError::InvalidFields`]（`422 VALIDATION`）。
 //!
+//! 資料類別有設定單號規則時，新增資料在同一個 transaction 內取號（[`crate::numbering`]、
+//! `hammer_db::number_sequence`）並寫入 `record_no`；單號不可由客戶端指定或修改。
+//!
 //! 列表的 query string 格式見 [`hammer_shared::record`]；欄位與運算子的檢查在 [`plan_list`]。
 
 use hammer_db::DbError;
 use hammer_db::ensure_version_matched;
+use hammer_db::number_sequence;
 use hammer_db::record::{
-    self as db, CompareOp, JsonCast, NewRecord, RecordCondition, RecordListFilter, RecordOrder,
-    RecordRow,
+    self as db, CompareOp, JsonCast, NewRecord, OrderTarget, RECORD_NO_UNIQUE, RecordCondition,
+    RecordListFilter, RecordOrder, RecordRow,
 };
 use hammer_db::schema as schema_db;
 use hammer_db::sqlx::{PgConnection, PgPool, PgTransaction};
 use hammer_shared::pagination::{Page, PageRequest};
 use hammer_shared::record::{
-    CreateRecordRequest, FilterOp, QueryParamError, Record, RecordFilter, RecordListQuery,
-    UpdateRecordRequest, query_param,
+    CreateRecordRequest, FilterOp, QueryParamError, RECORD_NO, Record, RecordFilter,
+    RecordListQuery, UpdateRecordRequest, query_param,
 };
 use hammer_shared::schema::{
     DataType, EntityDefinition, EntityStorage, FieldDefinition, FieldStorage, parse_value, to_json,
@@ -37,6 +41,7 @@ use time::OffsetDateTime;
 use crate::CoreError;
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
+use crate::numbering::{NumberingPattern, numbering_date};
 use crate::record_data::{FieldError, WriteMode, normalize_record_data};
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version, entity_from_row, field_from_row};
 
@@ -46,6 +51,8 @@ pub const RECORD_NOT_FOUND: &str = "找不到此資料";
 pub const VALUE_TAKEN: &str = "此值已被其他資料使用";
 /// 違反唯一索引，但找不到重複的欄位時（例如另一筆資料剛好被刪除）的錯誤訊息。
 pub const DUPLICATE_RECORD: &str = "資料與其他資料重複，請重新確認後再送出";
+/// 產生的單號與既有的單號重複時（修改單號規則後才可能發生）的錯誤訊息。
+pub const RECORD_NO_TAKEN: &str = "產生的單號已被其他資料使用，請調整此資料類別的單號規則";
 
 // ---------------------------------------------------------------------------
 // 查詢
@@ -105,7 +112,10 @@ pub async fn get_record(
 
 /// 新增資料。需要 `record.write`。
 ///
+/// 資料類別有設定單號規則時，依 `now` 的 Asia/Taipei 日期取號並寫入 `record_no`。
+///
 /// - `data` 不符合欄位定義、違反「不可重複」→ [`CoreError::InvalidFields`]
+/// - 產生的單號與既有的單號重複 → [`CoreError::Validation`]（[`RECORD_NO_TAKEN`]）
 pub async fn create_record(
     pool: &PgPool,
     ctx: &AuthContext,
@@ -123,12 +133,15 @@ pub async fn create_record(
             .map_err(CoreError::InvalidFields)?,
     );
 
+    // 驗證通過後才取號：流水號的列鎖定到 transaction 結束，越晚取號鎖定的時間越短
+    let record_no = next_record_no(&mut tx, &entity, now).await?;
     let id = new_id();
     let inserted = db::insert_record(
         &mut *tx,
         &NewRecord {
             id,
             entity_id: entity.id,
+            record_no: record_no.as_deref(),
             data: &data,
             created_by: ctx.user_id,
             created_at: now,
@@ -139,13 +152,18 @@ pub async fn create_record(
         return Err(write_error(pool, tx, err, entity.id, id, &fields, &data).await);
     }
 
+    // 操作紀錄包含產生的單號（`record_no` 是保留的代碼，不會與欄位衝突）
+    let mut after = data;
+    if let (Some(no), Value::Object(map)) = (&record_no, &mut after) {
+        map.insert(RECORD_NO.to_owned(), Value::String(no.clone()));
+    }
     record_audit(
         &mut tx,
         ctx,
         action::CREATE,
         &entity.key,
         id,
-        AuditDiff::between(None, Some(&data))?,
+        AuditDiff::between(None, Some(&after))?,
         client_info,
         now,
     )
@@ -259,7 +277,8 @@ pub async fn delete_record(
 
 /// 依欄位定義檢查列表的篩選、排序與分頁參數，轉成資料庫的查詢條件。
 ///
-/// - 只能使用有效（`is_active`）、`storage = json` 且目前支援的欄位
+/// - 只能使用有效（`is_active`）、`storage = json` 且目前支援的欄位，或代表單號的 [`RECORD_NO`]
+///   （排序依文字；篩選只支援 `eq`、`contains`）
 /// - 運算子必須適用於欄位型態（見 [`FilterOp`]）；值必須符合型態的格式
 /// - 同一個欄位的多個 `any` 合併成一個條件
 ///
@@ -279,14 +298,22 @@ pub fn plan_list(
         .sort
         .as_ref()
         .map(|sort| {
+            if sort.field_key == RECORD_NO {
+                return Ok(RecordOrder {
+                    target: OrderTarget::RecordNo,
+                    descending: sort.descending,
+                });
+            }
             let field = queryable_field(fields, &sort.field_key, query_param::SORT)?;
             let cast = sort_cast(field.data_type).ok_or_else(|| CoreError::InvalidParam {
                 param: query_param::SORT.to_owned(),
                 message: "此欄位型態不支援排序".to_owned(),
             })?;
             Ok::<_, CoreError>(RecordOrder {
-                field_key: field.field_key.clone(),
-                cast,
+                target: OrderTarget::Field {
+                    field_key: field.field_key.clone(),
+                    cast,
+                },
                 descending: sort.descending,
             })
         })
@@ -295,6 +322,15 @@ pub fn plan_list(
     let mut conditions: Vec<RecordCondition> = Vec::new();
     for filter in &query.filters {
         let param = filter.param_name();
+        if filter.field_key == RECORD_NO {
+            conditions.push(record_no_condition(filter).map_err(|message| {
+                CoreError::InvalidParam {
+                    param: param.clone(),
+                    message,
+                }
+            })?);
+            continue;
+        }
         let field = queryable_field(fields, &filter.field_key, &param)?;
         let condition =
             filter_condition(field, filter).map_err(|message| CoreError::InvalidParam {
@@ -420,6 +456,18 @@ fn filter_condition(
     }
 }
 
+/// 單號的篩選條件：只支援 `eq`、`contains`。
+fn record_no_condition(filter: &RecordFilter) -> Result<RecordCondition, String> {
+    match filter.op {
+        FilterOp::Eq => Ok(RecordCondition::RecordNoEq(filter.value.clone())),
+        FilterOp::Contains => Ok(RecordCondition::RecordNoContains(filter.value.clone())),
+        op => Err(format!(
+            "單號不支援 {} 篩選，只能使用 eq、contains",
+            op.as_str()
+        )),
+    }
+}
+
 /// 檢查比較值的格式，轉成資料庫可以轉型的文字。文字型態原樣使用。
 fn compare_value(data_type: DataType, raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
@@ -501,6 +549,7 @@ pub fn record_from_row(row: RecordRow) -> Result<Record, CoreError> {
     };
     Ok(Record {
         id: row.id,
+        record_no: row.record_no,
         data,
         created_at: row.created_at,
         created_by: row.created_by,
@@ -525,8 +574,10 @@ async fn write_error(
     fields: &[FieldDefinition],
     data: &Value,
 ) -> CoreError {
-    if err.unique_violation().is_none() {
-        return err.into();
+    match err.unique_violation() {
+        None => return err.into(),
+        Some(RECORD_NO_UNIQUE) => return CoreError::Validation(RECORD_NO_TAKEN.into()),
+        Some(_) => {}
     }
     // transaction 已中止，不能再查詢
     if let Err(e) = tx.rollback().await {
@@ -587,6 +638,26 @@ async fn record_audit(
     )
     .await?;
     Ok(())
+}
+
+/// 資料類別有設定單號規則時，取號並產生單號；沒有規則時為 `None`。必須在新增資料的
+/// transaction 內呼叫，資料寫入失敗而 rollback 時號碼一併還原。
+async fn next_record_no(
+    tx: &mut PgTransaction<'_>,
+    entity: &EntityDefinition,
+    now: OffsetDateTime,
+) -> Result<Option<String>, CoreError> {
+    let Some(pattern) = entity.numbering_pattern.as_deref() else {
+        return Ok(None);
+    };
+    // 寫入資料類別時已檢查過格式
+    let pattern = NumberingPattern::parse(pattern).map_err(|e| {
+        CoreError::Internal(format!("資料類別 {} 的單號規則不合法：{e}", entity.key))
+    })?;
+    let date = numbering_date(now);
+    let period_key = pattern.period_key(date);
+    let sequence = number_sequence::next_value(&mut **tx, entity.id, &period_key, new_id()).await?;
+    Ok(Some(pattern.format(date, sequence)))
 }
 
 async fn lock_record(
@@ -739,12 +810,51 @@ mod tests {
             assert_eq!(
                 filter.order,
                 Some(RecordOrder {
-                    field_key: key.into(),
-                    cast,
+                    target: OrderTarget::Field {
+                        field_key: key.into(),
+                        cast,
+                    },
                     descending: true,
                 }),
                 "{key}"
             );
+        }
+    }
+
+    #[test]
+    fn sort_and_filter_by_record_no() {
+        let (filter, _) = plan(&[
+            ("sort", "-record_no"),
+            ("filter.record_no.eq", "SO202611-0001"),
+            ("filter.record_no.contains", "2611"),
+        ])
+        .unwrap();
+        assert_eq!(
+            filter.order,
+            Some(RecordOrder {
+                target: OrderTarget::RecordNo,
+                descending: true,
+            })
+        );
+        assert_eq!(
+            filter.conditions,
+            vec![
+                RecordCondition::RecordNoEq("SO202611-0001".into()),
+                RecordCondition::RecordNoContains("2611".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn record_no_filter_supports_only_eq_and_contains() {
+        for param in [
+            "filter.record_no.gt",
+            "filter.record_no.empty",
+            "filter.record_no.any",
+        ] {
+            let (p, message) = invalid_param(&[(param, "1")]);
+            assert_eq!(p, param);
+            assert!(message.contains("單號"), "{message}");
         }
     }
 
@@ -910,6 +1020,7 @@ mod tests {
         let row = RecordRow {
             id: new_id(),
             entity_id: new_id(),
+            record_no: Some("RO-001".into()),
             data: serde_json::json!({ "qty": 1 }),
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,
@@ -919,6 +1030,7 @@ mod tests {
         };
         let r = record_from_row(row.clone()).unwrap();
         assert_eq!(r.data["qty"], 1);
+        assert_eq!(r.record_no.as_deref(), Some("RO-001"));
         assert_eq!(r.version, 3);
         let bad = RecordRow {
             data: serde_json::json!([1]),

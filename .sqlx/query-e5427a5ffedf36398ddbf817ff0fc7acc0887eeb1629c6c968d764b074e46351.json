@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO entity_definitions\n            (id, key, label, icon, kind, is_system, storage, numbering_pattern, title_template,\n             sort_order, created_at, created_by, updated_at, updated_by)\n        VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, $10, $11, $10, $11)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e5427a5ffedf36398ddbf817ff0fc7acc0887eeb1629c6c968d764b074e46351"
+}
