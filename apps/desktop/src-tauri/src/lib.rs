@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use hammer_shared::auth::MIN_PASSWORD_CHARS;
+use hammer_shared::schema::MAX_KEY_LEN;
 use hammer_shared::{audit, permission};
 
 use specta_typescript::Typescript;
@@ -53,6 +54,14 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::unlock_user,
             commands::delete_user,
             commands::list_audit_logs,
+            commands::list_entities,
+            commands::get_entity,
+            commands::create_entity,
+            commands::create_field,
+            commands::update_field,
+            commands::deactivate_field,
+            commands::reorder_fields,
+            commands::change_field_type,
         ])
         .constant("CLIENT_VERSION", CLIENT_VERSION)
         .constant("PERMISSIONS", permission_constants())
@@ -60,6 +69,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .constant("MIN_PASSWORD_CHARS", MIN_PASSWORD_CHARS as u32)
         // 操作紀錄的動作代碼（`hammer_shared::audit::ALL`），前端篩選選單使用
         .constant("AUDIT_ACTIONS", audit::ALL)
+        // 資料類別、欄位代碼的長度上限（`hammer_shared::schema::MAX_KEY_LEN`），前端即時檢查使用
+        .constant("MAX_KEY_LEN", MAX_KEY_LEN as u32)
         // 帳號管理
         .typ::<hammer_shared::user::Role>()
         .typ::<hammer_shared::user::User>()

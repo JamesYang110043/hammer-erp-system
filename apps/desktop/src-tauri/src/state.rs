@@ -7,6 +7,10 @@ use hammer_shared::Id;
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
 use hammer_shared::pagination::Page;
+use hammer_shared::schema::{
+    ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
+    EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
+};
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use hammer_shared::user::{
     CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
@@ -164,6 +168,92 @@ impl AppState {
     ) -> Result<Page<AuditLogEntry>, ClientError> {
         self.with_token(async |client, url, token| client.list_audit_logs(url, token, query).await)
             .await
+    }
+
+    /// 資料類別列表。
+    pub async fn list_entities(&self) -> Result<Vec<EntityDefinition>, ClientError> {
+        self.with_token(async |client, url, token| client.list_entities(url, token).await)
+            .await
+    }
+
+    /// 資料類別與其所有欄位定義。
+    pub async fn get_entity(&self, key: &str) -> Result<EntityDetail, ClientError> {
+        self.with_token(async |client, url, token| client.get_entity(url, token, key).await)
+            .await
+    }
+
+    /// 新增資料類別。
+    pub async fn create_entity(
+        &self,
+        req: &CreateEntityRequest,
+    ) -> Result<EntityDetail, ClientError> {
+        self.with_token(async |client, url, token| client.create_entity(url, token, req).await)
+            .await
+    }
+
+    /// 新增欄位。
+    pub async fn create_field(
+        &self,
+        key: &str,
+        req: &CreateFieldRequest,
+    ) -> Result<FieldDefinition, ClientError> {
+        self.with_token(async |client, url, token| client.create_field(url, token, key, req).await)
+            .await
+    }
+
+    /// 修改欄位。
+    pub async fn update_field(
+        &self,
+        key: &str,
+        field_key: &str,
+        req: &UpdateFieldRequest,
+    ) -> Result<FieldDefinition, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.update_field(url, token, key, field_key, req).await
+        })
+        .await
+    }
+
+    /// 停用欄位（資料保留）。
+    pub async fn deactivate_field(
+        &self,
+        key: &str,
+        field_key: &str,
+        req: &DeactivateFieldRequest,
+    ) -> Result<FieldDefinition, ClientError> {
+        self.with_token(async |client, url, token| {
+            client
+                .deactivate_field(url, token, key, field_key, req)
+                .await
+        })
+        .await
+    }
+
+    /// 調整欄位排序。
+    pub async fn reorder_fields(
+        &self,
+        key: &str,
+        req: &ReorderFieldsRequest,
+    ) -> Result<Vec<FieldDefinition>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.reorder_fields(url, token, key, req).await
+        })
+        .await
+    }
+
+    /// 變更欄位資料型態。
+    pub async fn change_field_type(
+        &self,
+        key: &str,
+        field_key: &str,
+        req: &ChangeFieldTypeRequest,
+    ) -> Result<FieldDefinition, ClientError> {
+        self.with_token(async |client, url, token| {
+            client
+                .change_field_type(url, token, key, field_key, req)
+                .await
+        })
+        .await
     }
 
     /// 以目前的 token 呼叫需要登入的 API。

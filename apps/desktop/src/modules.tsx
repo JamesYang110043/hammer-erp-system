@@ -1,5 +1,6 @@
 import {
   AuditOutlined,
+  DatabaseOutlined,
   DollarOutlined,
   FileTextOutlined,
   SettingOutlined,
@@ -13,6 +14,8 @@ import type { ReactNode } from 'react';
 import type { Permission } from './auth/permission';
 import { PERMISSIONS } from './bindings';
 import { AuditLogsPage } from './pages/audit/AuditLogsPage';
+import { EntitiesPage } from './pages/schema/EntitiesPage';
+import { FieldsPage } from './pages/schema/FieldsPage';
 import { UsersPage } from './pages/users/UsersPage';
 
 export interface ModuleEntry {
@@ -24,6 +27,8 @@ export interface ModuleEntry {
   permission?: Permission;
   /** 頁面內容；未指定時顯示「尚未開放」。 */
   element?: ReactNode;
+  /** 模組底下的頁面（例如 `:key` → `/schema/:key`），權限與模組相同。 */
+  children?: { path: string; element: ReactNode }[];
 }
 
 /**
@@ -43,6 +48,14 @@ export const MODULES: readonly ModuleEntry[] = [
     icon: <UserOutlined />,
     permission: PERMISSIONS.USER_MANAGE,
     element: <UsersPage />,
+  },
+  {
+    path: 'schema',
+    label: '資料類別',
+    icon: <DatabaseOutlined />,
+    permission: PERMISSIONS.SCHEMA_MANAGE,
+    element: <EntitiesPage />,
+    children: [{ path: ':key', element: <FieldsPage /> }],
   },
   {
     path: 'audit-logs',

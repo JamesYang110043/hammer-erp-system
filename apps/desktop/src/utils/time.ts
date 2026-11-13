@@ -5,7 +5,7 @@ import utc from 'dayjs/plugin/utc';
 dayjs.extend(utc);
 
 /** Asia/Taipei 固定 UTC+8，無日光節約（docs/architecture.md §5、D13）。 */
-const TAIPEI_OFFSET_MINUTES = 8 * 60;
+export const TAIPEI_OFFSET_MINUTES = 8 * 60;
 
 /** 伺服器的 RFC 3339 時間 → 台北時間字串，例如 `2026-11-13 09:05:30`。 */
 export function formatTaipei(iso: string, format = 'YYYY-MM-DD HH:mm:ss'): string {

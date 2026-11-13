@@ -17,14 +17,20 @@ export const router = createHashRouter([
         index: true,
         element: <Navigate to={MODULES[0]?.path ?? CONNECTION_SETTINGS_PATH} replace />,
       },
-      ...MODULES.map((m) => ({
-        path: m.path,
-        element: (
-          <RequirePermission permission={m.permission}>
-            {m.element ?? <PlaceholderPage title={m.label} />}
-          </RequirePermission>
-        ),
-      })),
+      ...MODULES.flatMap((m) => [
+        {
+          path: m.path,
+          element: (
+            <RequirePermission permission={m.permission}>
+              {m.element ?? <PlaceholderPage title={m.label} />}
+            </RequirePermission>
+          ),
+        },
+        ...(m.children ?? []).map((child) => ({
+          path: `${m.path}/${child.path}`,
+          element: <RequirePermission permission={m.permission}>{child.element}</RequirePermission>,
+        })),
+      ]),
       { path: CONNECTION_SETTINGS_PATH, element: <ConnectionSettingsPage /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],

@@ -144,7 +144,7 @@ desktop(src-tauri) ──▶ shared, formula
 | HTTP Client | reqwest（rustls） |
 | 型別產生 | tauri-specta |
 | 匯出 Excel | rust_xlsxwriter |
-| 前端 | React、TypeScript、Vite、Ant Design 5、TanStack Query、React Router、dayjs |
+| 前端 | React、TypeScript、Vite、Ant Design 5、TanStack Query、React Router、dayjs、dnd-kit（拖曳排序） |
 | Tauri 外掛 | updater（自動更新） |
 
 ---
