@@ -56,6 +56,22 @@ function renderAuditPage(extra: Record<string, CommandHandler> = {}) {
   return invoke;
 }
 
+/**
+ * 頁面第一次載入（啟動流程 → 路由 → 操作紀錄）的等待上限。
+ * CI 機器較慢，預設的 1 秒不夠（第一個測試還要載入 antd Table 等模組）。
+ */
+const PAGE_LOAD_TIMEOUT = 5000;
+
+/** 等第一筆紀錄出現，回傳該列。用文字查詢而不是 role 查詢：role 要計算整個 DOM 的 accessible name，很慢。 */
+async function firstRow() {
+  const cell = await screen.findByText(
+    '2026-11-13 09:00:00',
+    { selector: 'td' },
+    { timeout: PAGE_LOAD_TIMEOUT },
+  );
+  return within(cell.closest('tr')!);
+}
+
 function auditQueries(invoke: ReturnType<typeof mockCommands>) {
   return invoke.mock.calls
     .filter(([cmd]) => cmd === 'list_audit_logs')
@@ -66,8 +82,7 @@ describe('操作紀錄頁', () => {
   it('initial_load_sends_default_paging', async () => {
     const invoke = renderAuditPage();
 
-    const cell = await screen.findByRole('cell', { name: '2026-11-13 09:00:00' });
-    const row = within(cell.closest('tr')!);
+    const row = await firstRow();
     expect(row.getByText('王管理（admin）')).toBeInTheDocument();
     expect(row.getByText('修改')).toBeInTheDocument();
     expect(row.getByText('帳號')).toBeInTheDocument();
@@ -77,7 +92,7 @@ describe('操作紀錄頁', () => {
   it('filters_are_sent_as_query_params', async () => {
     const invoke = renderAuditPage();
     const user = userEvent.setup();
-    await screen.findByRole('cell', { name: '2026-11-13 09:00:00' });
+    await firstRow();
 
     // 日期區間
     await user.click(screen.getByPlaceholderText('開始日期'));
@@ -111,7 +126,7 @@ describe('操作紀錄頁', () => {
       },
     });
     const user = userEvent.setup();
-    await screen.findByText('共 120 筆');
+    await screen.findByText('共 120 筆', {}, { timeout: PAGE_LOAD_TIMEOUT });
 
     await user.click(screen.getByLabelText('動作'));
     await user.click(await screen.findByTitle('登入'));
@@ -128,7 +143,7 @@ describe('操作紀錄頁', () => {
   it('clear_resets_filters', async () => {
     const invoke = renderAuditPage();
     const user = userEvent.setup();
-    await screen.findByRole('cell', { name: '2026-11-13 09:00:00' });
+    await firstRow();
 
     await user.click(screen.getByLabelText('動作'));
     await user.click(await screen.findByTitle('登出'));
@@ -143,9 +158,9 @@ describe('操作紀錄頁', () => {
   it('expanded_row_shows_before_and_after', async () => {
     renderAuditPage();
     const user = userEvent.setup();
-    const cell = await screen.findByRole('cell', { name: '2026-11-13 09:00:00' });
+    const row = await firstRow();
 
-    await user.click(within(cell.closest('tr')!).getByRole('button', { name: /展開/ }));
+    await user.click(row.getByRole('button', { name: /展開/ }));
 
     expect(await screen.findByText('變更前')).toBeInTheDocument();
     expect(screen.getByText('變更後')).toBeInTheDocument();
@@ -162,7 +177,9 @@ describe('操作紀錄頁', () => {
     });
     renderWithProviders(<App />);
 
-    expect(await screen.findByLabelText('動作')).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText('動作', {}, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText('使用者')).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith('list_users', expect.anything());
   });

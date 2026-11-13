@@ -34,8 +34,19 @@ function renderUsersPage(extra: Record<string, CommandHandler> = {}) {
   return invoke;
 }
 
+/**
+ * 頁面第一次載入（啟動流程 → 路由 → 帳號列表）的等待上限。
+ * CI 機器較慢，預設的 1 秒不夠（第一個測試還要載入 antd Table 等模組）。
+ */
+const PAGE_LOAD_TIMEOUT = 5000;
+
+/** 帳號所在的表格列。用文字查詢而不是 role 查詢：role 要計算整個 DOM 的 accessible name，很慢。 */
 async function rowOf(username: string) {
-  const cell = await screen.findByRole('cell', { name: username });
+  const cell = await screen.findByText(
+    username,
+    { selector: 'td' },
+    { timeout: PAGE_LOAD_TIMEOUT },
+  );
   return within(cell.closest('tr')!);
 }
 
