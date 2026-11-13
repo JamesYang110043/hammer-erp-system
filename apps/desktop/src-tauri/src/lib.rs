@@ -85,6 +85,10 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::schema::UpdateEntityRequest>()
         .typ::<hammer_shared::schema::CreateFieldRequest>()
         .typ::<hammer_shared::schema::UpdateFieldRequest>()
+        .typ::<hammer_shared::schema::DeactivateFieldRequest>()
+        .typ::<hammer_shared::schema::EntityDetail>()
+        .typ::<hammer_shared::schema::ReorderFieldsRequest>()
+        .typ::<hammer_shared::schema::FieldOrderItem>()
         // command 回傳 `{ status: "ok", data } | { status: "error", error }`，錯誤有型別
         .error_handling(ErrorHandlingMode::Result)
 }

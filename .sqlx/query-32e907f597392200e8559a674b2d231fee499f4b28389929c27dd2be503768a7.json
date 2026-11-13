@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE entity_definitions\n        SET label = $3, icon = $4, title_template = $5, sort_order = $6, is_active = $7,\n            updated_by = $8, version = version + 1\n        WHERE id = $1 AND version = $2 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "32e907f597392200e8559a674b2d231fee499f4b28389929c27dd2be503768a7"
+}

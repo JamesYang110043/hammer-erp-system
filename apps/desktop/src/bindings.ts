@@ -423,6 +423,12 @@ export type DataType =
 /**  公式，唯讀，由系統計算（M2c）。 */
 "formula";
 
+/**  停用欄位的輸入（§7.2）。資料保留；系統欄位不可停用。 */
+export type DeactivateFieldRequest = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+};
+
 /**  `DELETE /api/v1/users/{id}` 的 query string。 */
 export type DeleteUserQuery = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
@@ -502,6 +508,21 @@ export type EntityDefinition_Serialize = {
 	updated_at: string,
 	/**  樂觀鎖定版本號（§9.4）。 */
 	version: number,
+};
+
+/**  資料類別與其所有欄位定義（含已停用），欄位依 `sort_order` 排序。 */
+export type EntityDetail = EntityDetail_Serialize | EntityDetail_Deserialize;
+
+/**  資料類別與其所有欄位定義（含已停用），欄位依 `sort_order` 排序。 */
+export type EntityDetail_Deserialize = {
+	entity: EntityDefinition_Deserialize,
+	fields: FieldDefinition_Deserialize[],
+};
+
+/**  資料類別與其所有欄位定義（含已停用），欄位依 `sort_order` 排序。 */
+export type EntityDetail_Serialize = {
+	entity: EntityDefinition_Serialize,
+	fields: FieldDefinition_Serialize[],
 };
 
 /**  資料類別的種類。對應 `entity_definitions.kind`。 */
@@ -664,6 +685,13 @@ export type FieldDefinition_Serialize = {
 	version: number,
 };
 
+/**  [`ReorderFieldsRequest`] 的一個欄位。 */
+export type FieldOrderItem = {
+	field_key: string,
+	/**  讀取時取得的欄位版本號；任一欄位不符時整批不寫入，回傳 `409 CONFLICT`。 */
+	version: number,
+};
+
 /**  欄位的儲存方式。對應 `field_definitions.storage`。 */
 export type FieldStorage = 
 /**  資料表的實體欄位（系統欄位）。 */
@@ -704,6 +732,16 @@ export type Page<T> = {
 	page: number,
 	/**  實際使用的每頁筆數（已套用預設值與上限）。 */
 	page_size: number,
+};
+
+/**
+ *  調整欄位排序的輸入。
+ * 
+ *  `fields` 依新的順序列出該資料類別的**所有**欄位（含已停用），每個欄位恰好一次；
+ *  第 n 個欄位的 `sort_order` 設為 n（從 0 開始）。
+ */
+export type ReorderFieldsRequest = {
+	fields: FieldOrderItem[],
 };
 
 /**
@@ -763,6 +801,8 @@ export type UpdateEntityRequest = UpdateEntityRequest_Serialize | UpdateEntityRe
 export type UpdateEntityRequest_Deserialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
+	/**  選填。資料類別代碼不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。 */
+	key?: string | null,
 	label: string,
 	/**  `null` 代表清除。 */
 	icon?: string | null,
@@ -777,6 +817,8 @@ export type UpdateEntityRequest_Deserialize = {
 export type UpdateEntityRequest_Serialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
+	/**  選填。資料類別代碼不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。 */
+	key: string | null,
 	label: string,
 	/**  `null` 代表清除。 */
 	icon: string | null,
@@ -790,19 +832,26 @@ export type UpdateEntityRequest_Serialize = {
 /**
  *  修改欄位的輸入（整筆取代可修改的屬性）。`field_key`、`storage` 不可修改。
  * 
- *  變更 `data_type` 依 §7.4 的規則檢查既有資料；系統欄位不可變更型態（§7.2）。
+ *  變更 `data_type` 依 §7.4 的規則檢查既有資料（尚未支援）；系統欄位不可變更型態（§7.2）。
+ *  系統欄位只能修改顯示名稱、顯示或隱藏、排序、欄寬、說明文字、必填與預設值（§7.2），
+ *  其他屬性必須維持原值。
  */
 export type UpdateFieldRequest = UpdateFieldRequest_Serialize | UpdateFieldRequest_Deserialize;
 
 /**
  *  修改欄位的輸入（整筆取代可修改的屬性）。`field_key`、`storage` 不可修改。
  * 
- *  變更 `data_type` 依 §7.4 的規則檢查既有資料；系統欄位不可變更型態（§7.2）。
+ *  變更 `data_type` 依 §7.4 的規則檢查既有資料（尚未支援）；系統欄位不可變更型態（§7.2）。
+ *  系統欄位只能修改顯示名稱、顯示或隱藏、排序、欄寬、說明文字、必填與預設值（§7.2），
+ *  其他屬性必須維持原值。
  */
 export type UpdateFieldRequest_Deserialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
+	/**  選填。欄位代碼不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。 */
+	field_key?: string | null,
 	label: string,
+	/**  目前必須與原本的型態相同（型態變更另有 API）；不同時回傳 `422 VALIDATION`。 */
 	data_type: DataType,
 	is_required: boolean,
 	is_visible: boolean,
@@ -826,12 +875,17 @@ export type UpdateFieldRequest_Deserialize = {
 /**
  *  修改欄位的輸入（整筆取代可修改的屬性）。`field_key`、`storage` 不可修改。
  * 
- *  變更 `data_type` 依 §7.4 的規則檢查既有資料；系統欄位不可變更型態（§7.2）。
+ *  變更 `data_type` 依 §7.4 的規則檢查既有資料（尚未支援）；系統欄位不可變更型態（§7.2）。
+ *  系統欄位只能修改顯示名稱、顯示或隱藏、排序、欄寬、說明文字、必填與預設值（§7.2），
+ *  其他屬性必須維持原值。
  */
 export type UpdateFieldRequest_Serialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
+	/**  選填。欄位代碼不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。 */
+	field_key: string | null,
 	label: string,
+	/**  目前必須與原本的型態相同（型態變更另有 API）；不同時回傳 `422 VALIDATION`。 */
 	data_type: DataType,
 	is_required: boolean,
 	is_visible: boolean,

@@ -6,6 +6,7 @@
 //! - [`audit`]：寫入與查詢 `audit_logs`
 //! - [`lock`]：advisory lock
 //! - [`role`]：角色與權限查詢
+//! - [`schema`]：資料類別、欄位定義與定義變更紀錄
 //! - [`session`]：`sessions` 的新增、查詢、更新與撤銷
 //! - [`settings`]：讀取 `settings`
 //! - [`user`]：認證用的使用者查詢，以及帳號的建立、修改、停用、刪除
@@ -20,6 +21,7 @@ mod migrate;
 mod optimistic;
 mod pool;
 pub mod role;
+pub mod schema;
 pub mod session;
 pub mod settings;
 pub mod user;

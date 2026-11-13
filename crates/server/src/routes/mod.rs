@@ -12,6 +12,7 @@
 
 pub mod audit_logs;
 pub mod auth;
+pub mod entities;
 pub mod health;
 pub mod setup;
 pub mod users;
@@ -21,7 +22,7 @@ use std::any::Any;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post, put};
 use hammer_shared::constants::API_PREFIX;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -83,6 +84,26 @@ fn protected_routes() -> Router<AppState> {
         .route("/users/{id}/reset-password", post(users::reset_password))
         .route("/users/{id}/unlock", post(users::unlock))
         .route("/audit-logs", get(audit_logs::list))
+        .route("/entities", get(entities::list).post(entities::create))
+        .route(
+            "/entities/{key}",
+            get(entities::get).patch(entities::update),
+        )
+        .route("/entities/{key}/fields", post(entities::create_field))
+        // 固定路徑 `order` 優先於 `{field_key}`。`order` 也是合法的欄位代碼，
+        // 所以同一路徑的 PATCH 轉給修改欄位
+        .route(
+            "/entities/{key}/fields/order",
+            put(entities::reorder_fields).patch(entities::update_order_field),
+        )
+        .route(
+            "/entities/{key}/fields/{field_key}",
+            patch(entities::update_field),
+        )
+        .route(
+            "/entities/{key}/fields/{field_key}/deactivate",
+            post(entities::deactivate_field),
+        )
 }
 
 async fn not_found() -> AppError {
