@@ -2,30 +2,36 @@
 #
 # 產出不簽章的安裝檔（簽章為待決事項 Q6），上傳為 workflow artifact，
 # 可從 Actions 頁面該次執行的 Artifacts 區下載。
-# 只動到文件等與桌面程式無關的檔案時，build job 會跳過（跳過視為通過）。
+#
+# 觸發時機（macOS runner 以 10 倍計費，所以 PR 不執行）：
+# - push 到 main：只有動到桌面程式相關檔案時才建置
+# - push tag（v*）：一律建置，用於發版
+# - 手動觸發（Actions 頁面 → Desktop Build → Run workflow）：一律建置，可選任一分支
 
 name: Desktop Build
 
 on:
-  pull_request:
-    branches: [main]
   push:
     branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
 
+# 每次執行都保留，不取消（main 的每個 commit 都要有建置結果）
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
-  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # 只在 push 到 main 時判斷改動範圍；tag 與手動觸發不需要
   changes:
     name: changes
+    if: github.event_name == 'push' && github.ref_type == 'branch'
     runs-on: ubuntu-latest
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
@@ -48,7 +54,13 @@ jobs:
   build:
     name: desktop-build (${{ matrix.name }})
     needs: changes
-    if: needs.changes.outputs.desktop == 'true'
+    # changes 被跳過（tag、手動觸發）時仍要執行，所以用 !failure() 取代預設的 success()
+    if: >-
+      !cancelled() && !failure() && (
+        github.event_name == 'workflow_dispatch' ||
+        github.ref_type == 'tag' ||
+        needs.changes.outputs.desktop == 'true'
+      )
     strategy:
       fail-fast: false
       matrix:
