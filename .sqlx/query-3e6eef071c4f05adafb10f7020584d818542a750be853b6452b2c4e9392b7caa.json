@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE view_layouts\n        SET deleted_at = $3, updated_by = $4, version = version + 1\n        WHERE id = $1 AND version = $2 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3e6eef071c4f05adafb10f7020584d818542a750be853b6452b2c4e9392b7caa"
+}

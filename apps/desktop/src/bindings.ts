@@ -490,6 +490,29 @@ export type CreateUserRequest = {
 	password: string,
 };
 
+/**  新增版面的輸入。 */
+export type CreateViewLayoutRequest = CreateViewLayoutRequest_Serialize | CreateViewLayoutRequest_Deserialize;
+
+/**  新增版面的輸入。 */
+export type CreateViewLayoutRequest_Deserialize = {
+	name: string,
+	/**  `true`：全域版面（需要 `schema.manage`）；預設為個人版面。 */
+	is_global?: boolean,
+	config?: LayoutConfig_Deserialize,
+	/**  `true`：設為預設，並取消同一範圍原本的預設。 */
+	is_default?: boolean,
+};
+
+/**  新增版面的輸入。 */
+export type CreateViewLayoutRequest_Serialize = {
+	name: string,
+	/**  `true`：全域版面（需要 `schema.manage`）；預設為個人版面。 */
+	is_global: boolean,
+	config: LayoutConfig_Serialize,
+	/**  `true`：設為預設，並取消同一範圍原本的預設。 */
+	is_default: boolean,
+};
+
 /**  目前登入的使用者（`GET /api/v1/auth/me`，以及登入回應中的 `user`）。 */
 export type CurrentUser = {
 	id: string,
@@ -538,8 +561,35 @@ export type DeactivateFieldRequest = {
 	version: number,
 };
 
+/**  `GET /api/v1/entities/{key}/layouts/default` 的回應。 */
+export type DefaultViewLayout = DefaultViewLayout_Serialize | DefaultViewLayout_Deserialize;
+
+/**  `GET /api/v1/entities/{key}/layouts/default` 的回應。 */
+export type DefaultViewLayout_Deserialize = {
+	source: LayoutSource,
+	/**  使用的版面；`source = generated` 時為 `null`。 */
+	layout?: ViewLayout_Deserialize | null,
+	/**  要套用的設定；有版面時與 `layout.config` 相同。 */
+	config: LayoutConfig_Deserialize,
+};
+
+/**  `GET /api/v1/entities/{key}/layouts/default` 的回應。 */
+export type DefaultViewLayout_Serialize = {
+	source: LayoutSource,
+	/**  使用的版面；`source = generated` 時為 `null`。 */
+	layout: ViewLayout_Serialize | null,
+	/**  要套用的設定；有版面時與 `layout.config` 相同。 */
+	config: LayoutConfig_Serialize,
+};
+
 /**  `DELETE /api/v1/users/{id}` 的 query string。 */
 export type DeleteUserQuery = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+};
+
+/**  `DELETE /api/v1/entities/{key}/layouts/{id}` 的 query string。 */
+export type DeleteViewLayoutQuery = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
 };
@@ -809,6 +859,19 @@ export type FieldStorage =
 "json";
 
 /**
+ *  篩選運算子。query string 中為 snake_case 字串。
+ * 
+ *  | 運算子 | 說明 | 適用型態 |
+ *  |---|---|---|
+ *  | `eq` | 等於 | `multi_select` 以外 |
+ *  | `contains` | 包含（不分大小寫） | `text`、`long_text` |
+ *  | `gt`、`gte`、`lt`、`lte` | 大於、大於等於、小於、小於等於 | `integer`、`decimal`、`money`、`date`、`datetime` |
+ *  | `empty` | 值為 `true`：沒有值；`false`：有值 | 全部 |
+ *  | `any` | 包含任一選項；可重複帶多個 | `multi_select` |
+ */
+export type FilterOp = "eq" | "contains" | "gt" | "gte" | "lt" | "lte" | "empty" | "any";
+
+/**
  *  `GET /api/v1/health` 的回應。
  * 
  *  資料庫正常時 HTTP `200`；資料庫異常時 HTTP `503`，內容仍是本型別。
@@ -824,6 +887,58 @@ export type HealthResponse = {
 
 /**  健康狀態。JSON 中為小寫字串（`"ok"`、`"error"`）。 */
 export type HealthStatus = "ok" | "error";
+
+/**  列表的一個顯示欄位。 */
+export type LayoutColumn = LayoutColumn_Serialize | LayoutColumn_Deserialize;
+
+/**  列表的一個顯示欄位。 */
+export type LayoutColumn_Deserialize = {
+	field_key: string,
+	/**  欄寬（px）；`null` 代表使用欄位定義的 `column_width`。 */
+	width?: number | null,
+};
+
+/**  列表的一個顯示欄位。 */
+export type LayoutColumn_Serialize = {
+	field_key: string,
+	/**  欄寬（px）；`null` 代表使用欄位定義的 `column_width`。 */
+	width: number | null,
+};
+
+/**  版面設定（`view_layouts.config`）。 */
+export type LayoutConfig = LayoutConfig_Serialize | LayoutConfig_Deserialize;
+
+/**  版面設定（`view_layouts.config`）。 */
+export type LayoutConfig_Deserialize = {
+	/**  顯示的欄位，依顯示順序。 */
+	columns?: LayoutColumn_Deserialize[],
+	/**  排序；`null` 代表依建立順序由新到舊。 */
+	sort?: RecordSort | null,
+	/**  篩選條件，須全部符合（AND）；同一個欄位的多個 `any` 符合任一個即可。 */
+	filters?: RecordFilter[],
+};
+
+/**  版面設定（`view_layouts.config`）。 */
+export type LayoutConfig_Serialize = {
+	/**  顯示的欄位，依顯示順序。 */
+	columns: LayoutColumn_Serialize[],
+	/**  排序；`null` 代表依建立順序由新到舊。 */
+	sort: RecordSort | null,
+	/**  篩選條件，須全部符合（AND）；同一個欄位的多個 `any` 符合任一個即可。 */
+	filters: RecordFilter[],
+};
+
+/**  預設版面的來源。 */
+export type LayoutSource = 
+/**  使用者自己的預設版面。 */
+"personal" | 
+/**  全域預設版面。 */
+"global" | 
+/**
+ *  沒有預設版面，依欄位定義自動產生：有效且顯示（`is_visible`）的欄位，
+ *  依欄位排序，欄寬為欄位定義的 `column_width`；不排序、不篩選。
+ */
+"generated";
 
 /**  `POST /api/v1/auth/login` 的輸入。 */
 export type LoginRequest = {
@@ -841,6 +956,24 @@ export type Page<T> = {
 	page: number,
 	/**  實際使用的每頁筆數（已套用預設值與上限）。 */
 	page_size: number,
+};
+
+/**  一個篩選條件：`filter.<field_key>.<op>=<value>`。 */
+export type RecordFilter = {
+	field_key: string,
+	op: FilterOp,
+	/**
+	 *  依欄位型態的文字表示：數值 `12.5`、日期 `YYYY-MM-DD`、日期時間 RFC 3339、
+	 *  勾選 `true` / `false`；`empty` 為 `true` / `false`。
+	 */
+	value: string,
+};
+
+/**  排序：`sort=<field_key>` 或 `sort=-<field_key>`。 */
+export type RecordSort = {
+	field_key: string,
+	/**  `true`：由大到小。 */
+	descending: boolean,
 };
 
 /**
@@ -1038,6 +1171,29 @@ export type UpdateUserRequest_Serialize = {
 	is_active: boolean | null,
 };
 
+/**  修改版面的輸入。只修改有帶到的屬性；個人或全域建立後不可變更。 */
+export type UpdateViewLayoutRequest = UpdateViewLayoutRequest_Serialize | UpdateViewLayoutRequest_Deserialize;
+
+/**  修改版面的輸入。只修改有帶到的屬性；個人或全域建立後不可變更。 */
+export type UpdateViewLayoutRequest_Deserialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	name?: string | null,
+	config?: LayoutConfig_Deserialize | null,
+	/**  `true`：設為預設，並取消同一範圍原本的預設；`false`：取消預設。 */
+	is_default?: boolean | null,
+};
+
+/**  修改版面的輸入。只修改有帶到的屬性；個人或全域建立後不可變更。 */
+export type UpdateViewLayoutRequest_Serialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	name: string | null,
+	config: LayoutConfig_Serialize | null,
+	/**  `true`：設為預設，並取消同一範圍原本的預設；`false`：取消預設。 */
+	is_default: boolean | null,
+};
+
 /**  帳號（帳號管理畫面使用）。 */
 export type User = User_Serialize | User_Deserialize;
 
@@ -1144,6 +1300,43 @@ export type Validation_Serialize = {
 	max_length?: number,
 	/**  文字必須符合的正規表示式，`text` 使用。 */
 	pattern?: string,
+};
+
+/**  一個列表版面。 */
+export type ViewLayout = ViewLayout_Serialize | ViewLayout_Deserialize;
+
+/**  一個列表版面。 */
+export type ViewLayout_Deserialize = {
+	id: string,
+	/**  擁有者；`null` 代表全域版面。 */
+	user_id?: string | null,
+	name: string,
+	/**  已略過參照到停用或不存在欄位的部分。 */
+	config: LayoutConfig_Deserialize,
+	is_default: boolean,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號（§9.4）。 */
+	version: number,
+};
+
+/**  一個列表版面。 */
+export type ViewLayout_Serialize = {
+	id: string,
+	/**  擁有者；`null` 代表全域版面。 */
+	user_id: string | null,
+	name: string,
+	/**  已略過參照到停用或不存在欄位的部分。 */
+	config: LayoutConfig_Serialize,
+	is_default: boolean,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號（§9.4）。 */
+	version: number,
 };
 
 /* Tauri Specta runtime */

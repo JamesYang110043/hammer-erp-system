@@ -14,6 +14,7 @@ pub mod audit_logs;
 pub mod auth;
 pub mod entities;
 pub mod health;
+pub mod layouts;
 pub mod records;
 pub mod setup;
 pub mod users;
@@ -118,6 +119,16 @@ fn protected_routes() -> Router<AppState> {
             get(records::get)
                 .patch(records::update)
                 .delete(records::delete),
+        )
+        .route(
+            "/entities/{key}/layouts",
+            get(layouts::list).post(layouts::create),
+        )
+        // 固定路徑 `default` 優先於 `{id}`（版面 id 是 uuid，不會衝突）
+        .route("/entities/{key}/layouts/default", get(layouts::get_default))
+        .route(
+            "/entities/{key}/layouts/{id}",
+            patch(layouts::update).delete(layouts::delete),
         )
 }
 
