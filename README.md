@@ -300,7 +300,7 @@ pnpm typecheck        # 型別不符時會在這裡報錯
 
 ## CI（GitHub Actions）
 
-PR 到 `main` 以及 push 到 `main` 時自動執行。同一個 PR 有新的 push 時，會取消舊的執行。
+`ci.yml` 在 PR 到 `main` 以及 push 到 `main` 時自動執行，同一個 PR 有新的 push 時會取消舊的執行。`desktop-build.yml` 不在 PR 執行（macOS runner 以 10 倍計費），只在 push 到 `main`、push `v*` tag 或手動觸發時執行。
 
 | Workflow | Job | 內容 |
 |---|---|---|
@@ -311,8 +311,9 @@ PR 到 `main` 以及 push 到 `main` 時自動執行。同一個 PR 有新的 pu
 | | `e2e-web` | `pnpm test:e2e`（Playwright，Chromium）；失敗時截圖與 trace 上傳為 artifact `playwright-results` |
 | `desktop-build.yml` | `desktop-build (macos)`、`desktop-build (windows)` | `tauri build`，產出不簽章的 `.dmg`（Apple Silicon）與 `.msi`／`.exe` |
 
-- 只改 `docs/`、README 等文件時，Rust、前端與桌面建置的 job 都會跳過。
+- 只改 `docs/`、README 等文件時，Rust、前端與桌面建置的 job 都會跳過。tag 與手動觸發的桌面建置不看改動範圍，一律執行。
 - 只改 Rust（`crates/`、`apps/desktop/src-tauri/`）時，`web-test`、`e2e-web` 會跳過；如果同時更新了 `src/bindings.ts`，前端 job 仍會執行。
+- 想在 PR 階段先確認能打包：Actions 頁面 → **Desktop Build** → **Run workflow**，選擇 PR 的分支。
 - 安裝檔下載：Actions 頁面 → 選擇該次 **Desktop Build** 執行 → 頁面下方 **Artifacts**。保留 14 天。
 - 安裝檔沒有簽章（architecture.md Q6）。macOS 開啟時若出現「已損毀」，執行 `xattr -cr "/Applications/Hammer ERP.app"`；Windows 出現 SmartScreen 警告時選「其他資訊 → 仍要執行」。
 - 覆蓋率門檻的計算在 `.github/scripts/coverage-gate.sh`。本機量測：`cargo llvm-cov --workspace`（需先安裝 `cargo-llvm-cov` 並設定 `DATABASE_URL`）。
@@ -322,7 +323,7 @@ PR 到 `main` 以及 push 到 `main` 時自動執行。同一個 PR 有新的 pu
 建議在 `main` 設定分支保護（Settings → Branches 或 Rulesets）：
 
 - 合併前必須透過 PR，且至少 1 人 review
-- 以下 check 必須通過：`rust-lint`、`rust-test`、`web-test`、`e2e-web`、`desktop-build (macos)`、`desktop-build (windows)`。因改動範圍而跳過的 job 會視為通過
+- 以下 check 必須通過：`rust-lint`、`rust-test`、`web-test`、`e2e-web`。因改動範圍而跳過的 job 會視為通過（`desktop-build` 不在 PR 執行，不能設為必要 check）
 - 合併前分支必須是最新（Require branches to be up to date）
 
 > 目前 repo 是 private 且使用 GitHub Free 方案，無法設定分支保護（API 回傳 403）。在升級方案或改為公開之前，**CI 沒通過的 PR 仍然可以 merge**，merge 前請自行確認所有 check 都是綠燈。
