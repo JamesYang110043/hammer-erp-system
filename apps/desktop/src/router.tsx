@@ -21,7 +21,7 @@ export const router = createHashRouter([
         path: m.path,
         element: (
           <RequirePermission permission={m.permission}>
-            <PlaceholderPage title={m.label} />
+            {m.element ?? <PlaceholderPage title={m.label} />}
           </RequirePermission>
         ),
       })),

@@ -1847,6 +1847,7 @@ dependencies = [
  "tauri-build",
  "tauri-specta",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "url",
 ]
@@ -3746,6 +3747,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

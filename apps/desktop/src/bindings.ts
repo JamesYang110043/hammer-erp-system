@@ -32,9 +32,31 @@ export const commands = {
 	currentUser: () => typedError<CurrentUser | null, ClientError_Serialize>(__TAURI_INVOKE("current_user")),
 	/**  修改自己的密碼。 */
 	changePassword: (req: ChangePasswordRequest) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("change_password", { req })),
+	/**  角色列表（需要 `user.manage`）。 */
+	listRoles: () => typedError<Role[], ClientError_Serialize>(__TAURI_INVOKE("list_roles")),
+	/**  帳號列表（需要 `user.manage`）。 */
+	listUsers: () => typedError<User_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_users")),
+	/**  新增帳號（需要 `user.manage`）。建立後第一次登入必須修改密碼。 */
+	createUser: (req: CreateUserRequest) => typedError<User_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_user", { req })),
+	/**
+	 *  修改帳號的顯示名稱、角色、停用狀態（需要 `user.manage`）。
+	 * 
+	 *  `req.version` 不符時回傳 `409 CONFLICT`。
+	 */
+	updateUser: (id: string, req: UpdateUserRequest_Deserialize) => typedError<User_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_user", { id, req })),
+	/**  管理者重設密碼為臨時密碼（需要 `user.manage`）。 */
+	resetUserPassword: (id: string, req: ResetPasswordRequest) => typedError<User_Serialize, ClientError_Serialize>(__TAURI_INVOKE("reset_user_password", { id, req })),
+	/**  解除登入失敗鎖定（需要 `user.manage`）。 */
+	unlockUser: (id: string) => typedError<User_Serialize, ClientError_Serialize>(__TAURI_INVOKE("unlock_user", { id })),
+	/**  刪除帳號（需要 `user.manage`）。`version` 不符時回傳 `409 CONFLICT`。 */
+	deleteUser: (id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_user", { id, version })),
+	/**  查詢操作紀錄（需要 `audit.read`）。 */
+	listAuditLogs: (query: AuditLogQuery_Deserialize) => typedError<Page<AuditLogEntry_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_audit_logs", { query })),
 };
 
 /* Constants */
+export const AUDIT_ACTIONS = ["create","update","delete","post","void","login","login_failed","logout","password_change","export"] as const;
+
 export const CLIENT_VERSION = "0.1.0" as const;
 
 export const MIN_PASSWORD_CHARS = 10 as const;

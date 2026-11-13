@@ -3,8 +3,14 @@
 use std::path::PathBuf;
 use std::sync::{PoisonError, RwLock};
 
+use hammer_shared::Id;
+use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
+use hammer_shared::pagination::Page;
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
+use hammer_shared::user::{
+    CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
+};
 
 use crate::api_client::ApiClient;
 use crate::error::ClientError;
@@ -100,6 +106,63 @@ impl AppState {
     /// 修改自己的密碼。
     pub async fn change_password(&self, req: &ChangePasswordRequest) -> Result<(), ClientError> {
         self.with_token(async |client, url, token| client.change_password(url, token, req).await)
+            .await
+    }
+
+    /// 角色列表（帳號管理）。
+    pub async fn list_roles(&self) -> Result<Vec<Role>, ClientError> {
+        self.with_token(async |client, url, token| client.list_roles(url, token).await)
+            .await
+    }
+
+    /// 帳號列表。
+    pub async fn list_users(&self) -> Result<Vec<User>, ClientError> {
+        self.with_token(async |client, url, token| client.list_users(url, token).await)
+            .await
+    }
+
+    /// 新增帳號。
+    pub async fn create_user(&self, req: &CreateUserRequest) -> Result<User, ClientError> {
+        self.with_token(async |client, url, token| client.create_user(url, token, req).await)
+            .await
+    }
+
+    /// 修改帳號（顯示名稱、角色、停用）。
+    pub async fn update_user(&self, id: Id, req: &UpdateUserRequest) -> Result<User, ClientError> {
+        self.with_token(async |client, url, token| client.update_user(url, token, id, req).await)
+            .await
+    }
+
+    /// 管理者重設密碼。
+    pub async fn reset_user_password(
+        &self,
+        id: Id,
+        req: &ResetPasswordRequest,
+    ) -> Result<User, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.reset_user_password(url, token, id, req).await
+        })
+        .await
+    }
+
+    /// 解除鎖定。
+    pub async fn unlock_user(&self, id: Id) -> Result<User, ClientError> {
+        self.with_token(async |client, url, token| client.unlock_user(url, token, id).await)
+            .await
+    }
+
+    /// 刪除帳號。
+    pub async fn delete_user(&self, id: Id, query: &DeleteUserQuery) -> Result<(), ClientError> {
+        self.with_token(async |client, url, token| client.delete_user(url, token, id, query).await)
+            .await
+    }
+
+    /// 操作紀錄查詢。
+    pub async fn list_audit_logs(
+        &self,
+        query: &AuditLogQuery,
+    ) -> Result<Page<AuditLogEntry>, ClientError> {
+        self.with_token(async |client, url, token| client.list_audit_logs(url, token, query).await)
             .await
     }
 
