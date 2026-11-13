@@ -1,4 +1,5 @@
 import {
+  AuditOutlined,
   DollarOutlined,
   FileTextOutlined,
   SettingOutlined,
@@ -11,6 +12,8 @@ import type { ReactNode } from 'react';
 
 import type { Permission } from './auth/permission';
 import { PERMISSIONS } from './bindings';
+import { AuditLogsPage } from './pages/audit/AuditLogsPage';
+import { UsersPage } from './pages/users/UsersPage';
 
 export interface ModuleEntry {
   /** 路由路徑（不含開頭的 `/`） */
@@ -19,10 +22,12 @@ export interface ModuleEntry {
   icon: ReactNode;
   /** 需要的權限；沒有權限的使用者看不到選單，也無法開啟頁面。未指定時任何登入者都能使用。 */
   permission?: Permission;
+  /** 頁面內容；未指定時顯示「尚未開放」。 */
+  element?: ReactNode;
 }
 
 /**
- * 左側選單的模組。目前都是空白頁，之後各里程碑逐一實作。
+ * 左側選單的模組。沒有 `element` 的是尚未開發的空白頁，之後各里程碑逐一實作。
  *
  * 依 `permission` 顯示或隱藏只是輔助，權限仍以伺服器檢查為準（docs/architecture.md §6.2）。
  */
@@ -32,7 +37,20 @@ export const MODULES: readonly ModuleEntry[] = [
   { path: 'suppliers', label: '廠商', icon: <ShopOutlined /> },
   { path: 'invoices', label: '發票', icon: <FileTextOutlined /> },
   { path: 'finance', label: '財務', icon: <DollarOutlined /> },
-  { path: 'users', label: '帳號管理', icon: <UserOutlined />, permission: PERMISSIONS.USER_MANAGE },
+  {
+    path: 'users',
+    label: '帳號管理',
+    icon: <UserOutlined />,
+    permission: PERMISSIONS.USER_MANAGE,
+    element: <UsersPage />,
+  },
+  {
+    path: 'audit-logs',
+    label: '操作紀錄',
+    icon: <AuditOutlined />,
+    permission: PERMISSIONS.AUDIT_READ,
+    element: <AuditLogsPage />,
+  },
   {
     path: 'system',
     label: '系統設定',
