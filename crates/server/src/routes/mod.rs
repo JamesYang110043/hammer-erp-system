@@ -14,6 +14,7 @@ pub mod audit_logs;
 pub mod auth;
 pub mod entities;
 pub mod health;
+pub mod records;
 pub mod setup;
 pub mod users;
 
@@ -103,6 +104,16 @@ fn protected_routes() -> Router<AppState> {
         .route(
             "/entities/{key}/fields/{field_key}/deactivate",
             post(entities::deactivate_field),
+        )
+        .route(
+            "/entities/{key}/records",
+            get(records::list).post(records::create),
+        )
+        .route(
+            "/entities/{key}/records/{id}",
+            get(records::get)
+                .patch(records::update)
+                .delete(records::delete),
         )
 }
 

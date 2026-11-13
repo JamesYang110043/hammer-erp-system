@@ -911,6 +911,18 @@ GROUP BY product_id;
   - 排序必須是確定的：主要排序欄位之後加上 `id` 作為次要排序（uuid v7 依時間遞增），避免同值的資料在頁與頁之間重複或遺漏。
   - 篩選條件與分頁參數放在同一個 query 型別，不使用 `#[serde(flatten)]`（query string 搭配 flatten 時數字欄位無法解析）。空字串的文字條件視為未指定；時間使用 RFC 3339，區間為「含開始、不含結束」。
   - 筆數很少、不會持續增加的列表（角色、帳號、幣別等）可以不分頁，直接回傳陣列。
+- 業務資料列表的篩選與排序（通用資料 API 先採用，之後系統資料類別的列表與 `view_layouts` 的篩選條件沿用同一格式；型別在 `hammer_shared::record`）：
+  - 排序：`sort=<field_key>` 由小到大，`sort=-<field_key>` 由大到小；省略時依建立順序由新到舊（`id DESC`）。只能使用有效（未停用）的欄位。依欄位型態比較（`integer`、`decimal`、`money` 以數值，`date`、`datetime` 以時間），不會按字串排序；沒有值的資料排在最後。
+  - 篩選：`filter.<field_key>.<op>=<value>`，例如 `filter.qty.gte=10`。多個條件須全部符合（AND）。
+    | op | 說明 | 適用型態 |
+    |---|---|---|
+    | `eq` | 等於 | `multi_select` 以外 |
+    | `contains` | 包含（不分大小寫） | `text`、`long_text` |
+    | `gt`、`gte`、`lt`、`lte` | 大於、大於等於、小於、小於等於 | `integer`、`decimal`、`money`、`date`、`datetime` |
+    | `empty` | `true`：沒有值；`false`：有值 | 全部 |
+    | `any` | 包含任一選項；可重複帶多個（`filter.tags.any=a&filter.tags.any=b`），符合任一個即可 | `multi_select` |
+  - 值的格式：數值 `12.5`、日期 `YYYY-MM-DD`、日期時間 RFC 3339、勾選 `true` / `false`。值為空字串的條件視為未指定。
+  - 欄位不存在或已停用、運算子不適用於該型態、值的格式錯誤 → `422 VALIDATION`，`details.field` 為參數名稱（例如 `filter.qty.gte`）。不認得的參數名稱忽略。
 
 ---
 

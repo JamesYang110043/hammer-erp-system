@@ -5,6 +5,7 @@
 //! - [`ensure_version_matched`]：樂觀鎖定檢查，版本不符時回傳 [`DbError::Conflict`]
 //! - [`audit`]：寫入與查詢 `audit_logs`
 //! - [`lock`]：advisory lock
+//! - [`record`]：自訂資料類別的資料（`custom_records`）
 //! - [`role`]：角色與權限查詢
 //! - [`schema`]：資料類別、欄位定義與定義變更紀錄
 //! - [`session`]：`sessions` 的新增、查詢、更新與撤銷
@@ -20,6 +21,7 @@ pub mod lock;
 mod migrate;
 mod optimistic;
 mod pool;
+pub mod record;
 pub mod role;
 pub mod schema;
 pub mod session;

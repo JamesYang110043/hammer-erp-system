@@ -12,6 +12,7 @@ pub mod health;
 pub mod id;
 pub mod pagination;
 pub mod permission;
+pub mod record;
 pub mod role;
 pub mod schema;
 pub mod setup;
