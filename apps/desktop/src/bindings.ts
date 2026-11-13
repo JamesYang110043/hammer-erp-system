@@ -74,6 +74,20 @@ export const commands = {
 	changeFieldType: (key: string, fieldKey: string, req: ChangeFieldTypeRequest_Deserialize) => typedError<FieldDefinition_Serialize, ClientError_Serialize>(__TAURI_INVOKE("change_field_type", { key, fieldKey, req })),
 	/**  資料列表（需要 `record.read`）。分頁、排序與篩選見 [`RecordListQuery`]。 */
 	listRecords: (key: string, query: RecordListQuery_Deserialize) => typedError<Page<Record_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_records", { key, query })),
+	/**  取得一筆資料（需要 `record.read`）。 */
+	getRecord: (key: string, id: string) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("get_record", { key, id })),
+	/**
+	 *  新增資料（需要 `record.write`）。沒有帶到的欄位由伺服器套用預設值。
+	 * 
+	 *  資料不符合欄位定義時回傳 `422 VALIDATION`，`details.fields` 列出出錯的欄位。
+	 */
+	createRecord: (key: string, req: CreateRecordRequest_Deserialize) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_record", { key, req })),
+	/**
+	 *  修改資料（需要 `record.write`）。只合併有帶到的欄位，`null` 代表清空。
+	 * 
+	 *  `version` 不符時回傳 `409 CONFLICT`；資料不符合欄位定義時回傳 `422 VALIDATION`。
+	 */
+	updateRecord: (key: string, id: string, req: UpdateRecordRequest_Deserialize) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_record", { key, id, req })),
 	/**  刪除資料（需要 `record.write`）。`version` 不符時回傳 `409 CONFLICT`。 */
 	deleteRecord: (key: string, id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_record", { key, id, version })),
 	/**  列表版面：全域版面與自己的個人版面（需要 `record.read`）。 */
@@ -512,6 +526,19 @@ export type CreateFieldRequest_Serialize = {
 	help_text: string | null,
 	/**  排序（預設 0）。 */
 	sort_order: number,
+};
+
+/**  新增資料的輸入。沒有帶到的欄位套用預設值。 */
+export type CreateRecordRequest = CreateRecordRequest_Serialize | CreateRecordRequest_Deserialize;
+
+/**  新增資料的輸入。沒有帶到的欄位套用預設值。 */
+export type CreateRecordRequest_Deserialize = {
+	data?: { [key in string]: unknown },
+};
+
+/**  新增資料的輸入。沒有帶到的欄位套用預設值。 */
+export type CreateRecordRequest_Serialize = {
+	data: { [key in string]: unknown },
 };
 
 /**  `POST /api/v1/users` 的輸入。建立後 `must_change_password = true`。 */
@@ -1252,6 +1279,23 @@ export type UpdateFieldRequest_Serialize = {
 	sort_order: number,
 	/**  停用欄位（§7.2），資料保留。系統欄位不可停用。 */
 	is_active: boolean,
+};
+
+/**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。 */
+export type UpdateRecordRequest = UpdateRecordRequest_Serialize | UpdateRecordRequest_Deserialize;
+
+/**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。 */
+export type UpdateRecordRequest_Deserialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	data?: { [key in string]: unknown },
+};
+
+/**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。 */
+export type UpdateRecordRequest_Serialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	data: { [key in string]: unknown },
 };
 
 /**  `PATCH /api/v1/users/{id}` 的輸入。省略或 `null` 的欄位不修改。 */
