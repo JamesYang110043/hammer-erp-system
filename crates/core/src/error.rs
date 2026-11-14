@@ -36,6 +36,10 @@ pub enum CoreError {
     #[error("{0}")]
     BadRequest(String),
 
+    /// 上傳的內容超過大小上限（例如附件，§8.4），訊息直接顯示給使用者（繁體中文）。
+    #[error("{0}")]
+    PayloadTooLarge(String),
+
     /// 資料的多個欄位不符合欄位定義（[`crate::record_data`]）。
     /// API 回應為 `VALIDATION`，`details.fields` 為 `[{ "field_key", "message" }]`，列出所有出錯的欄位。
     #[error("資料有 {} 個欄位不正確，請修正後再送出", .0.len())]
@@ -122,6 +126,7 @@ impl CoreError {
             | Self::DuplicateValues { .. }
             | Self::LastAdmin => ErrorCode::Validation,
             Self::BadRequest(_) => ErrorCode::BadRequest,
+            Self::PayloadTooLarge(_) => ErrorCode::PayloadTooLarge,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::Unauthorized => ErrorCode::Unauthorized,
             Self::Forbidden(_) => ErrorCode::Forbidden,

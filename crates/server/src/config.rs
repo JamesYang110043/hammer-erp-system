@@ -9,6 +9,7 @@
 //! | `HAMMER_LOG_LEVEL` | `log_level` | `info` |
 //! | `HAMMER_LOG_FORMAT` | `log_format` | 開發版 `pretty`，release 版 `json` |
 //! | `HAMMER_ATTACHMENTS_DIR` | `attachments_dir` | `data/attachments` |
+//! | `HAMMER_ATTACHMENT_MAX_BYTES` | `attachment_max_bytes` | `20971520`（20 MiB） |
 //! | `HAMMER_BODY_LIMIT_BYTES` | `body_limit_bytes` | `10485760`（10 MiB） |
 //!
 //! 設定檔為 TOML，路徑由 `HAMMER_CONFIG` 指定；沒有設定時不讀取設定檔。
@@ -90,6 +91,8 @@ pub struct Config {
     pub log_format: LogFormat,
     /// 附件存放目錄。
     pub attachments_dir: PathBuf,
+    /// 附件單檔大小上限（位元組）。上傳附件的路由不受 [`Config::body_limit_bytes`] 限制。
+    pub attachment_max_bytes: u64,
     /// Request body 大小上限（位元組）。
     pub body_limit_bytes: usize,
 }
@@ -103,6 +106,7 @@ impl fmt::Debug for Config {
             .field("log_level", &self.log_level)
             .field("log_format", &self.log_format)
             .field("attachments_dir", &self.attachments_dir)
+            .field("attachment_max_bytes", &self.attachment_max_bytes)
             .field("body_limit_bytes", &self.body_limit_bytes)
             .finish()
     }
@@ -117,6 +121,7 @@ struct FileConfig {
     log_level: Option<String>,
     log_format: Option<LogFormat>,
     attachments_dir: Option<PathBuf>,
+    attachment_max_bytes: Option<u64>,
     body_limit_bytes: Option<usize>,
 }
 
@@ -125,6 +130,7 @@ impl Config {
         SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 8080);
     pub const DEFAULT_LOG_LEVEL: &str = "info";
     pub const DEFAULT_ATTACHMENTS_DIR: &str = "data/attachments";
+    pub const DEFAULT_ATTACHMENT_MAX_BYTES: u64 = 20 * 1024 * 1024;
     pub const DEFAULT_BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024;
 
     /// 從程序的環境變數與 `HAMMER_CONFIG` 指定的設定檔載入。
@@ -151,6 +157,17 @@ impl Config {
             .or(file.database_url)
             .ok_or(ConfigError::Missing("DATABASE_URL"))?;
 
+        let attachment_max_bytes = parse_env(&env, "HAMMER_ATTACHMENT_MAX_BYTES")?
+            .or(file.attachment_max_bytes)
+            .unwrap_or(Self::DEFAULT_ATTACHMENT_MAX_BYTES);
+        if attachment_max_bytes == 0 {
+            return Err(ConfigError::Invalid {
+                name: "HAMMER_ATTACHMENT_MAX_BYTES",
+                value: attachment_max_bytes.to_string(),
+                reason: "必須大於 0".to_owned(),
+            });
+        }
+
         Ok(Self {
             database_url,
             listen_addr: parse_env(&env, "HAMMER_LISTEN_ADDR")?
@@ -166,6 +183,7 @@ impl Config {
                 .map(PathBuf::from)
                 .or(file.attachments_dir)
                 .unwrap_or_else(|| PathBuf::from(Self::DEFAULT_ATTACHMENTS_DIR)),
+            attachment_max_bytes,
             body_limit_bytes: parse_env(&env, "HAMMER_BODY_LIMIT_BYTES")?
                 .or(file.body_limit_bytes)
                 .unwrap_or(Self::DEFAULT_BODY_LIMIT_BYTES),
@@ -226,6 +244,46 @@ mod tests {
         assert_eq!(config.log_format, LogFormat::default_for_build());
         assert_eq!(config.attachments_dir, PathBuf::from("data/attachments"));
         assert_eq!(config.body_limit_bytes, 10 * 1024 * 1024);
+        assert_eq!(config.attachment_max_bytes, 20 * 1024 * 1024);
+    }
+
+    #[test]
+    fn attachment_max_bytes_from_env_and_file() {
+        let config = Config::from_sources(
+            Some("attachment_max_bytes = 1024"),
+            env_of(&[("DATABASE_URL", "postgres://x")]),
+        )
+        .unwrap();
+        assert_eq!(config.attachment_max_bytes, 1024);
+        let config = Config::from_sources(
+            Some("attachment_max_bytes = 1024"),
+            env_of(&[
+                ("DATABASE_URL", "postgres://x"),
+                ("HAMMER_ATTACHMENT_MAX_BYTES", "2048"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(config.attachment_max_bytes, 2048);
+        for bad in ["0", "-1", "abc"] {
+            let err = Config::from_sources(
+                None,
+                env_of(&[
+                    ("DATABASE_URL", "postgres://x"),
+                    ("HAMMER_ATTACHMENT_MAX_BYTES", bad),
+                ]),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        name: "HAMMER_ATTACHMENT_MAX_BYTES",
+                        ..
+                    }
+                ),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

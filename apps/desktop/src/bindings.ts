@@ -650,7 +650,10 @@ export type DataType =
 "multi_select" | 
 /**  關聯到其他資料類別的一筆資料（M2b），見 [`CreateFieldRequest::relation_entity_id`]。 */
 "relation" | 
-/**  附件（M2b）。 */
+/**
+ *  附件（M2b）：值為附件的 id（`attachments.id`），附件先以 `POST /api/v1/attachments` 上傳，
+ *  見 [`crate::attachment`]。
+ */
 "file" | 
 /**  公式，唯讀，由系統計算（M2c）。 */
 "formula";

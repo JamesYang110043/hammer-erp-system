@@ -21,6 +21,9 @@
 //!
 //! 關聯欄位（`relation`）：寫入時檢查有變動的關聯所指的資料存在且未刪除，回應填入
 //! [`Record::relations`]（[`crate::relations`]）。篩選只支援 `eq`、`empty`，不能排序。
+//!
+//! 附件欄位（`file`）：寫入時在同一個 transaction 內檢查並綁定有變動的附件，被換掉或清空的舊附件
+//! 標記為刪除（[`crate::attachments`]）；軟刪除資料時附件保留。篩選只支援 `empty`，不能排序。
 
 use hammer_db::DbError;
 use hammer_db::ensure_version_matched;
@@ -44,6 +47,7 @@ use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
 use crate::CoreError;
+use crate::attachments::{apply_file_changes, prepare_file_changes};
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
 use crate::numbering::{NumberingPattern, numbering_date};
@@ -191,6 +195,7 @@ pub async fn create_record(
     let data = normalize_record_data(&fields, &req.data, WriteMode::Create)
         .map_err(CoreError::InvalidFields)?;
     check_relations(&mut tx, &fields, &data, None).await?;
+    let files = prepare_file_changes(&mut tx, &fields, &data, None).await?;
     let data = Value::Object(data);
 
     // 驗證通過後才取號：流水號的列鎖定到 transaction 結束，越晚取號鎖定的時間越短
@@ -211,6 +216,7 @@ pub async fn create_record(
     if let Err(err) = inserted {
         return Err(write_error(pool, tx, err, entity.id, id, &fields, &data).await);
     }
+    apply_file_changes(&mut tx, ctx, &entity.key, id, &files, client_info, now).await?;
 
     // 操作紀錄包含產生的單號（`record_no` 是保留的代碼，不會與欄位衝突）
     let mut after = data;
@@ -268,6 +274,7 @@ pub async fn update_record(
     }
     // 只檢查有變動的關聯：目標之後被刪除時，仍可修改其他欄位
     check_relations(&mut tx, &fields, &data, Some(existing)).await?;
+    let files = prepare_file_changes(&mut tx, &fields, &data, Some(existing)).await?;
     let data = Value::Object(data);
 
     let updated = db::update_record_data(&mut *tx, id, req.version, &data, ctx.user_id).await;
@@ -277,6 +284,7 @@ pub async fn update_record(
         }
         Err(err) => return Err(write_error(pool, tx, err, entity.id, id, &fields, &data).await),
     }
+    apply_file_changes(&mut tx, ctx, &entity.key, id, &files, client_info, now).await?;
 
     record_audit(
         &mut tx,

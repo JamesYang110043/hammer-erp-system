@@ -3,6 +3,7 @@
 //! API Server 與 Tauri 端都依賴本 crate，確保兩邊的定義一致。
 //! 本 crate 位於相依方向的最底層，不可依賴專案內其他 crate（`docs/architecture.md` §4）。
 
+pub mod attachment;
 pub mod audit;
 pub mod auth;
 pub mod constants;

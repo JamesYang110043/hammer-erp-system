@@ -12,13 +12,14 @@
 //! | `boolean` | boolean | [`FieldValue::Boolean`] |
 //! | `multi_select` | string[]（不可重複） | [`FieldValue::MultiSelect`] |
 //! | `relation` | string，目標資料的 id（UUID），存成小寫連字號格式 | [`FieldValue::Relation`] |
+//! | `file` | string，附件的 id（`attachments.id`，UUID），存成小寫連字號格式 | [`FieldValue::File`] |
 //!
 //! JSON `null` 代表沒有值（[`parse_value`] 回傳 `Ok(None)`）。
 //!
-//! `file`、`formula` 的值在 M2b、M2c 處理，目前回傳 [`InvalidValue::Unsupported`]。
+//! `formula` 的值在 M2c 處理，目前回傳 [`InvalidValue::Unsupported`]。
 //!
 //! 這裡只檢查「格式」。必填、`validation`、選項是否存在、小數位數、關聯的資料是否存在等
-//! 依欄位定義的檢查不在此處。
+//! 依欄位定義的檢查不在此處；附件是否存在、是否已被使用在 `hammer_core::attachments`。
 
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -58,6 +59,8 @@ pub enum FieldValue {
     MultiSelect(Vec<String>),
     /// `relation`（目標資料的 id）。
     Relation(Id),
+    /// `file`（附件的 id）。
+    File(Id),
 }
 
 /// 欄位值不符合存值格式。
@@ -77,7 +80,9 @@ pub enum InvalidValue {
     DuplicateOption,
     /// `relation` 的字串不是 UUID。
     InvalidId,
-    /// 此型態的值尚未支援（`file`、`formula`）。
+    /// `file` 的字串不是 UUID。
+    InvalidAttachmentId,
+    /// 此型態的值尚未支援（`formula`）。
     Unsupported(DataType),
 }
 
@@ -94,7 +99,8 @@ impl InvalidValue {
                 DataType::Boolean => "必須是 true 或 false",
                 DataType::MultiSelect => "必須是文字陣列",
                 DataType::Relation => "必須是資料 id（文字）",
-                DataType::File | DataType::Formula => "格式不正確",
+                DataType::File => "必須是附件 id（文字）",
+                DataType::Formula => "格式不正確",
             },
             Self::InvalidInteger => "必須是整數，且不可超過 ±9007199254740991",
             Self::InvalidDecimal => "數字格式不正確",
@@ -102,6 +108,7 @@ impl InvalidValue {
             Self::InvalidDateTime => "日期時間格式不正確，必須是 RFC 3339",
             Self::DuplicateOption => "選項不可重複",
             Self::InvalidId => "資料 id 格式不正確",
+            Self::InvalidAttachmentId => "附件 id 格式不正確",
             Self::Unsupported(_) => "目前不支援此欄位型態",
         }
     }
@@ -165,7 +172,11 @@ pub fn parse_value(data_type: DataType, json: &Value) -> Result<Option<FieldValu
         DataType::Relation => FieldValue::Relation(
             Id::try_parse(json.as_str().ok_or(mismatch)?).map_err(|_| InvalidValue::InvalidId)?,
         ),
-        DataType::File | DataType::Formula => {
+        DataType::File => FieldValue::File(
+            Id::try_parse(json.as_str().ok_or(mismatch)?)
+                .map_err(|_| InvalidValue::InvalidAttachmentId)?,
+        ),
+        DataType::Formula => {
             return Err(InvalidValue::Unsupported(data_type));
         }
     };
@@ -184,7 +195,9 @@ pub fn to_json(value: &FieldValue) -> Value {
         FieldValue::MultiSelect(items) => {
             Value::Array(items.iter().cloned().map(Value::String).collect())
         }
-        FieldValue::Relation(id) => Value::String(id.hyphenated().to_string()),
+        FieldValue::Relation(id) | FieldValue::File(id) => {
+            Value::String(id.hyphenated().to_string())
+        }
     }
 }
 
@@ -463,13 +476,35 @@ mod tests {
     }
 
     #[test]
-    fn file_formula_are_unsupported() {
-        for t in [DataType::File, DataType::Formula] {
+    fn file_values() {
+        let id = "0190c3a2-0000-7000-8000-000000000000";
+        assert_round_trip(DataType::File, json!(id));
+        let parsed = parse(DataType::File, json!("0190C3A2000070008000000000000000"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed, FieldValue::File(Id::try_parse(id).unwrap()));
+        assert_eq!(to_json(&parsed), json!(id));
+        assert_eq!(parse(DataType::File, Value::Null), Ok(None));
+        for v in [json!(""), json!("report.pdf")] {
             assert_eq!(
-                parse(t, json!("0190c3a2-0000-7000-8000-000000000000")),
-                Err(InvalidValue::Unsupported(t))
+                parse(DataType::File, v.clone()),
+                Err(InvalidValue::InvalidAttachmentId),
+                "{v}"
             );
-            assert_eq!(parse(t, Value::Null), Err(InvalidValue::Unsupported(t)));
         }
+        for v in [json!(1), json!([id]), json!({ "id": id })] {
+            assert_eq!(
+                parse(DataType::File, v.clone()),
+                Err(InvalidValue::TypeMismatch(DataType::File)),
+                "{v}"
+            );
+        }
+    }
+
+    #[test]
+    fn formula_is_unsupported() {
+        let t = DataType::Formula;
+        assert_eq!(parse(t, json!("1")), Err(InvalidValue::Unsupported(t)));
+        assert_eq!(parse(t, Value::Null), Err(InvalidValue::Unsupported(t)));
     }
 }

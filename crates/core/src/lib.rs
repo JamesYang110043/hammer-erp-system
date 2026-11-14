@@ -1,5 +1,6 @@
 //! 商業邏輯：單據流程、庫存 FIFO、匯率換算、權限判斷。
 //!
+//! - [`attachments`]：附件的上傳、下載、綁定到 `file` 欄位與清理
 //! - [`audit`]：操作紀錄的 diff 與寫入
 //! - [`audit_logs`]：操作紀錄查詢（分頁、篩選）
 //! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定、目前使用者與權限檢查
@@ -16,6 +17,7 @@
 //!
 //! 相依方向見 `docs/architecture.md` §4。
 
+pub mod attachments;
 pub mod audit;
 pub mod audit_logs;
 pub mod auth;

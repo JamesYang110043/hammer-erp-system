@@ -20,5 +20,8 @@ log_level = "info"
 # 附件存放目錄（相對路徑以啟動時的工作目錄為準）
 attachments_dir = "data/attachments"
 
+# 附件單檔大小上限（位元組），預設 20 MiB；上傳附件不受下方 body_limit_bytes 限制
+attachment_max_bytes = 20971520
+
 # Request body 大小上限（位元組）
 body_limit_bytes = 10485760

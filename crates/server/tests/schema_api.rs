@@ -754,7 +754,6 @@ async fn create_rejects_unsupported_input(pool: PgPool) {
     create_entity(&pool, &token, "repair_order").await;
     for (data_type, field) in [
         (json!("relation"), "relation_entity_id"),
-        (json!("file"), "data_type"),
         (json!("formula"), "data_type"),
         (json!("select"), "options"),
         (json!("decimal"), "decimal_places"),

@@ -15,7 +15,7 @@
 //! | 其他 | 逐筆轉換（[`TypeChange::Checked`]），只要有一筆失敗就拒絕 |
 //!
 //! `relation` 只能轉成 `text` / `long_text`（值為資料 id 的文字），其他型態不能轉成 `relation`；
-//! `file`、`formula` 不能轉換（M2b、M2c）。
+//! `file` 不能轉換（附件綁定在欄位上，轉換後無法維持附件與欄位值的對應）；`formula` 在 M2c 處理。
 //!
 //! 「允許」代表型態本身一定能轉換。轉換後的值一律再依新的欄位定義正規化
 //! （[`normalize_field_value`]），所以新的設定比較嚴格時（例如字元數上限、選項、小數位數），
@@ -70,8 +70,11 @@ pub fn classify(from: DataType, to: DataType) -> Result<TypeChange, &'static str
     if from == DataType::Relation && !matches!(to, DataType::Text | DataType::LongText) {
         return Err("關聯欄位只能轉換成單行文字或多行文字");
     }
+    if from == DataType::File || to == DataType::File {
+        return Err("附件欄位不能變更資料型態");
+    }
     if !from.is_value_supported() || !to.is_value_supported() {
-        return Err("附件、公式欄位目前不能變更資料型態");
+        return Err("公式欄位目前不能變更資料型態");
     }
     let safe = matches!(to, DataType::Text | DataType::LongText)
         || matches!(
@@ -194,7 +197,8 @@ fn text_of(value: &FieldValue) -> String {
         FieldValue::Decimal(_)
         | FieldValue::Date(_)
         | FieldValue::DateTime(_)
-        | FieldValue::Relation(_) => match to_json(value) {
+        | FieldValue::Relation(_)
+        | FieldValue::File(_) => match to_json(value) {
             Value::String(s) => s,
             other => other.to_string(),
         },

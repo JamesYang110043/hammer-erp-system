@@ -228,6 +228,15 @@ desktop(src-tauri) ──▶ shared, formula
 - 選擇器：`GET /api/v1/entities/{key}/records/lookup?q=&limit=` 依標題比對（以空白分隔的每個詞都要出現，不分大小寫），回傳未刪除資料的 `id`、`title`，由新到舊；`limit` 預設 20、上限 50。需要 `record.read`。標題不存入資料庫，所以依 id 分批讀取資料、產生標題後比對。
 - 不做：反向列表（「這台設備的所有維修單」）、多選關聯。
 
+**附件欄位（`file`）**（上傳、下載、綁定與清理在 `hammer_core::attachments`；API 格式見 `hammer_shared::attachment`）：
+
+- 先上傳 `POST /api/v1/attachments`（`multipart/form-data`，檔案放在 `file` 欄位；需要 `record.write`），回傳 `id`、`file_name`、`mime_type`、`size_bytes`、`sha256`。此時附件**未綁定**。
+- 新增或修改資料時把附件 id 寫入 `file` 欄位：值必須是未刪除、未綁定的附件，否則 `422 VALIDATION`（`details.fields` 指出欄位）；同一個附件不可用在第二筆資料或第二個欄位。寫入資料的 transaction 內以 `FOR UPDATE` 鎖定附件並綁定（寫入 `attachments` 的 `entity_key`、`record_id`、`field_key`）。修改資料時只處理有變動的 `file` 欄位。
+- 欄位值被換掉或清空：舊附件標記刪除（`deleted_at`），檔案保留，之後無法下載。資料被軟刪除：附件保留，仍可下載。
+- 下載 `GET /api/v1/attachments/{id}`（需要 `record.read`）：`Content-Disposition: attachment` 帶原始檔名（`filename*` 為 UTF-8，支援中文）；未綁定的附件也可以下載（存檔前預覽）。
+- 不可設定預設值、不能變更型態（§7.4）。篩選只支援 `empty`；不能排序。資料標題中為空字串（§8.5）。
+- 不做：一個欄位多個檔案、圖片縮圖、線上預覽。
+
 ### 7.4 欄位型態變更規則
 
 | 從 → 到 | 規則 |
@@ -238,6 +247,7 @@ desktop(src-tauri) ──▶ shared, formula
 | `select` → `multi_select` | 允許 |
 | `relation` → `text` / `long_text` | 允許（值為資料 id 的文字，轉換後清除 `relation_entity_id`） |
 | `relation` → 其他型態、其他型態 → `relation` | 不允許 |
+| `file` → 任意型態、任意型態 → `file` | 不允許（附件綁定在欄位上，轉換後無法維持附件與欄位值的對應） |
 | 其他轉換 | 先驗證全部既有資料。只要有一筆轉換失敗就拒絕，並列出失敗的資料 |
 
 - 轉換範圍包含已軟刪除的資料，在同一個交易內完成資料轉換與欄位定義更新。
@@ -454,8 +464,18 @@ products ───────────────────────�
 | entity_key / record_id / field_key | | 附件屬於哪筆資料的哪個欄位 |
 | file_name / mime_type / size_bytes | | |
 | sha256 | TEXT | |
-| storage_path | TEXT | 伺服器磁碟上的相對路徑 |
+| storage_path | TEXT | 相對於附件目錄的路徑，以附件 id 命名 |
 | ＋共通欄位 | | |
+
+索引：`(entity_key, record_id)`、未綁定附件的部分索引 `(created_at) WHERE record_id IS NULL`。`entity_key`、`record_id`、`field_key` 三者同時有值（已綁定）或同時為 `NULL`（未綁定）。
+
+**規則**（`file` 欄位的用法見 §7.3）：
+
+- 上傳時計算 SHA-256；單檔大小上限由環境變數 `HAMMER_ATTACHMENT_MAX_BYTES` 設定（預設 20 MiB），超過回傳 `413 PAYLOAD_TOO_LARGE`。上傳的路由不受一般 request 的 body 上限（`HAMMER_BODY_LIMIT_BYTES`）限制。
+- 檔名只存在資料庫（去除路徑與控制字元，最多 255 字元）；磁碟上以附件 id 命名，避免路徑穿越。上傳中的檔案寫在附件目錄的 `tmp/`，完成後才移到正式位置。MIME 使用上傳時的 `Content-Type`，沒有或格式不正確時為 `application/octet-stream`。
+- 欄位值被換掉或清空時標記 `deleted_at`，檔案保留；資料被軟刪除時附件不變。
+- 未綁定超過 24 小時的附件由清理函式刪除資料列與檔案（伺服器啟動時與之後每 24 小時執行一次）；同時刪除超過 24 小時的暫存檔。已綁定的附件（含已標記刪除的）不清理。
+- 操作紀錄（`entity_key = attachments`、`record_id` 為附件 id）：上傳 `create`、綁定 `update`、換掉或清空 `delete`；清理 `delete`，操作者為 `NULL`。
 
 ---
 
@@ -998,7 +1018,7 @@ GROUP BY product_id;
     | `eq` | 等於（`relation` 的值為資料 id） | `multi_select` 以外 |
     | `contains` | 包含（不分大小寫） | `text`、`long_text` |
     | `gt`、`gte`、`lt`、`lte` | 大於、大於等於、小於、小於等於 | `integer`、`decimal`、`money`、`date`、`datetime` |
-    | `empty` | `true`：沒有值；`false`：有值 | 全部 |
+    | `empty` | `true`：沒有值；`false`：有值 | 全部（`file` 只支援這個） |
     | `any` | 包含任一選項；可重複帶多個（`filter.tags.any=a&filter.tags.any=b`），符合任一個即可 | `multi_select` |
   - 值的格式：數值 `12.5`、日期 `YYYY-MM-DD`、日期時間 RFC 3339、勾選 `true` / `false`。值為空字串的條件視為未指定。
   - `relation` 只支援 `eq`、`empty`，不能排序（§7.3）。
@@ -1015,7 +1035,7 @@ GROUP BY product_id;
 | 資料庫版本 | sqlx migrations。伺服器啟動時自動套用 |
 | 初始資料 | migration 內建三種角色與權限、內建資料類別與欄位定義、幣別、稅率。第一次啟動時引導建立管理者帳號 |
 | 備份 | 每日 `pg_dump`，保留 30 天；並提供管理者手動備份與還原的功能（⏳ 備份存放位置待定） |
-| 附件 | 存在伺服器磁碟，與資料庫一起備份 |
+| 附件 | 存在伺服器磁碟的附件目錄（`HAMMER_ATTACHMENTS_DIR`；開發預設 `data/attachments`，Docker 為具名 volume `attachments`，掛載在 `/var/lib/hammer/attachments`，重建容器時保留），與資料庫一起備份。⏳ 正式的存放位置與備份方式待 Q4 |
 | CI | GitHub Actions：在 macOS 和 Windows 建置桌面程式；執行 `cargo test`、`clippy`、前端 lint |
 | 自動更新 | Tauri updater 外掛 |
 | 程式碼簽章 | ⏳ 正式發佈前處理（macOS 需要 Apple Developer 帳號） |
