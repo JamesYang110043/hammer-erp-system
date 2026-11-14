@@ -462,10 +462,32 @@ products ───────────────────────�
 | table_name | TEXT | storage = table 時，對應的資料表 |
 | parent_entity_id | UUID FK → self | 明細子表所屬的主表 |
 | numbering_pattern | TEXT | 單號規則 |
-| title_template | TEXT | 例如 `{record_no} {customer.name}` |
+| title_template | TEXT | 資料標題範本，例如 `{record_no} {name}`；規則見下方 |
 | sort_order | INTEGER | 選單排序 |
 | is_active | BOOLEAN | |
 | ＋共通欄位 | | |
+
+**資料標題**（`title_template`，解析與產生在 `hammer_core::title`）：關聯欄位、選擇器、操作紀錄用來表示「這筆資料叫什麼」的文字。通用資料 API 的列表與單筆回應都有 `title`。
+
+- 範本中 `{}` 內可寫 `{record_no}`（單號）或本資料類別的欄位代碼 `{field_key}`；`{}` 以外的文字原樣保留。長度上限 200 字元，不可有單獨的 `{` `}` 或控制字元。
+- 建立與修改資料類別時檢查：只能引用 `record_no` 或此資料類別已定義的欄位（含已停用）；新的資料類別還沒有欄位，只能引用 `{record_no}`。不合法 → `422 VALIDATION`（`details.field = title_template`）。空白視為沒有範本。
+- 引用關聯欄位的欄位（例如 `{customer.name}`）目前不支援（422），等 M3 系統資料類別一起評估。
+- 值依欄位型態格式化，與桌面程式列表的顯示相同，但數值不加千分位、不補小數位數（存值寫入時已補齊）：
+
+  | 型態 | 標題中的文字 |
+  |---|---|
+  | `text`、`long_text` | 原樣；換行等控制字元換成空白 |
+  | `integer`、`decimal`、`money` | 存值原樣 |
+  | `date` | `YYYY-MM-DD` |
+  | `datetime` | 台北時間 `YYYY-MM-DD HH:mm`（D13） |
+  | `boolean` | `是` / `否` |
+  | `select` | 選項名稱（選項已移除時為選項值） |
+  | `multi_select` | 選項名稱，以 `、` 連接 |
+  | `relation`、`file`、`formula` | 目前為空字串 |
+
+- 空值、引用已停用的欄位、存值格式不正確 → 空字串；結果去除前後空白。範本產生的結果是空字串時就回傳空字串，不改用預設規則。
+- 沒有設定範本時，依序使用第一個有值的：單號 → 排序最前面、有效的 `text` 欄位的值 → id 前 8 碼。資料庫中的範本不合法（加入檢查前存入的）時也使用預設規則。
+- 標題在讀取時產生，不存入資料庫；第一版不能依 `title` 排序或篩選。
 
 #### `field_definitions`
 | 欄位 | 型態 | 說明 |

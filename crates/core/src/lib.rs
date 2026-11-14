@@ -9,6 +9,7 @@
 //! - [`records`]：自訂資料類別的資料（通用資料 API）
 //! - [`schema`]：資料類別與欄位定義的管理
 //! - [`setup`]：初次啟動建立第一個管理者
+//! - [`title`]：資料標題（`title_template`）的解析與產生
 //! - [`users`]：帳號管理與最後一個管理者保護
 //! - `test_util`（`test-util` feature）：整合測試用，直接建立使用者與 session
 //!
@@ -26,6 +27,7 @@ pub mod schema;
 pub mod setup;
 #[cfg(feature = "test-util")]
 pub mod test_util;
+pub mod title;
 pub mod users;
 
 pub use error::{CoreError, LAST_ADMIN_REASON};

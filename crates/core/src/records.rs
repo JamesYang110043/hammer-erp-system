@@ -16,6 +16,8 @@
 //! `hammer_db::number_sequence`）並寫入 `record_no`；單號不可由客戶端指定或修改。
 //!
 //! 列表的 query string 格式見 [`hammer_shared::record`]；欄位與運算子的檢查在 [`plan_list`]。
+//!
+//! 回應的 [`Record::title`] 依資料類別的 `title_template` 產生（[`crate::title`]）。
 
 use hammer_db::DbError;
 use hammer_db::ensure_version_matched;
@@ -44,6 +46,7 @@ use crate::auth::AuthContext;
 use crate::numbering::{NumberingPattern, numbering_date};
 use crate::record_data::{FieldError, WriteMode, normalize_record_data};
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version, entity_from_row, field_from_row};
+use crate::title::TitleRenderer;
 
 /// 資料不存在或已刪除時的錯誤訊息。
 pub const RECORD_NOT_FOUND: &str = "找不到此資料";
@@ -82,9 +85,10 @@ pub async fn list_records(
 
     let total = db::count_records(&mut *conn, &filter).await?;
     let rows = db::list_records(&mut *conn, &filter, page.limit(), page.offset()).await?;
+    let titles = renderer(&entity, &fields);
     let items = rows
         .into_iter()
-        .map(record_from_row)
+        .map(|row| record_from_row(row, &titles))
         .collect::<Result<Vec<_>, _>>()?;
     let total = u32::try_from(total).unwrap_or(u32::MAX);
     Ok(Page::new(items, total, page))
@@ -99,11 +103,11 @@ pub async fn get_record(
 ) -> Result<Record, CoreError> {
     ctx.require(permission::RECORD_READ)?;
     let mut conn = pool.acquire().await.map_err(DbError::from)?;
-    let (entity, _) = load_entity(&mut conn, entity_key).await?;
+    let (entity, fields) = load_entity(&mut conn, entity_key).await?;
     let row = db::find_record(&mut *conn, entity.id, id)
         .await?
         .ok_or_else(record_not_found)?;
-    record_from_row(row)
+    record_from_row(row, &renderer(&entity, &fields))
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +172,7 @@ pub async fn create_record(
         now,
     )
     .await?;
-    let record = fetch_record(&mut tx, entity.id, id).await?;
+    let record = fetch_record(&mut tx, &renderer(&entity, &fields), entity.id, id).await?;
     commit(tx).await?;
 
     tracing::info!(actor = %ctx.user_id, entity = %entity.key, record_id = %id, "已新增資料");
@@ -204,7 +208,7 @@ pub async fn update_record(
     );
     if data == current.data {
         commit(tx).await?;
-        return record_from_row(current);
+        return record_from_row(current, &renderer(&entity, &fields));
     }
 
     let updated = db::update_record_data(&mut *tx, id, req.version, &data, ctx.user_id).await;
@@ -226,7 +230,7 @@ pub async fn update_record(
         now,
     )
     .await?;
-    let record = fetch_record(&mut tx, entity.id, id).await?;
+    let record = fetch_record(&mut tx, &renderer(&entity, &fields), entity.id, id).await?;
     commit(tx).await?;
 
     tracing::info!(actor = %ctx.user_id, entity = %entity.key, record_id = %id, "已修改資料");
@@ -540,14 +544,21 @@ async fn load_fields_of(
     Ok((entity, fields))
 }
 
-/// 資料列轉成 API 回應。`data` 不是 JSON 物件時回傳 [`CoreError::Internal`]。
-pub fn record_from_row(row: RecordRow) -> Result<Record, CoreError> {
+/// 資料類別的標題產生器。
+fn renderer<'a>(entity: &EntityDefinition, fields: &'a [FieldDefinition]) -> TitleRenderer<'a> {
+    TitleRenderer::new(entity.title_template.as_deref(), fields)
+}
+
+/// 資料列轉成 API 回應，`title` 由 `titles` 產生。`data` 不是 JSON 物件時回傳
+/// [`CoreError::Internal`]。
+pub fn record_from_row(row: RecordRow, titles: &TitleRenderer<'_>) -> Result<Record, CoreError> {
     let Value::Object(data) = row.data else {
         return Err(CoreError::Internal(
             "custom_records.data 不是 JSON 物件".into(),
         ));
     };
     Ok(Record {
+        title: titles.render(row.id, row.record_no.as_deref(), &data),
         id: row.id,
         record_no: row.record_no,
         data,
@@ -672,13 +683,14 @@ async fn lock_record(
 
 async fn fetch_record(
     tx: &mut PgTransaction<'_>,
+    titles: &TitleRenderer<'_>,
     entity_id: Id,
     id: Id,
 ) -> Result<Record, CoreError> {
     let row = db::find_record(&mut **tx, entity_id, id)
         .await?
         .ok_or_else(|| CoreError::Internal("寫入後找不到資料".into()))?;
-    record_from_row(row)
+    record_from_row(row, titles)
 }
 
 fn record_not_found() -> CoreError {
@@ -1028,14 +1040,19 @@ mod tests {
             updated_by: None,
             version: 3,
         };
-        let r = record_from_row(row.clone()).unwrap();
+        let titles = TitleRenderer::new(None, &[]);
+        let r = record_from_row(row.clone(), &titles).unwrap();
         assert_eq!(r.data["qty"], 1);
         assert_eq!(r.record_no.as_deref(), Some("RO-001"));
+        assert_eq!(r.title, "RO-001");
         assert_eq!(r.version, 3);
         let bad = RecordRow {
             data: serde_json::json!([1]),
             ..row
         };
-        assert!(matches!(record_from_row(bad), Err(CoreError::Internal(_))));
+        assert!(matches!(
+            record_from_row(bad, &titles),
+            Err(CoreError::Internal(_))
+        ));
     }
 }

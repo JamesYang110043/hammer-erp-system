@@ -440,7 +440,11 @@ export type CreateEntityRequest_Deserialize = {
 	 *  格式不合法時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
 	 */
 	numbering_pattern?: string | null,
-	/**  資料標題範本。 */
+	/**
+	 *  資料標題範本，例如 `{record_no} {name}`：`{}` 內為 `record_no` 或本資料類別的欄位代碼，
+	 *  其他文字原樣保留。新的資料類別還沒有欄位，只能引用 `{record_no}`。
+	 *  語法不合法或引用不存在的欄位時回傳 `422 VALIDATION`，`details.field` 為 `title_template`。
+	 */
 	title_template?: string | null,
 	/**  選單排序（預設 0）。 */
 	sort_order?: number,
@@ -463,7 +467,11 @@ export type CreateEntityRequest_Serialize = {
 	 *  格式不合法時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
 	 */
 	numbering_pattern: string | null,
-	/**  資料標題範本。 */
+	/**
+	 *  資料標題範本，例如 `{record_no} {name}`：`{}` 內為 `record_no` 或本資料類別的欄位代碼，
+	 *  其他文字原樣保留。新的資料類別還沒有欄位，只能引用 `{record_no}`。
+	 *  語法不合法或引用不存在的欄位時回傳 `422 VALIDATION`，`details.field` 為 `title_template`。
+	 */
 	title_template: string | null,
 	/**  選單排序（預設 0）。 */
 	sort_order: number,
@@ -695,7 +703,10 @@ export type EntityDefinition_Deserialize = {
 	parent_entity_id?: string | null,
 	/**  單號規則；沒有設定時為 `null`。 */
 	numbering_pattern?: string | null,
-	/**  資料標題範本，例如 `{record_no} {customer.name}`；沒有設定時為 `null`。 */
+	/**
+	 *  資料標題範本，例如 `{record_no} {name}`；沒有設定時為 `null`（套用預設規則，
+	 *  見 [`crate::record`] 的「標題」）。
+	 */
 	title_template?: string | null,
 	/**  選單排序。 */
 	sort_order: number,
@@ -729,7 +740,10 @@ export type EntityDefinition_Serialize = {
 	parent_entity_id: string | null,
 	/**  單號規則；沒有設定時為 `null`。 */
 	numbering_pattern: string | null,
-	/**  資料標題範本，例如 `{record_no} {customer.name}`；沒有設定時為 `null`。 */
+	/**
+	 *  資料標題範本，例如 `{record_no} {name}`；沒有設定時為 `null`（套用預設規則，
+	 *  見 [`crate::record`] 的「標題」）。
+	 */
 	title_template: string | null,
 	/**  選單排序。 */
 	sort_order: number,
@@ -1094,6 +1108,8 @@ export type Record_Deserialize = {
 	id: string,
 	/**  單號，由伺服器依資料類別的單號規則產生；沒有單號時為 `null`。 */
 	record_no?: string | null,
+	/**  資料標題，由伺服器依資料類別的標題範本（`title_template`）產生，見模組說明。 */
+	title: string,
 	/**  所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。 */
 	data: { [key in string]: unknown },
 	/**  建立時間（RFC 3339）。 */
@@ -1111,6 +1127,8 @@ export type Record_Serialize = {
 	id: string,
 	/**  單號，由伺服器依資料類別的單號規則產生；沒有單號時為 `null`。 */
 	record_no: string | null,
+	/**  資料標題，由伺服器依資料類別的標題範本（`title_template`）產生，見模組說明。 */
+	title: string,
 	/**  所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。 */
 	data: { [key in string]: unknown },
 	/**  建立時間（RFC 3339）。 */
@@ -1200,7 +1218,10 @@ export type UpdateEntityRequest_Deserialize = {
 	 *  修改後只影響之後新增的資料，既有的單號不變。
 	 */
 	numbering_pattern?: string | null,
-	/**  `null` 代表清除。 */
+	/**
+	 *  資料標題範本（格式同 [`CreateEntityRequest::title_template`]）；只能引用此資料類別已定義的
+	 *  欄位（含已停用）。`null` 或空白代表清除。
+	 */
 	title_template?: string | null,
 	sort_order: number,
 	/**  停用後不出現在選單；系統資料類別不可停用。 */
@@ -1221,7 +1242,10 @@ export type UpdateEntityRequest_Serialize = {
 	 *  修改後只影響之後新增的資料，既有的單號不變。
 	 */
 	numbering_pattern: string | null,
-	/**  `null` 代表清除。 */
+	/**
+	 *  資料標題範本（格式同 [`CreateEntityRequest::title_template`]）；只能引用此資料類別已定義的
+	 *  欄位（含已停用）。`null` 或空白代表清除。
+	 */
 	title_template: string | null,
 	sort_order: number,
 	/**  停用後不出現在選單；系統資料類別不可停用。 */

@@ -23,6 +23,16 @@
 //! - 修改規則只影響之後新增的資料，既有的單號不變；已刪除資料的單號不會再被使用
 //! - 修改規則後產生的單號與既有的單號重複時，新增失敗（`422 VALIDATION`），需要調整規則
 //!
+//! # 標題（`title`）
+//!
+//! 列表與單筆回應的 [`Record::title`] 是「這筆資料叫什麼」的顯示文字，供關聯欄位、選擇器、
+//! 操作紀錄使用，由伺服器依資料類別的 `title_template` 產生（§8.5 `entity_definitions`）：
+//!
+//! - 範本可引用 `{record_no}` 與本資料類別的欄位 `{field_key}`，例如 `{record_no} {name}`；
+//!   值依欄位型態格式化（選項顯示名稱、勾選顯示 是／否、日期時間為台北時間），沒有值時為空字串，
+//!   已停用的欄位視為沒有值
+//! - 沒有範本時依序使用：單號 → 排序最前面、有效的 `text` 欄位的值 → id 前 8 碼
+//!
 //! 錯誤：
 //!
 //! - 資料類別不存在、已停用或不是自訂資料類別；資料不存在或已刪除 → `404 NOT_FOUND`
@@ -69,6 +79,8 @@ pub struct Record {
     pub id: Id,
     /// 單號，由伺服器依資料類別的單號規則產生；沒有單號時為 `null`。
     pub record_no: Option<String>,
+    /// 資料標題，由伺服器依資料類別的標題範本（`title_template`）產生，見模組說明。
+    pub title: String,
     /// 所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。
     #[specta(type = std::collections::HashMap<String, specta_typescript::Unknown>)]
     pub data: Map<String, Value>,
@@ -475,6 +487,7 @@ mod tests {
         let r = Record {
             id: crate::new_id(),
             record_no: Some("SO202611-0001".into()),
+            title: "SO202611-0001".into(),
             data: json!({ "qty": 1 }).as_object().unwrap().clone(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,
@@ -485,6 +498,7 @@ mod tests {
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["data"], json!({ "qty": 1 }));
         assert_eq!(v["record_no"], json!("SO202611-0001"));
+        assert_eq!(v["title"], json!("SO202611-0001"));
         assert_eq!(v["created_at"], json!("1970-01-01T00:00:00Z"));
         assert_eq!(serde_json::from_value::<Record>(v).unwrap(), r);
 
