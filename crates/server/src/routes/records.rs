@@ -9,7 +9,9 @@ use axum::http::{HeaderMap, StatusCode};
 use hammer_core::records;
 use hammer_shared::Id;
 use hammer_shared::pagination::Page;
-use hammer_shared::record::{CreateRecordRequest, DeleteRecordQuery, Record, UpdateRecordRequest};
+use hammer_shared::record::{
+    CreateRecordRequest, DeleteRecordQuery, LookupItem, Record, UpdateRecordRequest,
+};
 use time::OffsetDateTime;
 
 use super::auth::request_client_info;
@@ -26,6 +28,20 @@ pub async fn list(
 ) -> Result<Json<Page<Record>>, AppError> {
     Ok(Json(
         records::list_records(&state.pool, &auth, &key, &pairs).await?,
+    ))
+}
+
+/// `GET /api/v1/entities/{key}/records/lookup?q=&limit=`
+///
+/// 選擇器搜尋，依關鍵字比對資料標題（格式見 [`hammer_shared::record::LookupQuery`]）。
+pub async fn lookup(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(key): Path<String>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Json<Vec<LookupItem>>, AppError> {
+    Ok(Json(
+        records::lookup_records(&state.pool, &auth, &key, &pairs).await?,
     ))
 }
 

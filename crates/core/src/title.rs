@@ -298,6 +298,8 @@ fn field_text(field: &FieldDefinition, data: &Map<String, Value>) -> String {
             .map(|v| option_label(field, v))
             .collect::<Vec<_>>()
             .join("、"),
+        // 引用關聯資料的欄位（例如 `{customer.name}`）等 M3 一起評估
+        FieldValue::Relation(_) => String::new(),
     }
 }
 

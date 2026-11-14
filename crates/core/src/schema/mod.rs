@@ -427,6 +427,9 @@ pub async fn update_entity(
 /// 新增自訂欄位（`storage = json`）。設定必須與型態相符（[`rules::validate_field_config`]）。
 /// 「可搜尋」、「不可重複」時建立對應的索引（§7.5）。
 ///
+/// `relation` 欄位的目標資料類別必須符合 [`rules::validate_relation_target`]（自訂、有效、
+/// `master` 或 `document`），否則 [`CoreError::InvalidField`]（`relation_entity_id`）。
+///
 /// - 資料類別不存在或已刪除 → [`CoreError::NotFound`]
 /// - 欄位代碼與該資料類別的既有欄位（含已停用）重複 → [`CoreError::InvalidField`]（`field_key`）
 pub async fn create_field(
@@ -442,6 +445,14 @@ pub async fn create_field(
     let mut tx = pool.begin().await.map_err(DbError::from)?;
     let entity = lock_entity(&mut tx, entity_key).await?;
     let def = rules::plan_create_field(entity.id, req, now)?;
+    if let Some(target_id) = def.relation_entity_id {
+        // 目標是自己時，上面已以 FOR UPDATE 鎖定
+        let target = match db::find_entity_by_id(&mut *tx, target_id).await? {
+            Some(row) => Some(entity_from_row(row)?),
+            None => None,
+        };
+        rules::validate_relation_target(target.as_ref())?;
+    }
     let json = FieldJson::of(&def)?;
     db::insert_field(
         &mut *tx,
@@ -450,6 +461,7 @@ pub async fn create_field(
             entity_id: entity.id,
             field_key: &def.field_key,
             data_type: def.data_type.as_str(),
+            relation_entity_id: def.relation_entity_id,
             attrs: json.attrs(&def),
             created_by: ctx.user_id,
             created_at: now,
@@ -718,6 +730,7 @@ pub async fn change_field_type(
                 options: json.options.as_ref(),
                 validation: json.validation.as_ref(),
                 default_value: next.default_value.as_ref(),
+                relation_entity_id: next.relation_entity_id,
                 updated_by: ctx.user_id,
             },
         )

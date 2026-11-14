@@ -5,8 +5,10 @@
 //! - 列表：[`list_records`]、[`count_records`]，條件為 [`RecordListFilter`]
 //! - 唯一性：[`value_taken`]；單號不可重複的索引為 [`RECORD_NO_UNIQUE`]
 //! - 欄位型態變更（含已軟刪除的資料）：[`list_all_record_data_for_update`]、[`update_records_data`]
+//! - 關聯欄位（§7.3）：[`lock_existing_records`]（寫入時檢查目標）、[`find_records_by_ids`]
+//!   （回應的關聯資訊，含已軟刪除）、[`list_records_before`]（選擇器搜尋）
 //!
-//! 已軟刪除（`deleted_at IS NOT NULL`）的資料一律視為不存在。
+//! 除了特別註明「含已軟刪除」的函式，已軟刪除（`deleted_at IS NOT NULL`）的資料一律視為不存在。
 //! 欄位代碼與比較值一律以 bind 參數傳入，不拼接進 SQL；欄位型態檢查與值的格式檢查在
 //! `hammer_core::records`，這裡只負責依 [`JsonCast`] 轉型後比較。
 
@@ -190,6 +192,89 @@ pub async fn value_taken<'e>(
     .fetch_one(executor)
     .await?;
     Ok(taken)
+}
+
+// ---------------------------------------------------------------------------
+// 關聯欄位
+// ---------------------------------------------------------------------------
+
+/// `ids` 中屬於資料類別 `entity_id` 且未刪除的資料 id，並以 `FOR SHARE` 鎖定這些列，
+/// 避免在寫入關聯的 transaction 結束前被刪除。必須在 transaction 內呼叫。
+pub async fn lock_existing_records<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_id: Uuid,
+    ids: &[Uuid],
+) -> Result<Vec<Uuid>, DbError> {
+    let rows = sqlx::query_scalar!(
+        r#"
+        SELECT id FROM custom_records
+        WHERE entity_id = $1 AND id = ANY($2) AND deleted_at IS NULL
+        ORDER BY id
+        FOR SHARE
+        "#,
+        entity_id,
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 關聯欄位所指的資料（**含已軟刪除**）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelatedRecordRow {
+    pub id: Uuid,
+    pub record_no: Option<String>,
+    pub data: Value,
+    /// 已軟刪除。
+    pub deleted: bool,
+}
+
+/// 依 id 查詢資料類別 `entity_id` 的資料（**含已軟刪除**），供回應的關聯資訊使用。
+pub async fn find_records_by_ids<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_id: Uuid,
+    ids: &[Uuid],
+) -> Result<Vec<RelatedRecordRow>, DbError> {
+    let rows = sqlx::query_as!(
+        RelatedRecordRow,
+        r#"
+        SELECT id, record_no, data, deleted_at IS NOT NULL AS "deleted!"
+        FROM custom_records
+        WHERE entity_id = $1 AND id = ANY($2)
+        "#,
+        entity_id,
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 選擇器搜尋的一批資料：未刪除、依 `id` 由新到舊，`before` 有值時只取 id 小於它的資料。
+pub async fn list_records_before<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_id: Uuid,
+    before: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<RecordRow>, DbError> {
+    let rows = sqlx::query_as!(
+        RecordRow,
+        r#"
+        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,
+               version
+        FROM custom_records
+        WHERE entity_id = $1 AND deleted_at IS NULL AND ($2::uuid IS NULL OR id < $2)
+        ORDER BY id DESC
+        LIMIT $3
+        "#,
+        entity_id,
+        before,
+        limit,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------

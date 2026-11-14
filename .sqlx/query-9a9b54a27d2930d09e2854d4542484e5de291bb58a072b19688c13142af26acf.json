@@ -1,0 +1,126 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,\n               version\n        FROM custom_records\n        WHERE entity_id = $1 AND deleted_at IS NULL AND ($2::uuid IS NULL OR id < $2)\n        ORDER BY id DESC\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "entity_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "entity_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "record_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "record_no"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "data",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "data"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "updated_by"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "9a9b54a27d2930d09e2854d4542484e5de291bb58a072b19688c13142af26acf"
+}
