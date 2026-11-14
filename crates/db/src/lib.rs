@@ -3,6 +3,7 @@
 //! - [`connect`]：依 [`PoolConfig`] 建立連線池
 //! - [`run_migrations`]：套用 `crates/db/migrations/` 的 migration
 //! - [`ensure_version_matched`]：樂觀鎖定檢查，版本不符時回傳 [`DbError::Conflict`]
+//! - [`attachment`]：附件（`attachments`）的新增、綁定、標記刪除與清理
 //! - [`audit`]：寫入與查詢 `audit_logs`
 //! - [`dynamic_index`]：自訂欄位的動態索引（可搜尋、不可重複）
 //! - [`lock`]：advisory lock
@@ -18,6 +19,7 @@
 //! 共通欄位與 `custom_data` 慣例寫在 `migrations/0001_foundation.sql` 的註解。
 //! 相依方向見 `docs/architecture.md` §4。
 
+pub mod attachment;
 pub mod audit;
 pub mod dynamic_index;
 mod error;

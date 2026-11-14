@@ -1,7 +1,8 @@
 //! Hammer ERP API Server（axum）。
 //!
 //! 啟動流程（[`run`]）：載入設定 → 初始化 log → 建立連線池 → 套用 migrations
-//! → 啟動 HTTP → 收到 Ctrl+C / SIGTERM 時等進行中的請求完成再關閉。
+//! → 啟動附件清理排程（[`spawn_attachment_cleanup`]）→ 啟動 HTTP
+//! → 收到 Ctrl+C / SIGTERM 時等進行中的請求完成再關閉。
 //!
 //! 相依方向：`server → core → db`、`server → shared`（`docs/architecture.md` §4）。
 
@@ -14,7 +15,12 @@ pub mod shutdown;
 pub mod state;
 pub mod telemetry;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Context;
+use hammer_core::attachments::{AttachmentStore, cleanup_unbound};
+use hammer_core::db::sqlx::PgPool;
 use hammer_core::db::{self, PoolConfig};
 
 pub use auth::{AuthUser, AuthUserAllowPasswordChange};
@@ -52,12 +58,36 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!(addr = %listener.local_addr()?, "開始接受連線");
 
     let state = AppState::new(pool.clone(), config);
+    let cleanup = spawn_attachment_cleanup(pool.clone(), state.attachments.clone());
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown::signal())
         .await
         .context("HTTP 伺服器錯誤")?;
 
+    cleanup.abort();
     pool.close().await;
     tracing::info!("伺服器已關閉");
     Ok(())
+}
+
+/// 附件清理的間隔。
+pub const ATTACHMENT_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// 背景執行未綁定附件的清理（[`cleanup_unbound`]）：啟動時執行一次，之後每
+/// [`ATTACHMENT_CLEANUP_INTERVAL`] 執行一次。失敗只寫 log，下次照常執行。
+pub fn spawn_attachment_cleanup(
+    pool: PgPool,
+    store: Arc<AttachmentStore>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(ATTACHMENT_CLEANUP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let now = time::OffsetDateTime::now_utc();
+            if let Err(err) = cleanup_unbound(&pool, &store, now).await {
+                tracing::error!(error = %err, "清理未綁定的附件失敗");
+            }
+        }
+    })
 }

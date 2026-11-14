@@ -81,7 +81,8 @@ pub enum DataType {
     MultiSelect,
     /// 關聯到其他資料類別的一筆資料（M2b），見 [`CreateFieldRequest::relation_entity_id`]。
     Relation,
-    /// 附件（M2b）。
+    /// 附件（M2b）：值為附件的 id（`attachments.id`），附件先以 `POST /api/v1/attachments` 上傳，
+    /// 見 [`crate::attachment`]。
     File,
     /// 公式，唯讀，由系統計算（M2c）。
     Formula,
@@ -131,9 +132,9 @@ impl DataType {
 
     /// 目前是否支援此型態的值與建立此型態的欄位。
     ///
-    /// `file`、`formula` 尚未支援（M2b、M2c），API 不允許建立。
+    /// `formula` 尚未支援（M2c），API 不允許建立。
     pub fn is_value_supported(self) -> bool {
-        !matches!(self, Self::File | Self::Formula)
+        !matches!(self, Self::Formula)
     }
 
     /// 是否使用 `decimal_places`（`decimal`、`money`）。
@@ -653,7 +654,7 @@ mod tests {
             .iter()
             .filter(|t| !t.is_value_supported())
             .collect();
-        assert_eq!(unsupported, [&DataType::File, &DataType::Formula]);
+        assert_eq!(unsupported, [&DataType::Formula]);
     }
 
     #[test]

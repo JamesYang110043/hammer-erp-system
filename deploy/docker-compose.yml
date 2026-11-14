@@ -49,11 +49,14 @@ services:
       # 帳號或密碼含 URL 特殊字元（@ : / 等）時，需要先做 URL 編碼
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hammer_erp}
       HAMMER_LOG_LEVEL: ${HAMMER_LOG_LEVEL:-info}
+      HAMMER_ATTACHMENT_MAX_BYTES: ${HAMMER_ATTACHMENT_MAX_BYTES:-20971520}
       # HAMMER_LISTEN_ADDR、HAMMER_ATTACHMENTS_DIR、HAMMER_LOG_FORMAT 由 Dockerfile.server 設定
     ports:
       # 預設只綁定本機。之後改用 Tailscale 時，在 .env 設定 HAMMER_PUBLISH_ADDR（architecture.md §3.2）
       - "${HAMMER_PUBLISH_ADDR:-127.0.0.1:8080}:8080"
     volumes:
+      # 附件存在具名 volume，重建容器（docker compose up --build、down 後再 up）時保留；
+      # 只有 docker compose down -v 會刪除。最終的存放位置與備份方式待 Q4（architecture.md §11）
       - attachments:/var/lib/hammer/attachments
 
 volumes:

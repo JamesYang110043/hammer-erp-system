@@ -14,7 +14,7 @@
 //!   通過後補零到 `decimal_places` 位，例如 2 位時 `"12.3"` 存成 `"12.30"`
 //! - 唯讀（`is_readonly`）與已停用（`is_active = false`）的欄位不可由使用者寫入，帶了就拒絕
 //! - 必填（`is_required`）：值不可為 `null`、空字串或空陣列
-//! - `relation`：值必須是 UUID 字串，存成小寫連字號格式；空字串視為沒有值
+//! - `relation`、`file`：值必須是 UUID 字串，存成小寫連字號格式；空字串視為沒有值
 //!
 //! # 新增與更新
 //!
@@ -30,8 +30,8 @@
 //!
 //! - 不可重複（`is_unique`）：由資料庫唯一索引處理（§7.5）
 //! - `relation` 所指的資料是否存在：需要查詢資料庫，在 [`crate::relations::check_relations`]
-//! - `file`、`formula`（M2b、M2c）：寫入時回傳「目前不支援此欄位型態」；
-//!   更新時沒有帶到則保留既有的值
+//! - `file` 的附件是否存在、是否已被使用：在 [`crate::attachments::prepare_file_changes`]
+//! - `formula`（M2c）：寫入時回傳「目前不支援此欄位型態」；更新時沒有帶到則保留既有的值
 
 use hammer_shared::decimal::Decimal;
 use hammer_shared::schema::{
@@ -172,7 +172,7 @@ pub fn normalize_field_value(
     field: &FieldDefinition,
     json: &Value,
 ) -> Result<Option<Value>, String> {
-    if field.data_type == DataType::Relation && json.as_str() == Some("") {
+    if matches!(field.data_type, DataType::Relation | DataType::File) && json.as_str() == Some("") {
         return Ok(None);
     }
     let Some(value) = parse_value(field.data_type, json).map_err(|e| e.message().to_owned())?
@@ -220,7 +220,8 @@ pub fn normalize_field_value(
         other @ (FieldValue::Date(_)
         | FieldValue::DateTime(_)
         | FieldValue::Boolean(_)
-        | FieldValue::Relation(_)) => other,
+        | FieldValue::Relation(_)
+        | FieldValue::File(_)) => other,
     };
     Ok(Some(to_json(&value)))
 }
@@ -480,7 +481,7 @@ mod tests {
 
     #[test]
     fn unsupported_types_cannot_be_written() {
-        let f = field("att", DataType::File);
+        let f = field("att", DataType::Formula);
         assert_eq!(
             single_error(&[f], json!({ "att": "x" })),
             "目前不支援此欄位型態"
@@ -489,11 +490,33 @@ mod tests {
 
     #[test]
     fn unsupported_types_preserved_on_update() {
-        let f = field("att", DataType::File);
+        let f = field("att", DataType::Formula);
         let n = field("n", DataType::Integer);
         assert_eq!(
             update(&[f, n], json!({ "att": "abc" }), json!({ "n": 1 })).unwrap(),
             json!({ "att": "abc", "n": 1 })
+        );
+    }
+
+    #[test]
+    fn file_values_are_normalized() {
+        let f = field("att", DataType::File);
+        let id = "0190c3a2-0000-7000-8000-000000000000";
+        assert_eq!(
+            create(
+                std::slice::from_ref(&f),
+                json!({ "att": "0190C3A2-0000-7000-8000-000000000000" })
+            )
+            .unwrap(),
+            json!({ "att": id })
+        );
+        assert_eq!(
+            create(std::slice::from_ref(&f), json!({ "att": "" })).unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            single_error(std::slice::from_ref(&f), json!({ "att": "report.pdf" })),
+            "附件 id 格式不正確"
         );
     }
 

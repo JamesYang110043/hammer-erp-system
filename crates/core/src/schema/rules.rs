@@ -281,7 +281,7 @@ fn validate_system_field_update(
 
 /// 檢查自訂欄位的設定與型態相符，回傳整理後的定義：
 ///
-/// - 型態目前支援（不允許 `file`、`formula`）
+/// - 型態目前支援（不允許 `formula`）；`file` 不可設定預設值
 /// - `relation_entity_id`：`relation` 必填，其他型態不可設定（目標是否合法另由
 ///   [`validate_relation_target`] 檢查，需要查詢資料庫）；`relation` 不可設定預設值
 /// - 顯示名稱去除前後空白後不可為空；`ui_widget`、`help_text` 空白視為未設定
@@ -437,6 +437,9 @@ fn normalize_default(def: &FieldDefinition) -> Result<Option<Value>, CoreError> 
             }
             if def.data_type == DataType::Relation {
                 return Err(invalid(field::DEFAULT_VALUE, "關聯欄位不可設定預設值"));
+            }
+            if def.data_type == DataType::File {
+                return Err(invalid(field::DEFAULT_VALUE, "附件欄位不可設定預設值"));
             }
             normalize_field_value(def, value)
                 .map_err(|message| invalid(field::DEFAULT_VALUE, &format!("預設值{message}")))
@@ -939,9 +942,10 @@ mod tests {
             create_err(&create_req("record_no", DataType::Text)),
             field::FIELD_KEY
         );
-        for t in [DataType::File, DataType::Formula] {
-            assert_eq!(create_err(&create_req("x", t)), field::DATA_TYPE);
-        }
+        assert_eq!(
+            create_err(&create_req("x", DataType::Formula)),
+            field::DATA_TYPE
+        );
         assert_eq!(
             create_err(&CreateFieldRequest {
                 label: "".into(),
@@ -1606,6 +1610,24 @@ mod tests {
         assert_eq!(
             field_of(&plan_update_field(&text, &req).unwrap_err()),
             field::RELATION_ENTITY_ID
+        );
+    }
+
+    #[test]
+    fn file_field_config() {
+        let def = created(&create_req("photo", DataType::File));
+        assert_eq!(def.data_type, DataType::File);
+        assert_eq!(
+            create_err(&CreateFieldRequest {
+                default_value: Some(json!("0190c3a2-0000-7000-8000-000000000000")),
+                ..create_req("photo", DataType::File)
+            }),
+            field::DEFAULT_VALUE
+        );
+        // 附件欄位不能變更型態，其他型態也不能轉成附件
+        assert_eq!(
+            change_err(&def, &change_req(&def, DataType::Text)),
+            field::DATA_TYPE
         );
     }
 

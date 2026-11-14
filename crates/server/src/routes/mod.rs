@@ -9,7 +9,11 @@
 //! - [`protected_routes`]：其他所有路由。handler 必須帶 [`AuthUser`](crate::AuthUser)
 //!   （或改密碼、登出、`/auth/me` 使用的 [`AuthUserAllowPasswordChange`](crate::AuthUserAllowPasswordChange)）
 //!   參數，並以 `auth.require(...)` 檢查權限（§6.2）。
+//!
+//! Request body 上限：上傳附件（`POST /api/v1/attachments`）為附件單檔上限加上
+//! [`attachments::MULTIPART_OVERHEAD_BYTES`]，其他路由為 `body_limit_bytes`。
 
+pub mod attachments;
 pub mod audit_logs;
 pub mod auth;
 pub mod entities;
@@ -38,16 +42,27 @@ use crate::{AppError, AppState};
 /// 建立完整的 router（含所有中介層）。
 pub fn router(state: AppState) -> Router {
     let body_limit = state.config.body_limit_bytes;
+    let upload_limit = usize::try_from(
+        state
+            .config
+            .attachment_max_bytes
+            .saturating_add(attachments::MULTIPART_OVERHEAD_BYTES),
+    )
+    .unwrap_or(usize::MAX);
 
-    let api = public_routes().merge(protected_routes());
+    let api = public_routes()
+        .merge(protected_routes())
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(RequestBodyLimitLayer::new(body_limit))
+        // 上傳路由只用 axum 的 DefaultBodyLimit：Multipart 讀取超過上限時，錯誤能辨識為 413
+        // （RequestBodyLimitLayer 在沒有 Content-Length 時的串流錯誤會被 multer 視為一般的讀取失敗）
+        .merge(upload_routes().layer(DefaultBodyLimit::max(upload_limit)));
 
     // `.layer()` 越後面加的越外層：請求由下往上經過，回應由上往下。
     Router::new()
         .nest(API_PREFIX, api)
         .fallback(not_found)
         .layer(axum::middleware::from_fn(client_version::layer))
-        .layer(DefaultBodyLimit::max(body_limit))
-        .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(CatchPanicLayer::custom(handle_panic))
         .layer(axum::middleware::from_fn(error_json::layer))
         .layer(PropagateRequestIdLayer::x_request_id())
@@ -132,6 +147,12 @@ fn protected_routes() -> Router<AppState> {
             "/entities/{key}/layouts/{id}",
             patch(layouts::update).delete(layouts::delete),
         )
+        .route("/attachments/{id}", get(attachments::download))
+}
+
+/// 上傳附件的路由（需要登入），body 上限與其他路由不同。
+fn upload_routes() -> Router<AppState> {
+    Router::new().route("/attachments", post(attachments::upload))
 }
 
 async fn not_found() -> AppError {

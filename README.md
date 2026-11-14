@@ -216,6 +216,7 @@ curl localhost:8080/api/v1/health
 | `HAMMER_LOG_LEVEL` | `info` | log 等級（tracing `EnvFilter` 語法） |
 | `HAMMER_LOG_FORMAT` | 開發版 `pretty`、release 版 `json` | log 格式 |
 | `HAMMER_ATTACHMENTS_DIR` | `data/attachments` | 附件存放目錄，啟動時自動建立 |
+| `HAMMER_ATTACHMENT_MAX_BYTES` | `20971520` | 附件單檔大小上限（20 MiB）；上傳附件不受 `HAMMER_BODY_LIMIT_BYTES` 限制 |
 | `HAMMER_BODY_LIMIT_BYTES` | `10485760` | Request body 大小上限 |
 
 `GET /api/v1/health` 不需要登入：資料庫正常時回傳 `200`，資料庫異常時回傳 `503`（`"database":"error"`），伺服器不會因此停止。

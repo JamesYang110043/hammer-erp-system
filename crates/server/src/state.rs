@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use hammer_core::attachments::AttachmentStore;
 use hammer_core::db::sqlx::PgPool;
 
 use crate::Config;
@@ -13,13 +14,18 @@ use crate::Config;
 pub struct AppState {
     pub pool: PgPool,
     pub config: Arc<Config>,
+    /// 附件目錄與單檔大小上限（由 `config` 產生）。
+    pub attachments: Arc<AttachmentStore>,
 }
 
 impl AppState {
     pub fn new(pool: PgPool, config: Config) -> Self {
+        let attachments =
+            AttachmentStore::new(config.attachments_dir.clone(), config.attachment_max_bytes);
         Self {
             pool,
             config: Arc::new(config),
+            attachments: Arc::new(attachments),
         }
     }
 }
