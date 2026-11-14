@@ -11,12 +11,14 @@
 //! | `datetime` | string RFC 3339 | [`FieldValue::DateTime`] |
 //! | `boolean` | boolean | [`FieldValue::Boolean`] |
 //! | `multi_select` | string[]（不可重複） | [`FieldValue::MultiSelect`] |
+//! | `relation` | string，目標資料的 id（UUID），存成小寫連字號格式 | [`FieldValue::Relation`] |
 //!
 //! JSON `null` 代表沒有值（[`parse_value`] 回傳 `Ok(None)`）。
 //!
-//! `relation`、`file`、`formula` 的值在 M2b、M2c 處理，目前回傳 [`InvalidValue::Unsupported`]。
+//! `file`、`formula` 的值在 M2b、M2c 處理，目前回傳 [`InvalidValue::Unsupported`]。
 //!
-//! 這裡只檢查「格式」。必填、`validation`、選項是否存在、小數位數等依欄位定義的檢查不在此處。
+//! 這裡只檢查「格式」。必填、`validation`、選項是否存在、小數位數、關聯的資料是否存在等
+//! 依欄位定義的檢查不在此處。
 
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -27,6 +29,7 @@ use time::macros::format_description;
 use time::{Date, OffsetDateTime};
 
 use super::DataType;
+use crate::Id;
 
 /// `integer` 欄位的絕對值上限（JavaScript `Number.MAX_SAFE_INTEGER`，2^53 − 1）。
 ///
@@ -53,6 +56,8 @@ pub enum FieldValue {
     Boolean(bool),
     /// `multi_select`（選項值）。
     MultiSelect(Vec<String>),
+    /// `relation`（目標資料的 id）。
+    Relation(Id),
 }
 
 /// 欄位值不符合存值格式。
@@ -70,7 +75,9 @@ pub enum InvalidValue {
     InvalidDateTime,
     /// `multi_select` 有重複的選項值。
     DuplicateOption,
-    /// 此型態的值尚未支援（`relation`、`file`、`formula`）。
+    /// `relation` 的字串不是 UUID。
+    InvalidId,
+    /// 此型態的值尚未支援（`file`、`formula`）。
     Unsupported(DataType),
 }
 
@@ -86,13 +93,15 @@ impl InvalidValue {
                 DataType::DateTime => "日期時間必須以文字傳送，格式為 RFC 3339",
                 DataType::Boolean => "必須是 true 或 false",
                 DataType::MultiSelect => "必須是文字陣列",
-                DataType::Relation | DataType::File | DataType::Formula => "格式不正確",
+                DataType::Relation => "必須是資料 id（文字）",
+                DataType::File | DataType::Formula => "格式不正確",
             },
             Self::InvalidInteger => "必須是整數，且不可超過 ±9007199254740991",
             Self::InvalidDecimal => "數字格式不正確",
             Self::InvalidDate => "日期格式不正確，必須是 YYYY-MM-DD",
             Self::InvalidDateTime => "日期時間格式不正確，必須是 RFC 3339",
             Self::DuplicateOption => "選項不可重複",
+            Self::InvalidId => "資料 id 格式不正確",
             Self::Unsupported(_) => "目前不支援此欄位型態",
         }
     }
@@ -153,7 +162,10 @@ pub fn parse_value(data_type: DataType, json: &Value) -> Result<Option<FieldValu
             }
             FieldValue::MultiSelect(values)
         }
-        DataType::Relation | DataType::File | DataType::Formula => {
+        DataType::Relation => FieldValue::Relation(
+            Id::try_parse(json.as_str().ok_or(mismatch)?).map_err(|_| InvalidValue::InvalidId)?,
+        ),
+        DataType::File | DataType::Formula => {
             return Err(InvalidValue::Unsupported(data_type));
         }
     };
@@ -172,6 +184,7 @@ pub fn to_json(value: &FieldValue) -> Value {
         FieldValue::MultiSelect(items) => {
             Value::Array(items.iter().cloned().map(Value::String).collect())
         }
+        FieldValue::Relation(id) => Value::String(id.hyphenated().to_string()),
     }
 }
 
@@ -421,8 +434,37 @@ mod tests {
     }
 
     #[test]
-    fn relation_file_formula_are_unsupported() {
-        for t in [DataType::Relation, DataType::File, DataType::Formula] {
+    fn relation_values() {
+        let id = "0190c3a2-0000-7000-8000-000000000000";
+        assert_round_trip(DataType::Relation, json!(id));
+        // 大寫或不含連字號的 UUID 可以解析，轉回 JSON 時統一為小寫連字號格式
+        let parsed = parse(
+            DataType::Relation,
+            json!("0190C3A2000070008000000000000000"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(to_json(&parsed), json!(id));
+        assert_eq!(parse(DataType::Relation, Value::Null), Ok(None));
+        for v in [json!(""), json!("abc"), json!("0190c3a2-0000-7000-8000")] {
+            assert_eq!(
+                parse(DataType::Relation, v.clone()),
+                Err(InvalidValue::InvalidId),
+                "{v}"
+            );
+        }
+        for v in [json!(1), json!([id]), json!({ "id": id })] {
+            assert_eq!(
+                parse(DataType::Relation, v.clone()),
+                Err(InvalidValue::TypeMismatch(DataType::Relation)),
+                "{v}"
+            );
+        }
+    }
+
+    #[test]
+    fn file_formula_are_unsupported() {
+        for t in [DataType::File, DataType::Formula] {
             assert_eq!(
                 parse(t, json!("0190c3a2-0000-7000-8000-000000000000")),
                 Err(InvalidValue::Unsupported(t))

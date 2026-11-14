@@ -259,14 +259,15 @@ export type AuditLogQuery_Serialize = {
  * 
  *  | 從 → 到 | 規則 |
  *  |---|---|
- *  | 任意型態 → `text` / `long_text` | 允許（轉成文字） |
+ *  | 任意型態 → `text` / `long_text` | 允許（轉成文字；`relation` 轉成資料 id 的文字） |
  *  | `text` ↔ `long_text` | 允許 |
  *  | `integer` → `decimal` | 允許 |
  *  | `select` → `multi_select` | 允許（變成只有一個選項的陣列） |
  *  | 其他 | 逐筆轉換，只要有一筆失敗就拒絕 |
  * 
  *  轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
- *  `relation`、`file`、`formula` 不能轉換。
+ *  `relation` 只能轉成 `text` / `long_text`（轉換後清除 `relation_entity_id`），其他型態不能轉成
+ *  `relation`；`file`、`formula` 不能轉換。
  * 
  *  錯誤：
  *  - 有資料無法轉換 → `422 VALIDATION`，`details` 為
@@ -288,14 +289,15 @@ export type ChangeFieldTypeRequest = ChangeFieldTypeRequest_Serialize | ChangeFi
  * 
  *  | 從 → 到 | 規則 |
  *  |---|---|
- *  | 任意型態 → `text` / `long_text` | 允許（轉成文字） |
+ *  | 任意型態 → `text` / `long_text` | 允許（轉成文字；`relation` 轉成資料 id 的文字） |
  *  | `text` ↔ `long_text` | 允許 |
  *  | `integer` → `decimal` | 允許 |
  *  | `select` → `multi_select` | 允許（變成只有一個選項的陣列） |
  *  | 其他 | 逐筆轉換，只要有一筆失敗就拒絕 |
  * 
  *  轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
- *  `relation`、`file`、`formula` 不能轉換。
+ *  `relation` 只能轉成 `text` / `long_text`（轉換後清除 `relation_entity_id`），其他型態不能轉成
+ *  `relation`；`file`、`formula` 不能轉換。
  * 
  *  錯誤：
  *  - 有資料無法轉換 → `422 VALIDATION`，`details` 為
@@ -328,14 +330,15 @@ export type ChangeFieldTypeRequest_Deserialize = {
  * 
  *  | 從 → 到 | 規則 |
  *  |---|---|
- *  | 任意型態 → `text` / `long_text` | 允許（轉成文字） |
+ *  | 任意型態 → `text` / `long_text` | 允許（轉成文字；`relation` 轉成資料 id 的文字） |
  *  | `text` ↔ `long_text` | 允許 |
  *  | `integer` → `decimal` | 允許 |
  *  | `select` → `multi_select` | 允許（變成只有一個選項的陣列） |
  *  | 其他 | 逐筆轉換，只要有一筆失敗就拒絕 |
  * 
  *  轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
- *  `relation`、`file`、`formula` 不能轉換。
+ *  `relation` 只能轉成 `text` / `long_text`（轉換後清除 `relation_entity_id`），其他型態不能轉成
+ *  `relation`；`file`、`formula` 不能轉換。
  * 
  *  錯誤：
  *  - 有資料無法轉換 → `422 VALIDATION`，`details` 為
@@ -480,14 +483,14 @@ export type CreateEntityRequest_Serialize = {
 /**
  *  建立欄位的輸入。儲存方式固定為 `json`。
  * 
- *  M2a 不允許 `relation`、`file`、`formula`（見 [`DataType::is_value_supported`]）。
+ *  目前不允許 `file`、`formula`（見 [`DataType::is_value_supported`]）。
  */
 export type CreateFieldRequest = CreateFieldRequest_Serialize | CreateFieldRequest_Deserialize;
 
 /**
  *  建立欄位的輸入。儲存方式固定為 `json`。
  * 
- *  M2a 不允許 `relation`、`file`、`formula`（見 [`DataType::is_value_supported`]）。
+ *  目前不允許 `file`、`formula`（見 [`DataType::is_value_supported`]）。
  */
 export type CreateFieldRequest_Deserialize = {
 	/**  欄位代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -508,6 +511,14 @@ export type CreateFieldRequest_Deserialize = {
 	options?: SelectOption_Deserialize[] | null,
 	/**  `decimal`、`money` 必填。 */
 	decimal_places?: number | null,
+	/**
+	 *  `relation` 必填：關聯的資料類別 id，建立後不可修改；其他型態不可設定。
+	 * 
+	 *  目標必須是**自訂**（`storage = custom_records`）、有效、`kind` 為 `master` 或 `document`
+	 *  的資料類別（可以是自己）；不符合時回傳 `422 VALIDATION`，`details.field` 為
+	 *  `relation_entity_id`。系統資料類別在 M3 支援。`relation` 欄位不可設定預設值。
+	 */
+	relation_entity_id?: string | null,
 	ui_widget?: string | null,
 	column_width?: number | null,
 	help_text?: string | null,
@@ -518,7 +529,7 @@ export type CreateFieldRequest_Deserialize = {
 /**
  *  建立欄位的輸入。儲存方式固定為 `json`。
  * 
- *  M2a 不允許 `relation`、`file`、`formula`（見 [`DataType::is_value_supported`]）。
+ *  目前不允許 `file`、`formula`（見 [`DataType::is_value_supported`]）。
  */
 export type CreateFieldRequest_Serialize = {
 	/**  欄位代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -539,6 +550,14 @@ export type CreateFieldRequest_Serialize = {
 	options: SelectOption_Serialize[] | null,
 	/**  `decimal`、`money` 必填。 */
 	decimal_places: number | null,
+	/**
+	 *  `relation` 必填：關聯的資料類別 id，建立後不可修改；其他型態不可設定。
+	 * 
+	 *  目標必須是**自訂**（`storage = custom_records`）、有效、`kind` 為 `master` 或 `document`
+	 *  的資料類別（可以是自己）；不符合時回傳 `422 VALIDATION`，`details.field` 為
+	 *  `relation_entity_id`。系統資料類別在 M3 支援。`relation` 欄位不可設定預設值。
+	 */
+	relation_entity_id: string | null,
 	ui_widget: string | null,
 	column_width: number | null,
 	help_text: string | null,
@@ -629,7 +648,7 @@ export type DataType =
 "select" | 
 /**  下拉多選。 */
 "multi_select" | 
-/**  關聯到其他資料類別（M2b）。 */
+/**  關聯到其他資料類別的一筆資料（M2b），見 [`CreateFieldRequest::relation_entity_id`]。 */
 "relation" | 
 /**  附件（M2b）。 */
 "file" | 
@@ -1112,6 +1131,11 @@ export type Record_Deserialize = {
 	title: string,
 	/**  所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。 */
 	data: { [key in string]: unknown },
+	/**
+	 *  關聯欄位所指的資料，鍵為 `field_key`；只包含 `data` 中有值的 `relation` 欄位
+	 *  （見模組說明「關聯欄位」）。
+	 */
+	relations?: { [key in string]: RelationRef },
 	/**  建立時間（RFC 3339）。 */
 	created_at: string,
 	created_by?: string | null,
@@ -1131,6 +1155,11 @@ export type Record_Serialize = {
 	title: string,
 	/**  所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。 */
 	data: { [key in string]: unknown },
+	/**
+	 *  關聯欄位所指的資料，鍵為 `field_key`；只包含 `data` 中有值的 `relation` 欄位
+	 *  （見模組說明「關聯欄位」）。
+	 */
+	relations: { [key in string]: RelationRef },
 	/**  建立時間（RFC 3339）。 */
 	created_at: string,
 	created_by: string | null,
@@ -1139,6 +1168,16 @@ export type Record_Serialize = {
 	updated_by: string | null,
 	/**  樂觀鎖定版本號（§9.4）。 */
 	version: number,
+};
+
+/**  關聯欄位所指的一筆資料（[`Record::relations`] 的值）。 */
+export type RelationRef = {
+	/**  目標資料的 id（與 `data` 中的值相同）。 */
+	id: string,
+	/**  目標資料的標題；找不到目標資料時為空字串。 */
+	title: string,
+	/**  目標資料已刪除（或找不到）。 */
+	deleted: boolean,
 };
 
 /**
@@ -1287,6 +1326,8 @@ export type UpdateFieldRequest_Deserialize = {
 	validation?: Validation_Deserialize | null,
 	options?: SelectOption_Deserialize[] | null,
 	decimal_places?: number | null,
+	/**  選填。關聯的資料類別建立後不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。 */
+	relation_entity_id?: string | null,
 	ui_widget?: string | null,
 	column_width?: number | null,
 	help_text?: string | null,
@@ -1321,6 +1362,8 @@ export type UpdateFieldRequest_Serialize = {
 	validation: Validation_Serialize | null,
 	options: SelectOption_Serialize[] | null,
 	decimal_places: number | null,
+	/**  選填。關聯的資料類別建立後不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。 */
+	relation_entity_id: string | null,
 	ui_widget: string | null,
 	column_width: number | null,
 	help_text: string | null,

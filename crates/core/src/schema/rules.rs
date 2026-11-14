@@ -2,7 +2,8 @@
 //!
 //! - [`plan_create_entity`]、[`plan_update_entity`]：資料類別
 //! - [`plan_create_field`]、[`plan_update_field`]：欄位，含 §7.2 系統欄位的限制
-//! - [`validate_field_config`]：欄位設定與型態相符（小數位數、選項、驗證規則、預設值）
+//! - [`validate_field_config`]：欄位設定與型態相符（小數位數、選項、驗證規則、預設值、關聯）
+//! - [`validate_relation_target`]：`relation` 欄位的目標資料類別
 //! - [`plan_reorder`]：調整欄位排序
 //! - [`plan_change_type`]：變更欄位資料型態的新定義（§7.4；資料的轉換在 [`super::type_change`]）
 //!
@@ -45,6 +46,7 @@ pub mod field {
     pub const VALIDATION: &str = "validation";
     pub const OPTIONS: &str = "options";
     pub const DECIMAL_PLACES: &str = "decimal_places";
+    pub const RELATION_ENTITY_ID: &str = "relation_entity_id";
     pub const UI_WIDGET: &str = "ui_widget";
     pub const COLUMN_WIDTH: &str = "column_width";
     pub const FIELDS: &str = "fields";
@@ -163,7 +165,7 @@ pub fn plan_create_field(
         validation: req.validation.clone(),
         options: req.options.clone(),
         decimal_places: req.decimal_places,
-        relation_entity_id: None,
+        relation_entity_id: req.relation_entity_id,
         formula: None,
         formula_result_type: None,
         ui_widget: req.ui_widget.clone(),
@@ -181,6 +183,7 @@ pub fn plan_create_field(
 /// 檢查修改欄位的輸入，回傳修改後的定義（`version` 等不變）。
 ///
 /// - `field_key` 有帶且與目前不同、`data_type` 與目前不同 → 錯誤（型態變更另有 API）
+/// - `relation_entity_id` 有帶且與目前不同 → 錯誤（建立後不可修改）
 /// - 自訂欄位：設定必須與型態相符（[`validate_field_config`]）
 /// - 系統欄位（§7.2）：只能修改顯示名稱、顯示或隱藏、排序、欄寬、說明文字、必填與預設值；
 ///   必填不可取消、不可停用，其他屬性必須維持原值
@@ -200,6 +203,14 @@ pub fn plan_update_field(
             "此操作不可變更資料型態"
         };
         return Err(invalid(field::DATA_TYPE, message));
+    }
+    if let Some(target) = req.relation_entity_id
+        && Some(target) != current.relation_entity_id
+    {
+        return Err(invalid(
+            field::RELATION_ENTITY_ID,
+            "關聯的資料類別建立後不可修改",
+        ));
     }
 
     let next = FieldDefinition {
@@ -270,7 +281,9 @@ fn validate_system_field_update(
 
 /// 檢查自訂欄位的設定與型態相符，回傳整理後的定義：
 ///
-/// - 型態目前支援（M2a 不允許 `relation`、`file`、`formula`）
+/// - 型態目前支援（不允許 `file`、`formula`）
+/// - `relation_entity_id`：`relation` 必填，其他型態不可設定（目標是否合法另由
+///   [`validate_relation_target`] 檢查，需要查詢資料庫）；`relation` 不可設定預設值
 /// - 顯示名稱去除前後空白後不可為空；`ui_widget`、`help_text` 空白視為未設定
 /// - `decimal_places`：`decimal`、`money` 必填（0 到 [`MAX_DECIMAL_PLACES`]），其他型態不可設定
 /// - `options`：`select`、`multi_select` 必填且至少一個，`value` 不可空白或重複、`label` 不可空白；
@@ -290,6 +303,18 @@ pub fn validate_field_config(mut def: FieldDefinition) -> Result<FieldDefinition
     validate_column_width(def.column_width)?;
 
     let t = def.data_type;
+    match (t == DataType::Relation, def.relation_entity_id) {
+        (true, None) => {
+            return Err(invalid(field::RELATION_ENTITY_ID, "請設定關聯的資料類別"));
+        }
+        (false, Some(_)) => {
+            return Err(invalid(
+                field::RELATION_ENTITY_ID,
+                "此型態不使用關聯的資料類別",
+            ));
+        }
+        _ => {}
+    }
     match (t.uses_decimal_places(), def.decimal_places) {
         (true, None) => return Err(invalid(field::DECIMAL_PLACES, "請設定小數位數")),
         (true, Some(p)) if !(0..=MAX_DECIMAL_PLACES).contains(&p) => {
@@ -367,7 +392,9 @@ pub fn validate_field_config(mut def: FieldDefinition) -> Result<FieldDefinition
 /// 檢查變更資料型態的輸入，回傳新的欄位定義（`version` 等不變）與轉換的種類。
 ///
 /// - 系統欄位不可變更型態（§7.2）→ 錯誤（`data_type`）
-/// - 型態相同、轉換自或轉換成 `relation`、`file`、`formula` → 錯誤（`data_type`）
+/// - 型態相同、不允許的轉換（[`type_change::classify`]：其他型態轉成 `relation`、`relation` 轉成
+///   文字以外的型態、`file`、`formula`）→ 錯誤（`data_type`）
+/// - 新型態不是 `relation`，所以清除 `relation_entity_id`
 /// - `decimal_places`、`options`、`validation` 依新型態整筆取代，須符合 [`validate_field_config`]
 /// - `default_value` 轉換成新型態；無法轉換 → 錯誤（`default_value`）
 pub fn plan_change_type(
@@ -385,6 +412,7 @@ pub fn plan_change_type(
         options: req.options.clone(),
         validation: req.validation.clone(),
         default_value: None,
+        relation_entity_id: None,
         ..current.clone()
     })?;
     next.default_value = match current.default_value.as_ref() {
@@ -407,9 +435,34 @@ fn normalize_default(def: &FieldDefinition) -> Result<Option<Value>, CoreError> 
             if !def.data_type.is_value_supported() {
                 return Err(invalid(field::DEFAULT_VALUE, "此型態目前不支援預設值"));
             }
+            if def.data_type == DataType::Relation {
+                return Err(invalid(field::DEFAULT_VALUE, "關聯欄位不可設定預設值"));
+            }
             normalize_field_value(def, value)
                 .map_err(|message| invalid(field::DEFAULT_VALUE, &format!("預設值{message}")))
         }
+    }
+}
+
+/// `relation` 欄位的目標資料類別（§7.3）：必須存在、是自訂資料類別（`storage = custom_records`）、
+/// 有效，且 `kind` 為 `master` 或 `document`。`target` 為依 `relation_entity_id` 查到的
+/// 未刪除資料類別。不符合 → 錯誤（`relation_entity_id`）。
+///
+/// 系統資料類別在 M3 支援。
+pub fn validate_relation_target(target: Option<&EntityDefinition>) -> Result<(), CoreError> {
+    let fail = |message: &str| Err(invalid(field::RELATION_ENTITY_ID, message));
+    let Some(target) = target else {
+        return fail("找不到關聯的資料類別");
+    };
+    if target.is_system || target.storage != EntityStorage::CustomRecords {
+        return fail("目前只能關聯到自訂資料類別");
+    }
+    if !target.is_active {
+        return fail("關聯的資料類別已停用");
+    }
+    match target.kind {
+        EntityKind::Master | EntityKind::Document => Ok(()),
+        EntityKind::Detail => fail("不能關聯到明細子表"),
     }
 }
 
@@ -530,6 +583,7 @@ mod tests {
             validation: None,
             options: None,
             decimal_places: None,
+            relation_entity_id: None,
             ui_widget: None,
             column_width: None,
             help_text: None,
@@ -552,6 +606,7 @@ mod tests {
             validation: def.validation.clone(),
             options: def.options.clone(),
             decimal_places: def.decimal_places,
+            relation_entity_id: None,
             ui_widget: def.ui_widget.clone(),
             column_width: def.column_width,
             help_text: def.help_text.clone(),
@@ -884,7 +939,7 @@ mod tests {
             create_err(&create_req("record_no", DataType::Text)),
             field::FIELD_KEY
         );
-        for t in [DataType::Relation, DataType::File, DataType::Formula] {
+        for t in [DataType::File, DataType::Formula] {
             assert_eq!(create_err(&create_req("x", t)), field::DATA_TYPE);
         }
         assert_eq!(
@@ -1467,6 +1522,142 @@ mod tests {
         );
         for t in [DataType::Relation, DataType::File, DataType::Formula] {
             assert_eq!(change_err(&def, &change_req(&def, t)), field::DATA_TYPE);
+        }
+    }
+
+    #[test]
+    fn relation_field_config() {
+        let target = new_id();
+        let relation = |target: Option<Id>| CreateFieldRequest {
+            relation_entity_id: target,
+            ..create_req("equipment", DataType::Relation)
+        };
+        let def = created(&relation(Some(target)));
+        assert_eq!(def.relation_entity_id, Some(target));
+
+        // 必須指定目標
+        assert_eq!(create_err(&relation(None)), field::RELATION_ENTITY_ID);
+        // 其他型態不可指定
+        assert_eq!(
+            create_err(&CreateFieldRequest {
+                relation_entity_id: Some(target),
+                ..create_req("name", DataType::Text)
+            }),
+            field::RELATION_ENTITY_ID
+        );
+        // 不可設定預設值
+        assert_eq!(
+            create_err(&CreateFieldRequest {
+                default_value: Some(json!(new_id().to_string())),
+                ..relation(Some(target))
+            }),
+            field::DEFAULT_VALUE
+        );
+        // 可搜尋、不可重複可以開啟
+        let def = created(&CreateFieldRequest {
+            is_searchable: true,
+            is_unique: true,
+            ..relation(Some(target))
+        });
+        assert!(def.is_searchable && def.is_unique);
+        // 不使用其他型態的設定
+        assert_eq!(
+            create_err(&CreateFieldRequest {
+                decimal_places: Some(2),
+                ..relation(Some(target))
+            }),
+            field::DECIMAL_PLACES
+        );
+    }
+
+    #[test]
+    fn relation_target_cannot_change() {
+        let target = new_id();
+        let def = created(&CreateFieldRequest {
+            relation_entity_id: Some(target),
+            ..create_req("equipment", DataType::Relation)
+        });
+        // 省略或帶相同的值：保留
+        let next = plan_update_field(&def, &update_req(&def)).unwrap();
+        assert_eq!(next.relation_entity_id, Some(target));
+        let same = UpdateFieldRequest {
+            relation_entity_id: Some(target),
+            ..update_req(&def)
+        };
+        assert_eq!(
+            plan_update_field(&def, &same).unwrap().relation_entity_id,
+            Some(target)
+        );
+        // 不同的值：錯誤
+        let other = UpdateFieldRequest {
+            relation_entity_id: Some(new_id()),
+            ..update_req(&def)
+        };
+        assert_eq!(
+            field_of(&plan_update_field(&def, &other).unwrap_err()),
+            field::RELATION_ENTITY_ID
+        );
+        // 非關聯欄位帶了也是錯誤
+        let text = created(&create_req("name", DataType::Text));
+        let req = UpdateFieldRequest {
+            relation_entity_id: Some(target),
+            ..update_req(&text)
+        };
+        assert_eq!(
+            field_of(&plan_update_field(&text, &req).unwrap_err()),
+            field::RELATION_ENTITY_ID
+        );
+    }
+
+    #[test]
+    fn relation_changes_only_to_text_and_clears_target() {
+        let def = created(&CreateFieldRequest {
+            relation_entity_id: Some(new_id()),
+            ..create_req("equipment", DataType::Relation)
+        });
+        for t in [DataType::Text, DataType::LongText] {
+            let (next, change) = plan_change_type(&def, &change_req(&def, t)).unwrap();
+            assert_eq!(next.data_type, t);
+            assert_eq!(next.relation_entity_id, None);
+            assert_eq!(change, TypeChange::Safe);
+        }
+        for t in [DataType::Integer, DataType::Date, DataType::Boolean] {
+            assert_eq!(change_err(&def, &change_req(&def, t)), field::DATA_TYPE);
+        }
+    }
+
+    #[test]
+    fn relation_target_rules() {
+        let ok = entity(false);
+        assert!(validate_relation_target(Some(&ok)).is_ok());
+        let document = EntityDefinition {
+            kind: EntityKind::Document,
+            ..entity(false)
+        };
+        assert!(validate_relation_target(Some(&document)).is_ok());
+
+        let detail = EntityDefinition {
+            kind: EntityKind::Detail,
+            ..entity(false)
+        };
+        let inactive = EntityDefinition {
+            is_active: false,
+            ..entity(false)
+        };
+        let table = EntityDefinition {
+            storage: EntityStorage::Table,
+            ..entity(false)
+        };
+        for target in [
+            None,
+            Some(&detail),
+            Some(&inactive),
+            Some(&entity(true)),
+            Some(&table),
+        ] {
+            let err = validate_relation_target(target).unwrap_err();
+            assert_eq!(err.code(), ErrorCode::Validation);
+            assert_eq!(field_of(&err), field::RELATION_ENTITY_ID, "{target:?}");
         }
     }
 

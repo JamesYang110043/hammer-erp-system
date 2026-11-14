@@ -114,6 +114,8 @@ fn protected_routes() -> Router<AppState> {
             "/entities/{key}/records",
             get(records::list).post(records::create),
         )
+        // 固定路徑 `lookup` 優先於 `{id}`（資料 id 是 uuid，不會衝突）
+        .route("/entities/{key}/records/lookup", get(records::lookup))
         .route(
             "/entities/{key}/records/{id}",
             get(records::get)

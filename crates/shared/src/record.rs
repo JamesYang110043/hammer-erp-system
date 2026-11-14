@@ -9,8 +9,10 @@
 //! | `POST /api/v1/entities/{key}/records` | [`CreateRecordRequest`] | `201` [`Record`] |
 //! | `PATCH /api/v1/entities/{key}/records/{id}` | [`UpdateRecordRequest`] | `200` [`Record`] |
 //! | `DELETE /api/v1/entities/{key}/records/{id}?version=N` | [`DeleteRecordQuery`] | `204 No Content` |
+//! | `GET /api/v1/entities/{key}/records/lookup?q=&limit=` | [`LookupQuery`]（query string） | `200` [`LookupItem`]`[]` |
 //!
-//! 讀取需要 `record.read`，寫入需要 `record.write`。`data` 的格式見 [`crate::schema::value`]。
+//! 讀取（含 `lookup`）需要 `record.read`，寫入需要 `record.write`。`data` 的格式見
+//! [`crate::schema::value`]。
 //!
 //! # 單號（`record_no`）
 //!
@@ -32,6 +34,19 @@
 //!   值依欄位型態格式化（選項顯示名稱、勾選顯示 是／否、日期時間為台北時間），沒有值時為空字串，
 //!   已停用的欄位視為沒有值
 //! - 沒有範本時依序使用：單號 → 排序最前面、有效的 `text` 欄位的值 → id 前 8 碼
+//!
+//! # 關聯欄位（`relation`）
+//!
+//! `relation` 欄位的值是目標資料類別（欄位定義的 `relation_entity_id`）中一筆資料的 id。
+//!
+//! - 寫入：值必須是目標資料類別中**未刪除**的資料 id；不存在、已刪除、屬於其他資料類別 →
+//!   `422 VALIDATION`，`details.fields` 指出欄位。修改資料時只檢查有變動的關聯欄位
+//! - 目標資料之後被刪除：允許刪除，關聯欄位保留原值
+//! - 回應：[`Record::relations`] 列出 `data` 中每個有值的關聯欄位所指的資料
+//!   `{ "<field_key>": { "id", "title", "deleted" } }`（[`RelationRef`]）。`title` 依目標資料類別的
+//!   標題規則產生；目標已刪除時 `deleted` 為 `true`，`title` 仍為刪除前的標題
+//! - 篩選只支援 `eq`（值為資料 id）與 `empty`；不能排序
+//! - 選擇器：`GET /api/v1/entities/{key}/records/lookup` 搜尋 `{key}` 的資料，見 [`LookupQuery`]
 //!
 //! 錯誤：
 //!
@@ -62,6 +77,8 @@
 //! [`RecordListQuery::from_pairs`] 解析語法；欄位是否存在、運算子是否適用於該型態、
 //! 值的格式由伺服器依欄位定義檢查。
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use specta::Type;
@@ -84,6 +101,10 @@ pub struct Record {
     /// 所有欄位的值，鍵為 `field_key`，格式依 [`crate::schema::value`]。沒有值的欄位不會出現。
     #[specta(type = std::collections::HashMap<String, specta_typescript::Unknown>)]
     pub data: Map<String, Value>,
+    /// 關聯欄位所指的資料，鍵為 `field_key`；只包含 `data` 中有值的 `relation` 欄位
+    /// （見模組說明「關聯欄位」）。
+    #[serde(default)]
+    pub relations: BTreeMap<String, RelationRef>,
     /// 建立時間（RFC 3339）。
     #[serde(with = "time::serde::rfc3339")]
     #[specta(type = String)]
@@ -96,6 +117,113 @@ pub struct Record {
     pub updated_by: Option<Id>,
     /// 樂觀鎖定版本號（§9.4）。
     pub version: i32,
+}
+
+/// 關聯欄位所指的一筆資料（[`Record::relations`] 的值）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct RelationRef {
+    /// 目標資料的 id（與 `data` 中的值相同）。
+    pub id: Id,
+    /// 目標資料的標題；找不到目標資料時為空字串。
+    pub title: String,
+    /// 目標資料已刪除（或找不到）。
+    pub deleted: bool,
+}
+
+/// `GET /api/v1/entities/{key}/records/lookup` 的 query string（選擇器搜尋）。
+///
+/// | 參數 | 說明 |
+/// |---|---|
+/// | `q` | 關鍵字，比對資料標題（[`Record::title`]）：以空白分隔的每個詞都要出現在標題中，不分大小寫。省略或空白時不篩選 |
+/// | `limit` | 最多回傳的筆數，預設 [`LOOKUP_DEFAULT_LIMIT`]，上限 [`LOOKUP_MAX_LIMIT`]（超過時套用上限） |
+///
+/// 回應為 [`LookupItem`] 陣列，不含已刪除的資料，依建立順序由新到舊。
+///
+/// 錯誤：`limit` 不是整數 → `400 BAD_REQUEST`；小於 1 → `422 VALIDATION`（`details.field = limit`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct LookupQuery {
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// [`LookupQuery`] 的參數名稱。
+pub mod lookup_param {
+    /// 關鍵字。
+    pub const Q: &str = "q";
+    /// 筆數上限。
+    pub const LIMIT: &str = "limit";
+}
+
+/// `lookup` 預設回傳的筆數。
+pub const LOOKUP_DEFAULT_LIMIT: u32 = 20;
+/// `lookup` 最多回傳的筆數。
+pub const LOOKUP_MAX_LIMIT: u32 = 50;
+
+impl LookupQuery {
+    /// 由 query string 的 `(名稱, 值)` 解析；其他參數忽略，重複時以最後一個為準。
+    ///
+    /// `limit` 不是非負整數 → [`QueryParamError::NotInteger`]；為 0 →
+    /// [`QueryParamError::Invalid`]。
+    pub fn from_pairs<K, V>(pairs: &[(K, V)]) -> Result<Self, QueryParamError>
+    where
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let mut query = Self::default();
+        for (name, value) in pairs {
+            match name.as_ref() {
+                lookup_param::Q => query.q = Some(value.as_ref().to_owned()),
+                lookup_param::LIMIT => {
+                    let limit = parse_u32(lookup_param::LIMIT, value.as_ref())?;
+                    if limit == 0 {
+                        return Err(QueryParamError::Invalid {
+                            param: lookup_param::LIMIT.to_owned(),
+                            message: "limit 必須大於等於 1".to_owned(),
+                        });
+                    }
+                    query.limit = Some(limit);
+                }
+                _ => {}
+            }
+        }
+        Ok(query)
+    }
+
+    /// 實際套用的筆數上限。
+    pub fn effective_limit(&self) -> u32 {
+        self.limit
+            .unwrap_or(LOOKUP_DEFAULT_LIMIT)
+            .clamp(1, LOOKUP_MAX_LIMIT)
+    }
+
+    /// 關鍵字以空白分隔、轉成小寫後的詞；沒有關鍵字時為空。
+    pub fn terms(&self) -> Vec<String> {
+        self.q
+            .as_deref()
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect()
+    }
+}
+
+/// 標題是否符合 [`LookupQuery::terms`]：每個詞都出現在標題中（不分大小寫）。沒有詞時一律符合。
+pub fn title_matches(title: &str, terms: &[String]) -> bool {
+    if terms.is_empty() {
+        return true;
+    }
+    let title = title.to_lowercase();
+    terms.iter().all(|t| title.contains(t.as_str()))
+}
+
+/// 選擇器搜尋的一筆結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct LookupItem {
+    pub id: Id,
+    /// 資料標題（[`Record::title`]）。
+    pub title: String,
 }
 
 /// 新增資料的輸入。沒有帶到的欄位套用預設值。單號由伺服器產生，request 中的 `record_no` 會被忽略。
@@ -483,12 +611,66 @@ mod tests {
     }
 
     #[test]
+    fn lookup_query_parsing() {
+        assert_eq!(
+            LookupQuery::from_pairs::<&str, &str>(&[]).unwrap(),
+            LookupQuery::default()
+        );
+        let q =
+            LookupQuery::from_pairs(&[("q", " 台北  Pump "), ("limit", "5"), ("x", "1")]).unwrap();
+        assert_eq!(q.limit, Some(5));
+        assert_eq!(q.terms(), ["台北", "pump"]);
+        assert_eq!(q.effective_limit(), 5);
+        assert_eq!(
+            LookupQuery::default().effective_limit(),
+            LOOKUP_DEFAULT_LIMIT
+        );
+        assert_eq!(
+            LookupQuery::from_pairs(&[("limit", "999")])
+                .unwrap()
+                .effective_limit(),
+            LOOKUP_MAX_LIMIT
+        );
+        assert!(
+            LookupQuery::from_pairs(&[("q", "   ")])
+                .unwrap()
+                .terms()
+                .is_empty()
+        );
+        assert_eq!(
+            LookupQuery::from_pairs(&[("limit", "abc")]).unwrap_err(),
+            QueryParamError::NotInteger { param: "limit" }
+        );
+        match LookupQuery::from_pairs(&[("limit", "0")]).unwrap_err() {
+            QueryParamError::Invalid { param, .. } => assert_eq!(param, "limit"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn title_matching() {
+        let terms = |q: &str| {
+            LookupQuery {
+                q: Some(q.into()),
+                limit: None,
+            }
+            .terms()
+        };
+        assert!(title_matches("EQ-001 台北 Pump", &terms("pump 台北")));
+        assert!(title_matches("EQ-001 台北 Pump", &terms("")));
+        assert!(title_matches("EQ-001 台北 Pump", &terms("eq-0")));
+        assert!(!title_matches("EQ-001 台北 Pump", &terms("pump 高雄")));
+        assert!(!title_matches("", &terms("a")));
+    }
+
+    #[test]
     fn record_json_shape() {
         let r = Record {
             id: crate::new_id(),
             record_no: Some("SO202611-0001".into()),
             title: "SO202611-0001".into(),
             data: json!({ "qty": 1 }).as_object().unwrap().clone(),
+            relations: BTreeMap::new(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,
             updated_at: OffsetDateTime::UNIX_EPOCH,
@@ -500,7 +682,25 @@ mod tests {
         assert_eq!(v["record_no"], json!("SO202611-0001"));
         assert_eq!(v["title"], json!("SO202611-0001"));
         assert_eq!(v["created_at"], json!("1970-01-01T00:00:00Z"));
+        assert_eq!(v["relations"], json!({}));
         assert_eq!(serde_json::from_value::<Record>(v).unwrap(), r);
+
+        let target = crate::new_id();
+        let mut with_relation = r.clone();
+        with_relation.relations.insert(
+            "equipment".into(),
+            RelationRef {
+                id: target,
+                title: "EQ-001".into(),
+                deleted: true,
+            },
+        );
+        let v = serde_json::to_value(&with_relation).unwrap();
+        assert_eq!(
+            v["relations"],
+            json!({ "equipment": { "id": target, "title": "EQ-001", "deleted": true } })
+        );
+        assert_eq!(serde_json::from_value::<Record>(v).unwrap(), with_relation);
 
         let req: UpdateRecordRequest = serde_json::from_value(json!({ "version": 2 })).unwrap();
         assert!(req.data.is_empty());

@@ -1,0 +1,208 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,\n               numbering_pattern, title_template, sort_order, is_active,\n               created_at, updated_at, version\n        FROM entity_definitions\n        WHERE id = $1 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "icon",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "icon"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "is_system",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "is_system"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "storage",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "storage"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "table_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "table_name"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "parent_entity_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "parent_entity_id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "numbering_pattern",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "numbering_pattern"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "title_template",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "title_template"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "sort_order",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "sort_order"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "is_active",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3979249d242fee6cd921ac611f738fea9bc6ef09453d3ce2d5439fd353624cca"
+}

@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, record_no, data, deleted_at IS NOT NULL AS \"deleted!\"\n        FROM custom_records\n        WHERE entity_id = $1 AND id = ANY($2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "record_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "record_no"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "data",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "data"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "deleted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "32266331f383ef069ede5b9c04848167271739e34d7e2999bbd54c01751c2489"
+}

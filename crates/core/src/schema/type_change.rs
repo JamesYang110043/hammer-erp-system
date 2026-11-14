@@ -14,7 +14,8 @@
 //! | `select` → `multi_select` | 允許（[`TypeChange::Safe`]） |
 //! | 其他 | 逐筆轉換（[`TypeChange::Checked`]），只要有一筆失敗就拒絕 |
 //!
-//! `relation`、`file`、`formula` 不能轉換（M2b、M2c）。
+//! `relation` 只能轉成 `text` / `long_text`（值為資料 id 的文字），其他型態不能轉成 `relation`；
+//! `file`、`formula` 不能轉換（M2b、M2c）。
 //!
 //! 「允許」代表型態本身一定能轉換。轉換後的值一律再依新的欄位定義正規化
 //! （[`normalize_field_value`]），所以新的設定比較嚴格時（例如字元數上限、選項、小數位數），
@@ -63,8 +64,14 @@ pub fn classify(from: DataType, to: DataType) -> Result<TypeChange, &'static str
     if from == to {
         return Err("新的資料型態與目前相同");
     }
+    if to == DataType::Relation {
+        return Err("其他型態不能轉換成關聯");
+    }
+    if from == DataType::Relation && !matches!(to, DataType::Text | DataType::LongText) {
+        return Err("關聯欄位只能轉換成單行文字或多行文字");
+    }
     if !from.is_value_supported() || !to.is_value_supported() {
-        return Err("關聯、附件、公式欄位目前不能變更資料型態");
+        return Err("附件、公式欄位目前不能變更資料型態");
     }
     let safe = matches!(to, DataType::Text | DataType::LongText)
         || matches!(
@@ -184,12 +191,13 @@ fn text_of(value: &FieldValue) -> String {
         FieldValue::Integer(n) => n.to_string(),
         FieldValue::Boolean(b) => b.to_string(),
         FieldValue::MultiSelect(items) => items.join(", "),
-        FieldValue::Decimal(_) | FieldValue::Date(_) | FieldValue::DateTime(_) => {
-            match to_json(value) {
-                Value::String(s) => s,
-                other => other.to_string(),
-            }
-        }
+        FieldValue::Decimal(_)
+        | FieldValue::Date(_)
+        | FieldValue::DateTime(_)
+        | FieldValue::Relation(_) => match to_json(value) {
+            Value::String(s) => s,
+            other => other.to_string(),
+        },
     }
 }
 
@@ -442,13 +450,39 @@ mod tests {
     }
 
     #[test]
-    fn relation_file_formula_cannot_change() {
+    fn file_formula_cannot_change() {
         for &t in SUPPORTED {
-            for other in [DataType::Relation, DataType::File, DataType::Formula] {
+            for other in [DataType::File, DataType::Formula] {
                 assert!(classify(t, other).is_err(), "{t:?} → {other:?}");
                 assert!(classify(other, t).is_err(), "{other:?} → {t:?}");
             }
         }
+    }
+
+    /// `relation` 只能轉成 text / long_text；其他型態不能轉成 `relation`（§7.4）。
+    #[test]
+    fn relation_only_changes_to_text() {
+        use DataType::*;
+        for &t in SUPPORTED {
+            assert!(classify(t, Relation).is_err(), "{t:?} → Relation");
+            let expected_ok = matches!(t, Text | LongText);
+            assert_eq!(
+                classify(Relation, t).is_ok(),
+                expected_ok,
+                "Relation → {t:?}"
+            );
+        }
+        for other in [File, Formula] {
+            assert!(classify(Relation, other).is_err());
+            assert!(classify(other, Relation).is_err());
+        }
+        assert_eq!(classify(Relation, Text), Ok(TypeChange::Safe));
+        assert_eq!(classify(Relation, LongText), Ok(TypeChange::Safe));
+
+        let id = "0190c3a2-0000-7000-8000-000000000000";
+        assert_eq!(ok(Relation, Text, json!(id)), json!(id));
+        assert_eq!(ok(Relation, LongText, json!(id)), json!(id));
+        assert_eq!(convert(Relation, Text, Value::Null), Ok(None));
     }
 
     /// 任意型態 → text / long_text：一定成功。

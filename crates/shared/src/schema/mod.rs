@@ -79,7 +79,7 @@ pub enum DataType {
     Select,
     /// 下拉多選。
     MultiSelect,
-    /// 關聯到其他資料類別（M2b）。
+    /// 關聯到其他資料類別的一筆資料（M2b），見 [`CreateFieldRequest::relation_entity_id`]。
     Relation,
     /// 附件（M2b）。
     File,
@@ -131,9 +131,9 @@ impl DataType {
 
     /// 目前是否支援此型態的值與建立此型態的欄位。
     ///
-    /// `relation`、`file`、`formula` 在 M2b、M2c 才支援，M2a 的 API 不允許建立。
+    /// `file`、`formula` 尚未支援（M2b、M2c），API 不允許建立。
     pub fn is_value_supported(self) -> bool {
-        !matches!(self, Self::Relation | Self::File | Self::Formula)
+        !matches!(self, Self::File | Self::Formula)
     }
 
     /// 是否使用 `decimal_places`（`decimal`、`money`）。
@@ -421,7 +421,7 @@ pub struct UpdateEntityRequest {
 
 /// 建立欄位的輸入。儲存方式固定為 `json`。
 ///
-/// M2a 不允許 `relation`、`file`、`formula`（見 [`DataType::is_value_supported`]）。
+/// 目前不允許 `file`、`formula`（見 [`DataType::is_value_supported`]）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct CreateFieldRequest {
     /// 欄位代碼，須符合 [`validate_key`]；建立後不可修改。
@@ -452,6 +452,13 @@ pub struct CreateFieldRequest {
     /// `decimal`、`money` 必填。
     #[serde(default)]
     pub decimal_places: Option<i16>,
+    /// `relation` 必填：關聯的資料類別 id，建立後不可修改；其他型態不可設定。
+    ///
+    /// 目標必須是**自訂**（`storage = custom_records`）、有效、`kind` 為 `master` 或 `document`
+    /// 的資料類別（可以是自己）；不符合時回傳 `422 VALIDATION`，`details.field` 為
+    /// `relation_entity_id`。系統資料類別在 M3 支援。`relation` 欄位不可設定預設值。
+    #[serde(default)]
+    pub relation_entity_id: Option<Id>,
     #[serde(default)]
     pub ui_widget: Option<String>,
     #[serde(default)]
@@ -490,6 +497,9 @@ pub struct UpdateFieldRequest {
     pub validation: Option<Validation>,
     pub options: Option<Vec<SelectOption>>,
     pub decimal_places: Option<i16>,
+    /// 選填。關聯的資料類別建立後不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。
+    #[serde(default)]
+    pub relation_entity_id: Option<Id>,
     pub ui_widget: Option<String>,
     pub column_width: Option<i32>,
     pub help_text: Option<String>,
@@ -515,14 +525,15 @@ pub struct DeactivateFieldRequest {
 ///
 /// | 從 → 到 | 規則 |
 /// |---|---|
-/// | 任意型態 → `text` / `long_text` | 允許（轉成文字） |
+/// | 任意型態 → `text` / `long_text` | 允許（轉成文字；`relation` 轉成資料 id 的文字） |
 /// | `text` ↔ `long_text` | 允許 |
 /// | `integer` → `decimal` | 允許 |
 /// | `select` → `multi_select` | 允許（變成只有一個選項的陣列） |
 /// | 其他 | 逐筆轉換，只要有一筆失敗就拒絕 |
 ///
 /// 轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
-/// `relation`、`file`、`formula` 不能轉換。
+/// `relation` 只能轉成 `text` / `long_text`（轉換後清除 `relation_entity_id`），其他型態不能轉成
+/// `relation`；`file`、`formula` 不能轉換。
 ///
 /// 錯誤：
 /// - 有資料無法轉換 → `422 VALIDATION`，`details` 為
@@ -637,15 +648,12 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_types_in_m2a() {
+    fn unsupported_types() {
         let unsupported: Vec<_> = DataType::ALL
             .iter()
             .filter(|t| !t.is_value_supported())
             .collect();
-        assert_eq!(
-            unsupported,
-            [&DataType::Relation, &DataType::File, &DataType::Formula]
-        );
+        assert_eq!(unsupported, [&DataType::File, &DataType::Formula]);
     }
 
     #[test]

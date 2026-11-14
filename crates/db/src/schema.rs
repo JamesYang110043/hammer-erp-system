@@ -1,6 +1,6 @@
 //! 客製化模組的資料類別與欄位定義存取（docs/architecture.md §7、§8.5）。
 //!
-//! - `entity_definitions`：[`list_active_entities`]、[`find_entity_by_key`]、
+//! - `entity_definitions`：[`list_active_entities`]、[`find_entity_by_key`]、[`find_entity_by_id`]、
 //!   [`find_entity_by_key_for_update`]、[`insert_entity`]、[`update_entity`]
 //! - `field_definitions`：[`list_fields`]、[`list_fields_for_update`]、[`find_field`]、
 //!   [`find_field_for_update`]、[`insert_field`]、[`update_field`]、[`update_field_sort_order`]
@@ -83,6 +83,27 @@ pub async fn find_entity_by_key<'e>(
         WHERE key = $1 AND deleted_at IS NULL
         "#,
         key,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 依 id 查詢未刪除的資料類別（含已停用）。
+pub async fn find_entity_by_id<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<EntityRow>, DbError> {
+    let row = sqlx::query_as!(
+        EntityRow,
+        r#"
+        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,
+               numbering_pattern, title_template, sort_order, is_active,
+               created_at, updated_at, version
+        FROM entity_definitions
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
     )
     .fetch_optional(executor)
     .await?;
@@ -388,6 +409,8 @@ pub struct NewField<'a> {
     pub entity_id: Uuid,
     pub field_key: &'a str,
     pub data_type: &'a str,
+    /// `relation` 關聯的資料類別（建立後不可修改，所以不在 [`FieldAttributes`] 內）。
+    pub relation_entity_id: Option<Uuid>,
     pub attrs: FieldAttributes<'a>,
     pub created_by: Uuid,
     pub created_at: OffsetDateTime,
@@ -407,9 +430,10 @@ pub async fn insert_field<'e>(
             (id, entity_id, field_key, label, data_type, is_system, storage,
              is_required, is_visible, is_readonly, is_searchable, is_unique,
              default_value, validation, options, decimal_places, ui_widget, column_width,
-             help_text, sort_order, created_at, created_by, updated_at, updated_by)
+             help_text, sort_order, created_at, created_by, updated_at, updated_by,
+             relation_entity_id)
         VALUES ($1, $2, $3, $4, $5, false, 'json', $6, $7, $8, $9, $10,
-                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $19, $20)
+                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $19, $20, $21)
         "#,
         new.id,
         new.entity_id,
@@ -431,6 +455,7 @@ pub async fn insert_field<'e>(
         a.sort_order,
         new.created_at,
         new.created_by,
+        new.relation_entity_id,
     )
     .execute(executor)
     .await?;
@@ -491,6 +516,8 @@ pub struct FieldTypeUpdate<'a> {
     pub options: Option<&'a Value>,
     pub validation: Option<&'a Value>,
     pub default_value: Option<&'a Value>,
+    /// 新型態不是 `relation` 時為 `None`（清除）。
+    pub relation_entity_id: Option<Uuid>,
     pub updated_by: Uuid,
 }
 
@@ -503,7 +530,7 @@ pub async fn update_field_type<'e>(
         r#"
         UPDATE field_definitions
         SET data_type = $3, decimal_places = $4, options = $5, validation = $6,
-            default_value = $7, updated_by = $8, version = version + 1
+            default_value = $7, updated_by = $8, relation_entity_id = $9, version = version + 1
         WHERE id = $1 AND version = $2 AND deleted_at IS NULL
         "#,
         update.id,
@@ -514,6 +541,7 @@ pub async fn update_field_type<'e>(
         update.validation,
         update.default_value,
         update.updated_by,
+        update.relation_entity_id,
     )
     .execute(executor)
     .await?;

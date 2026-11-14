@@ -1,6 +1,6 @@
 //! 自訂資料類別的資料（docs/architecture.md §6.1、§7.1、§7.5、§8.5 `custom_records`、§9.4、§10）。
 //!
-//! - 讀取（需要 `record.read`）：[`list_records`]、[`get_record`]
+//! - 讀取（需要 `record.read`）：[`list_records`]、[`get_record`]、[`lookup_records`]（選擇器搜尋）
 //! - 寫入（需要 `record.write`）：[`create_record`]、[`update_record`]、[`delete_record`]
 //!
 //! 只處理有效（啟用、未刪除）且 `storage = custom_records` 的資料類別，其他一律回傳
@@ -18,6 +18,9 @@
 //! 列表的 query string 格式見 [`hammer_shared::record`]；欄位與運算子的檢查在 [`plan_list`]。
 //!
 //! 回應的 [`Record::title`] 依資料類別的 `title_template` 產生（[`crate::title`]）。
+//!
+//! 關聯欄位（`relation`）：寫入時檢查有變動的關聯所指的資料存在且未刪除，回應填入
+//! [`Record::relations`]（[`crate::relations`]）。篩選只支援 `eq`、`empty`，不能排序。
 
 use hammer_db::DbError;
 use hammer_db::ensure_version_matched;
@@ -30,8 +33,8 @@ use hammer_db::schema as schema_db;
 use hammer_db::sqlx::{PgConnection, PgPool, PgTransaction};
 use hammer_shared::pagination::{Page, PageRequest};
 use hammer_shared::record::{
-    CreateRecordRequest, FilterOp, QueryParamError, RECORD_NO, Record, RecordFilter,
-    RecordListQuery, UpdateRecordRequest, query_param,
+    CreateRecordRequest, FilterOp, LookupItem, LookupQuery, QueryParamError, RECORD_NO, Record,
+    RecordFilter, RecordListQuery, UpdateRecordRequest, query_param, title_matches,
 };
 use hammer_shared::schema::{
     DataType, EntityDefinition, EntityStorage, FieldDefinition, FieldStorage, parse_value, to_json,
@@ -45,6 +48,7 @@ use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
 use crate::numbering::{NumberingPattern, numbering_date};
 use crate::record_data::{FieldError, WriteMode, normalize_record_data};
+use crate::relations::{attach_relations, check_relations};
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version, entity_from_row, field_from_row};
 use crate::title::TitleRenderer;
 
@@ -86,10 +90,11 @@ pub async fn list_records(
     let total = db::count_records(&mut *conn, &filter).await?;
     let rows = db::list_records(&mut *conn, &filter, page.limit(), page.offset()).await?;
     let titles = renderer(&entity, &fields);
-    let items = rows
+    let mut items = rows
         .into_iter()
         .map(|row| record_from_row(row, &titles))
         .collect::<Result<Vec<_>, _>>()?;
+    attach_relations(&mut conn, &fields, &mut items).await?;
     let total = u32::try_from(total).unwrap_or(u32::MAX);
     Ok(Page::new(items, total, page))
 }
@@ -107,7 +112,58 @@ pub async fn get_record(
     let row = db::find_record(&mut *conn, entity.id, id)
         .await?
         .ok_or_else(record_not_found)?;
-    record_from_row(row, &renderer(&entity, &fields))
+    let record = record_from_row(row, &renderer(&entity, &fields))?;
+    with_relations(&mut conn, &fields, record).await
+}
+
+/// 選擇器搜尋：依關鍵字比對資料標題，回傳未刪除的資料的 id 與標題。需要 `record.read`。
+///
+/// 標題在讀取時產生、不存入資料庫（§8.5），所以依 id 由新到舊分批讀取資料、產生標題後比對，
+/// 直到找到 `limit` 筆或讀完為止。query string 格式見 [`LookupQuery`]。
+///
+/// - `limit` 不是整數 → [`CoreError::BadRequest`]；小於 1 → [`CoreError::InvalidParam`]
+pub async fn lookup_records(
+    pool: &PgPool,
+    ctx: &AuthContext,
+    entity_key: &str,
+    pairs: &[(String, String)],
+) -> Result<Vec<LookupItem>, CoreError> {
+    /// 每批讀取的筆數。
+    const BATCH: i64 = 200;
+
+    ctx.require(permission::RECORD_READ)?;
+    let mut conn = pool.acquire().await.map_err(DbError::from)?;
+    let (entity, fields) = load_entity(&mut conn, entity_key).await?;
+    let query = LookupQuery::from_pairs(pairs).map_err(|err| match err {
+        QueryParamError::NotInteger { .. } => CoreError::BadRequest(err.message()),
+        QueryParamError::Invalid { param, message } => CoreError::InvalidParam { param, message },
+    })?;
+    let limit = query.effective_limit() as usize;
+    let terms = query.terms();
+    let titles = renderer(&entity, &fields);
+
+    let mut items = Vec::new();
+    let mut before = None;
+    loop {
+        let rows = db::list_records_before(&mut *conn, entity.id, before, BATCH).await?;
+        let exhausted = (rows.len() as i64) < BATCH;
+        before = rows.last().map(|r| r.id);
+        for row in rows {
+            let Some(data) = row.data.as_object() else {
+                continue;
+            };
+            let title = titles.render(row.id, row.record_no.as_deref(), data);
+            if title_matches(&title, &terms) {
+                items.push(LookupItem { id: row.id, title });
+                if items.len() >= limit {
+                    return Ok(items);
+                }
+            }
+        }
+        if exhausted {
+            return Ok(items);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -132,10 +188,10 @@ pub async fn create_record(
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
     let (entity, fields) = load_entity_for_write(&mut tx, entity_key).await?;
-    let data = Value::Object(
-        normalize_record_data(&fields, &req.data, WriteMode::Create)
-            .map_err(CoreError::InvalidFields)?,
-    );
+    let data = normalize_record_data(&fields, &req.data, WriteMode::Create)
+        .map_err(CoreError::InvalidFields)?;
+    check_relations(&mut tx, &fields, &data, None).await?;
+    let data = Value::Object(data);
 
     // 驗證通過後才取號：流水號的列鎖定到 transaction 結束，越晚取號鎖定的時間越短
     let record_no = next_record_no(&mut tx, &entity, now).await?;
@@ -172,7 +228,7 @@ pub async fn create_record(
         now,
     )
     .await?;
-    let record = fetch_record(&mut tx, &renderer(&entity, &fields), entity.id, id).await?;
+    let record = fetch_record(&mut tx, &entity, &fields, id).await?;
     commit(tx).await?;
 
     tracing::info!(actor = %ctx.user_id, entity = %entity.key, record_id = %id, "已新增資料");
@@ -202,14 +258,17 @@ pub async fn update_record(
     ensure_version(current.version, req.version)?;
 
     let existing = data_object(&current.data)?;
-    let data = Value::Object(
-        normalize_record_data(&fields, &req.data, WriteMode::Update { existing })
-            .map_err(CoreError::InvalidFields)?,
-    );
-    if data == current.data {
+    let data = normalize_record_data(&fields, &req.data, WriteMode::Update { existing })
+        .map_err(CoreError::InvalidFields)?;
+    if data == *existing {
+        let record = record_from_row(current, &renderer(&entity, &fields))?;
+        let record = with_relations(&mut tx, &fields, record).await?;
         commit(tx).await?;
-        return record_from_row(current, &renderer(&entity, &fields));
+        return Ok(record);
     }
+    // 只檢查有變動的關聯：目標之後被刪除時，仍可修改其他欄位
+    check_relations(&mut tx, &fields, &data, Some(existing)).await?;
+    let data = Value::Object(data);
 
     let updated = db::update_record_data(&mut *tx, id, req.version, &data, ctx.user_id).await;
     match updated {
@@ -230,7 +289,7 @@ pub async fn update_record(
         now,
     )
     .await?;
-    let record = fetch_record(&mut tx, &renderer(&entity, &fields), entity.id, id).await?;
+    let record = fetch_record(&mut tx, &entity, &fields, id).await?;
     commit(tx).await?;
 
     tracing::info!(actor = %ctx.user_id, entity = %entity.key, record_id = %id, "已修改資料");
@@ -384,21 +443,24 @@ fn queryable_field<'a>(
         })
 }
 
-/// 比較與排序時的轉型方式；`multi_select` 只能排序不能比較。
+/// 比較與排序時的轉型方式；`multi_select` 只能排序不能比較，`relation` 只能比較（`eq`）不能排序。
 fn compare_cast(data_type: DataType) -> Option<JsonCast> {
     match data_type {
-        DataType::Text | DataType::LongText | DataType::Select => Some(JsonCast::Text),
+        DataType::Text | DataType::LongText | DataType::Select | DataType::Relation => {
+            Some(JsonCast::Text)
+        }
         DataType::Integer | DataType::Decimal | DataType::Money => Some(JsonCast::Numeric),
         DataType::Date => Some(JsonCast::Date),
         DataType::DateTime => Some(JsonCast::Timestamptz),
         DataType::Boolean => Some(JsonCast::Boolean),
-        DataType::MultiSelect | DataType::Relation | DataType::File | DataType::Formula => None,
+        DataType::MultiSelect | DataType::File | DataType::Formula => None,
     }
 }
 
 fn sort_cast(data_type: DataType) -> Option<JsonCast> {
     match data_type {
         DataType::MultiSelect => Some(JsonCast::Jsonb),
+        DataType::Relation => None,
         other => compare_cast(other),
     }
 }
@@ -549,8 +611,8 @@ fn renderer<'a>(entity: &EntityDefinition, fields: &'a [FieldDefinition]) -> Tit
     TitleRenderer::new(entity.title_template.as_deref(), fields)
 }
 
-/// 資料列轉成 API 回應，`title` 由 `titles` 產生。`data` 不是 JSON 物件時回傳
-/// [`CoreError::Internal`]。
+/// 資料列轉成 API 回應，`title` 由 `titles` 產生；`relations` 為空，由
+/// [`attach_relations`] 填入。`data` 不是 JSON 物件時回傳 [`CoreError::Internal`]。
 pub fn record_from_row(row: RecordRow, titles: &TitleRenderer<'_>) -> Result<Record, CoreError> {
     let Value::Object(data) = row.data else {
         return Err(CoreError::Internal(
@@ -562,6 +624,7 @@ pub fn record_from_row(row: RecordRow, titles: &TitleRenderer<'_>) -> Result<Rec
         id: row.id,
         record_no: row.record_no,
         data,
+        relations: Default::default(),
         created_at: row.created_at,
         created_by: row.created_by,
         updated_at: row.updated_at,
@@ -683,14 +746,27 @@ async fn lock_record(
 
 async fn fetch_record(
     tx: &mut PgTransaction<'_>,
-    titles: &TitleRenderer<'_>,
-    entity_id: Id,
+    entity: &EntityDefinition,
+    fields: &[FieldDefinition],
     id: Id,
 ) -> Result<Record, CoreError> {
-    let row = db::find_record(&mut **tx, entity_id, id)
+    let row = db::find_record(&mut **tx, entity.id, id)
         .await?
         .ok_or_else(|| CoreError::Internal("寫入後找不到資料".into()))?;
-    record_from_row(row, titles)
+    let record = record_from_row(row, &renderer(entity, fields))?;
+    with_relations(tx, fields, record).await
+}
+
+/// 填入一筆資料的 [`Record::relations`]。
+async fn with_relations(
+    conn: &mut PgConnection,
+    fields: &[FieldDefinition],
+    record: Record,
+) -> Result<Record, CoreError> {
+    let mut records = [record];
+    attach_relations(conn, fields, &mut records).await?;
+    let [record] = records;
+    Ok(record)
 }
 
 fn record_not_found() -> CoreError {
@@ -905,6 +981,33 @@ mod tests {
                 compare("status", JsonCast::Text, CompareOp::Eq, "a"),
             ]
         );
+    }
+
+    #[test]
+    fn relation_supports_only_eq_and_empty() {
+        let id = "0190c3a2-0000-7000-8000-000000000000";
+        assert_eq!(
+            conditions(&[
+                ("filter.rel.eq", "0190C3A2-0000-7000-8000-000000000000"),
+                ("filter.rel.empty", "false"),
+            ]),
+            vec![
+                // 比較值統一為存值格式（小寫連字號）
+                compare("rel", JsonCast::Text, CompareOp::Eq, id),
+                RecordCondition::HasValue {
+                    field_key: "rel".into(),
+                    has_value: true,
+                },
+            ]
+        );
+        for op in ["contains", "gt", "gte", "lt", "lte", "any"] {
+            let name = format!("filter.rel.{op}");
+            let (param, _) = invalid_param(&[(name.as_str(), id)]);
+            assert_eq!(param, name);
+        }
+        let (param, message) = invalid_param(&[("filter.rel.eq", "abc")]);
+        assert_eq!(param, "filter.rel.eq");
+        assert_eq!(message, "資料 id 格式不正確");
     }
 
     #[test]

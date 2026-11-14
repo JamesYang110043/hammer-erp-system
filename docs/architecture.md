@@ -218,6 +218,16 @@ desktop(src-tauri) ──▶ shared, formula
 | `file` | 附件 | string（attachments.id） |
 | `formula` | 公式（唯讀，由系統計算） | 依 `result_type` 決定 |
 
+**關聯欄位（`relation`）**（檢查在 `hammer_core::schema::rules`、`hammer_core::relations`；API 格式見 `hammer_shared::record`）：
+
+- 建立欄位時必須指定 `relation_entity_id`，建立後不可修改。目標只能是**自訂**（`storage = custom_records`）、有效、`kind` 為 `master` 或 `document` 的資料類別（可以是自己）；不可指向明細子表。指向系統資料類別在 M3 支援。關聯欄位不可設定預設值；可以開啟可搜尋、不可重複（§7.5）。
+- 寫入：值必須是目標資料類別中**未刪除**的資料 id，否則 `422 VALIDATION`（`details.fields` 指出欄位）。修改資料時只檢查有變動的關聯欄位，並以 `FOR SHARE` 鎖定目標資料到 transaction 結束，避免同時被刪除。
+- 目標資料之後被刪除：允許刪除，關聯欄位保留原值。
+- 回應：列表與單筆回應有 `relations: { "<field_key>": { "id", "title", "deleted" } }`，列出 `data` 中每個有值的關聯欄位；`title` 依目標資料類別的標題規則產生（§8.5），目標已刪除時 `deleted = true`、`title` 為刪除前的標題。
+- 篩選只支援 `eq`（值為資料 id）、`empty`；不能排序（§10）。
+- 選擇器：`GET /api/v1/entities/{key}/records/lookup?q=&limit=` 依標題比對（以空白分隔的每個詞都要出現，不分大小寫），回傳未刪除資料的 `id`、`title`，由新到舊；`limit` 預設 20、上限 50。需要 `record.read`。標題不存入資料庫，所以依 id 分批讀取資料、產生標題後比對。
+- 不做：反向列表（「這台設備的所有維修單」）、多選關聯。
+
 ### 7.4 欄位型態變更規則
 
 | 從 → 到 | 規則 |
@@ -226,6 +236,8 @@ desktop(src-tauri) ──▶ shared, formula
 | `text` ↔ `long_text` | 允許 |
 | `integer` → `decimal` | 允許 |
 | `select` → `multi_select` | 允許 |
+| `relation` → `text` / `long_text` | 允許（值為資料 id 的文字，轉換後清除 `relation_entity_id`） |
+| `relation` → 其他型態、其他型態 → `relation` | 不允許 |
 | 其他轉換 | 先驗證全部既有資料。只要有一筆轉換失敗就拒絕，並列出失敗的資料 |
 
 - 轉換範圍包含已軟刪除的資料，在同一個交易內完成資料轉換與欄位定義更新。
@@ -506,7 +518,7 @@ products ───────────────────────�
 | validation | JSONB | 例如 `{"min":"0","max":"100","max_length":50,"pattern":"^\\d{8}$"}`；`min`、`max` 與 decimal 值一樣存成字串（D9） |
 | options | JSONB | select 的選項：`[{"value":"a","label":"A","color":"blue"}]` |
 | decimal_places | SMALLINT | decimal / money 使用 |
-| relation_entity_id | UUID FK → entity_definitions | relation 使用 |
+| relation_entity_id | UUID FK → entity_definitions | relation 使用；建立後不可修改，限制見 §7.3 |
 | formula | TEXT | formula 使用 |
 | formula_result_type | TEXT | formula 的結果型態 |
 | formula_deps | JSONB | 解析後的相依欄位，供相依圖使用 |
@@ -983,12 +995,13 @@ GROUP BY product_id;
   - 篩選：`filter.<field_key>.<op>=<value>`，例如 `filter.qty.gte=10`。多個條件須全部符合（AND）。
     | op | 說明 | 適用型態 |
     |---|---|---|
-    | `eq` | 等於 | `multi_select` 以外 |
+    | `eq` | 等於（`relation` 的值為資料 id） | `multi_select` 以外 |
     | `contains` | 包含（不分大小寫） | `text`、`long_text` |
     | `gt`、`gte`、`lt`、`lte` | 大於、大於等於、小於、小於等於 | `integer`、`decimal`、`money`、`date`、`datetime` |
     | `empty` | `true`：沒有值；`false`：有值 | 全部 |
     | `any` | 包含任一選項；可重複帶多個（`filter.tags.any=a&filter.tags.any=b`），符合任一個即可 | `multi_select` |
   - 值的格式：數值 `12.5`、日期 `YYYY-MM-DD`、日期時間 RFC 3339、勾選 `true` / `false`。值為空字串的條件視為未指定。
+  - `relation` 只支援 `eq`、`empty`，不能排序（§7.3）。
   - 欄位不存在或已停用、運算子不適用於該型態、值的格式錯誤 → `422 VALIDATION`，`details.field` 為參數名稱（例如 `filter.qty.gte`）。不認得的參數名稱忽略。
   - 單號：`sort` 與 `filter` 可使用 `record_no`（保留的代碼，不是欄位），依文字排序，篩選只支援 `eq`、`contains`（§8.4）。
 
@@ -1018,7 +1031,7 @@ GROUP BY product_id;
 | M2a | 欄位定義引擎，以及依定義自動產生的列表與表單；`custom_records` 與通用資料 API，管理者可建立最基本的自訂資料類別（只支援 `master`） |
 | M2b | 明細子表、關聯欄位、附件欄位、單號規則，以及資料類別管理的完整功能 |
 | M2c | 公式引擎 |
-| M3 | 客戶、廠商、商品、單位、幣別、匯率等基本資料 |
+| M3 | 客戶、廠商、商品、單位、幣別、匯率等基本資料；關聯欄位指向系統資料類別（M2b 只能關聯自訂資料類別，§7.3） |
 | M4 | 採購、進貨（含外幣）、批號、訂單、出貨（先進先出或手動指定）、退貨、盤點 |
 | M5 | 發票（⏳） |
 | M6 | 財務（⏳） |
