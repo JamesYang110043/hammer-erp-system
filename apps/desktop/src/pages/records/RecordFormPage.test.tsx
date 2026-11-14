@@ -87,6 +87,7 @@ const RECORD_ID = '0196f5a0-0000-7000-8000-000000000201';
 function record(patch: Partial<DataRecord> = {}): DataRecord {
   return {
     id: RECORD_ID,
+    title: '冷氣維修',
     data: {
       name: '冷氣維修',
       qty: 3,

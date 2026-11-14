@@ -296,7 +296,8 @@ pub struct EntityDefinition {
     pub parent_entity_id: Option<Id>,
     /// 單號規則；沒有設定時為 `null`。
     pub numbering_pattern: Option<String>,
-    /// 資料標題範本，例如 `{record_no} {customer.name}`；沒有設定時為 `null`。
+    /// 資料標題範本，例如 `{record_no} {name}`；沒有設定時為 `null`（套用預設規則，
+    /// 見 [`crate::record`] 的「標題」）。
     pub title_template: Option<String>,
     /// 選單排序。
     pub sort_order: i32,
@@ -385,7 +386,9 @@ pub struct CreateEntityRequest {
     /// 格式不合法時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
     #[serde(default)]
     pub numbering_pattern: Option<String>,
-    /// 資料標題範本。
+    /// 資料標題範本，例如 `{record_no} {name}`：`{}` 內為 `record_no` 或本資料類別的欄位代碼，
+    /// 其他文字原樣保留。新的資料類別還沒有欄位，只能引用 `{record_no}`。
+    /// 語法不合法或引用不存在的欄位時回傳 `422 VALIDATION`，`details.field` 為 `title_template`。
     #[serde(default)]
     pub title_template: Option<String>,
     /// 選單排序（預設 0）。
@@ -408,7 +411,8 @@ pub struct UpdateEntityRequest {
     /// 修改後只影響之後新增的資料，既有的單號不變。
     #[serde(default)]
     pub numbering_pattern: Option<String>,
-    /// `null` 代表清除。
+    /// 資料標題範本（格式同 [`CreateEntityRequest::title_template`]）；只能引用此資料類別已定義的
+    /// 欄位（含已停用）。`null` 或空白代表清除。
     pub title_template: Option<String>,
     pub sort_order: i32,
     /// 停用後不出現在選單；系統資料類別不可停用。

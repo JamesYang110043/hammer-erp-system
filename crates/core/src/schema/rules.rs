@@ -23,6 +23,7 @@ use time::OffsetDateTime;
 use crate::CoreError;
 use crate::numbering::normalize_pattern;
 use crate::record_data::normalize_field_value;
+use crate::title::normalize_template;
 
 use super::type_change::{self, TypeChange};
 
@@ -32,6 +33,7 @@ pub mod field {
     pub const LABEL: &str = "label";
     pub const KIND: &str = "kind";
     pub const NUMBERING_PATTERN: &str = "numbering_pattern";
+    pub const TITLE_TEMPLATE: &str = "title_template";
     pub const IS_ACTIVE: &str = "is_active";
     pub const FIELD_KEY: &str = "field_key";
     pub const DATA_TYPE: &str = "data_type";
@@ -65,7 +67,8 @@ pub struct NewEntityPlan {
 }
 
 /// 檢查新增資料類別的輸入。M2a 只允許 `kind = master`，儲存方式固定為 `custom_records`。
-/// 單號規則依 [`normalize_pattern`] 檢查。
+/// 單號規則依 [`normalize_pattern`] 檢查；標題範本依 [`normalize_template`] 檢查，新的資料類別
+/// 還沒有欄位，只能引用 `{record_no}`。
 pub fn plan_create_entity(req: &CreateEntityRequest) -> Result<NewEntityPlan, CoreError> {
     validate_key(&req.key).map_err(|e| invalid(field::KEY, e.message()))?;
     let label = validate_label(&req.label)?;
@@ -82,7 +85,7 @@ pub fn plan_create_entity(req: &CreateEntityRequest) -> Result<NewEntityPlan, Co
         kind: EntityKind::Master,
         storage: EntityStorage::CustomRecords,
         numbering_pattern: validate_numbering_pattern(req.numbering_pattern.as_deref())?,
-        title_template: optional_text(req.title_template.as_deref()),
+        title_template: validate_title_template(req.title_template.as_deref(), &[])?,
         sort_order: req.sort_order,
     })
 }
@@ -92,8 +95,10 @@ pub fn plan_create_entity(req: &CreateEntityRequest) -> Result<NewEntityPlan, Co
 /// - `key` 有帶且與目前不同 → 錯誤（`key`）
 /// - 系統資料類別不可停用（`is_active`）
 /// - 單號規則依 [`normalize_pattern`] 檢查；修改後只影響之後新增的資料
+/// - 標題範本依 [`normalize_template`] 檢查，只能引用 `fields`（資料類別目前的所有欄位，含已停用）
 pub fn plan_update_entity(
     current: &EntityDefinition,
+    fields: &[FieldDefinition],
     req: &UpdateEntityRequest,
 ) -> Result<EntityDefinition, CoreError> {
     if let Some(key) = req.key.as_deref()
@@ -108,11 +113,18 @@ pub fn plan_update_entity(
         label: validate_label(&req.label)?,
         icon: optional_text(req.icon.as_deref()),
         numbering_pattern: validate_numbering_pattern(req.numbering_pattern.as_deref())?,
-        title_template: optional_text(req.title_template.as_deref()),
+        title_template: validate_title_template(req.title_template.as_deref(), fields)?,
         sort_order: req.sort_order,
         is_active: req.is_active,
         ..current.clone()
     })
+}
+
+fn validate_title_template(
+    template: Option<&str>,
+    fields: &[FieldDefinition],
+) -> Result<Option<String>, CoreError> {
+    normalize_template(template, fields).map_err(|e| invalid(field::TITLE_TEMPLATE, &e.message()))
 }
 
 fn validate_numbering_pattern(pattern: Option<&str>) -> Result<Option<String>, CoreError> {
@@ -624,14 +636,14 @@ mod tests {
             icon: Some("  ".into()),
             kind: EntityKind::Master,
             numbering_pattern: Some(" RO{yyyyMM}-{000} ".into()),
-            title_template: Some(" {name} ".into()),
+            title_template: Some(" {record_no} ".into()),
             sort_order: 5,
         })
         .unwrap();
         assert_eq!(plan.label, "維修單");
         assert_eq!(plan.icon, None);
         assert_eq!(plan.numbering_pattern.as_deref(), Some("RO{yyyyMM}-{000}"));
-        assert_eq!(plan.title_template.as_deref(), Some("{name}"));
+        assert_eq!(plan.title_template.as_deref(), Some("{record_no}"));
         assert_eq!(plan.storage, EntityStorage::CustomRecords);
         assert_eq!(plan.sort_order, 5);
     }
@@ -690,6 +702,21 @@ mod tests {
                 },
                 field::NUMBERING_PATTERN,
             ),
+            (
+                // 新的資料類別還沒有欄位
+                CreateEntityRequest {
+                    title_template: Some("{name}".into()),
+                    ..base.clone()
+                },
+                field::TITLE_TEMPLATE,
+            ),
+            (
+                CreateEntityRequest {
+                    title_template: Some("{record_no".into()),
+                    ..base.clone()
+                },
+                field::TITLE_TEMPLATE,
+            ),
         ];
         for (req, expected) in cases {
             assert_eq!(field_of(&plan_create_entity(&req).unwrap_err()), expected);
@@ -701,6 +728,7 @@ mod tests {
         let current = entity(false);
         let next = plan_update_entity(
             &current,
+            &[],
             &UpdateEntityRequest {
                 label: " 維修 ".into(),
                 icon: Some("tool".into()),
@@ -728,6 +756,7 @@ mod tests {
         let update = |pattern: Option<&str>| {
             plan_update_entity(
                 &current,
+                &[],
                 &UpdateEntityRequest {
                     numbering_pattern: pattern.map(str::to_owned),
                     ..entity_update(&current)
@@ -750,10 +779,44 @@ mod tests {
     }
 
     #[test]
+    fn update_entity_checks_title_template_fields() {
+        let current = entity(false);
+        let mut inactive = created(&create_req("old", DataType::Text));
+        inactive.is_active = false;
+        let fields = [created(&create_req("name", DataType::Text)), inactive];
+        let update = |template: &str| {
+            plan_update_entity(
+                &current,
+                &fields,
+                &UpdateEntityRequest {
+                    title_template: Some(template.to_owned()),
+                    ..entity_update(&current)
+                },
+            )
+        };
+        assert_eq!(
+            update(" {record_no} {name} {old} ")
+                .unwrap()
+                .title_template
+                .as_deref(),
+            Some("{record_no} {name} {old}")
+        );
+        assert_eq!(update("  ").unwrap().title_template, None);
+        for bad in ["{missing}", "{name", "{customer.name}"] {
+            assert_eq!(
+                field_of(&update(bad).unwrap_err()),
+                field::TITLE_TEMPLATE,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
     fn update_entity_rejects_key_change_and_system_deactivation() {
         let current = entity(false);
         let err = plan_update_entity(
             &current,
+            &[],
             &UpdateEntityRequest {
                 key: Some("other".into()),
                 ..entity_update(&current)
@@ -765,6 +828,7 @@ mod tests {
         let system = entity(true);
         let err = plan_update_entity(
             &system,
+            &[],
             &UpdateEntityRequest {
                 is_active: false,
                 ..entity_update(&system)
@@ -776,6 +840,7 @@ mod tests {
         assert!(
             plan_update_entity(
                 &system,
+                &[],
                 &UpdateEntityRequest {
                     label: "客戶".into(),
                     ..entity_update(&system)

@@ -52,6 +52,7 @@ const FIELDS = [NAME, PRICE, DUE, DONE, STATUS, TAGS, MEMO];
 
 const RECORD: DataRecord = {
   id: '0196f5a0-0000-7000-8000-000000000201',
+  title: '冷氣維修',
   data: {
     name: '冷氣維修',
     price: '1234567.5',

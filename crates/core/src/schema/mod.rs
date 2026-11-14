@@ -357,6 +357,8 @@ pub async fn create_entity(
 
 /// 修改資料類別的顯示名稱、圖示、單號規則、標題範本、排序、是否啟用。
 ///
+/// 標題範本只能引用此資料類別已定義的欄位（含已停用）或 `{record_no}`（[`crate::title`]）。
+///
 /// - 不存在或已刪除 → [`CoreError::NotFound`]
 /// - `version` 不符 → `Conflict`（§9.4）
 /// - 修改代碼、停用系統資料類別 → [`CoreError::InvalidField`]
@@ -374,7 +376,8 @@ pub async fn update_entity(
     let mut tx = pool.begin().await.map_err(DbError::from)?;
     let current = lock_entity(&mut tx, key).await?;
     ensure_version(current.version, req.version)?;
-    let next = rules::plan_update_entity(&current, req)?;
+    let fields = load_fields(&mut tx, current.id).await?;
+    let next = rules::plan_update_entity(&current, &fields, req)?;
 
     let before = snapshot(&current)?;
     let after = snapshot(&next)?;
@@ -413,7 +416,6 @@ pub async fn update_entity(
         tracing::info!(actor = %ctx.user_id, entity = %key, "已修改資料類別");
         fetch_entity(&mut tx, key).await?
     };
-    let fields = load_fields(&mut tx, entity.id).await?;
     commit(tx).await?;
     Ok(EntityDetail { entity, fields })
 }

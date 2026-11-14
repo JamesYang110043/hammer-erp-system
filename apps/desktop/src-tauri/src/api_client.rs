@@ -1491,6 +1491,7 @@ mod tests {
     fn record_json(version: i32) -> serde_json::Value {
         json!({
             "id": "0196f5a0-0000-7000-8000-000000000201",
+            "title": "冷氣",
             "data": { "name": "冷氣", "price": "0.10" },
             "created_at": "2026-11-13T01:00:00Z",
             "created_by": null,
@@ -1527,6 +1528,7 @@ mod tests {
                         axum::Json(json!({
                             "items": [{
                                 "id": "0196f5a0-0000-7000-8000-000000000201",
+                                "title": "0196f5a0",
                                 "data": { "qty": 3, "price": "12.5000" },
                                 "created_at": "2026-11-13T01:00:00Z",
                                 "created_by": null,
