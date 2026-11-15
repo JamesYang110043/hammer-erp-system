@@ -521,6 +521,18 @@ products ───────────────────────�
 - 沒有設定範本時，依序使用第一個有值的：單號 → 排序最前面、有效的 `text` 欄位的值 → id 前 8 碼。資料庫中的範本不合法（加入檢查前存入的）時也使用預設規則。
 - 標題在讀取時產生，不存入資料庫；第一版不能依 `title` 排序或篩選。
 
+**資料類別管理**（邏輯在 `hammer_core::schema`，型別與端點在 `hammer_shared::schema`；寫入都需要 `schema.manage`，每個有變動的資料類別寫入一筆 `schema_change_logs` 與 `audit_logs`）：
+
+- `kind`：`master`（主檔）、`document`（單據）、`detail`（明細子表）。`document` 的行為與 `master` 相同（可設定單號規則、可有明細子表、可作為關聯目標），差別只在選單分組顯示。
+- 修改（`PATCH /api/v1/entities/{key}`）：名稱、圖示、單號規則、標題範本、選單排序、是否啟用。停用後不出現在選單，資料 API 回傳 `404`；改回啟用即恢復。系統資料類別不可停用。
+- 選單排序：`PUT /api/v1/entities/order` 一次調整多筆 `sort_order`，只需列出要調整的資料類別；任一筆版本不符整批不寫入。`order` 也是合法的代碼，同一路徑的 GET / PATCH / DELETE 轉給該資料類別。
+- 刪除（`DELETE /api/v1/entities/{key}?version=N`，軟刪除）：
+  - 系統資料類別不可刪除（`422`，`details.field = is_system`）。
+  - 其他有效資料類別的有效 `relation` 欄位還指向它時拒絕（`422`，`details` 為 `{ "field": "relation_entity_id", "fields": [{ "entity_key", "entity_label", "field_key", "field_label" }] }`）；自己引用自己的欄位不影響。新增關聯欄位時以 `FOR SHARE` 鎖定目標資料類別，避免檢查後被刪除。
+  - 它的明細子表在同一個 transaction 內一起刪除。
+  - 資料（`custom_records`）與欄位定義保留，但資料類別刪除後一律視為不存在；移除它（與明細子表）所有欄位的動態索引（§7.5）。
+  - `key` 的 UNIQUE 限制包含已刪除的資料類別，刪除後代碼不可再用。第一版不提供復原與永久刪除。
+
 #### `field_definitions`
 | 欄位 | 型態 | 說明 |
 |---|---|---|
@@ -556,7 +568,7 @@ products ───────────────────────�
 | changed_at / changed_by | | |
 | target_type | TEXT | `entity` / `field` |
 | target_id | UUID | |
-| action | TEXT | `create` / `update` / `deactivate` |
+| action | TEXT | `create` / `update` / `deactivate` / `delete`（資料類別的軟刪除） |
 | before_data / after_data | JSONB | |
 
 #### `view_layouts`

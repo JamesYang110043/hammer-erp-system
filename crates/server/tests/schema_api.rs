@@ -737,10 +737,11 @@ async fn create_rejects_unsupported_input(pool: PgPool) {
         Method::POST,
         "/api/v1/entities",
         &token,
-        Some(json!({ "key": "order", "label": "訂單", "kind": "document" })),
+        Some(json!({ "key": "order", "label": "訂單", "kind": "report" })),
     )
     .await;
-    assert_invalid_field(status, &body, "kind");
+    // 不認得的 kind 無法解析 request
+    assert!(status.is_client_error(), "{body}");
     let (status, body) = call(
         &pool,
         Method::POST,

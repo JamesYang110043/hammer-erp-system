@@ -7,7 +7,7 @@
 //! - API 回應：[`EntityDetail`]（資料類別與欄位定義）
 //! - API 請求：[`CreateEntityRequest`]、[`UpdateEntityRequest`]、[`CreateFieldRequest`]、
 //!   [`UpdateFieldRequest`]、[`DeactivateFieldRequest`]、[`ReorderFieldsRequest`]、
-//!   [`ChangeFieldTypeRequest`]
+//!   [`ChangeFieldTypeRequest`]、[`ReorderEntitiesRequest`]、[`DeleteEntityQuery`]
 //!
 //! # 端點
 //!
@@ -19,6 +19,8 @@
 //! | `GET /api/v1/entities/{key}` | | `200` [`EntityDetail`] |
 //! | `POST /api/v1/entities` | [`CreateEntityRequest`] | `201` [`EntityDetail`] |
 //! | `PATCH /api/v1/entities/{key}` | [`UpdateEntityRequest`] | `200` [`EntityDetail`] |
+//! | `PUT /api/v1/entities/order` | [`ReorderEntitiesRequest`] | `200` [`EntityDefinition`]`[]` |
+//! | `DELETE /api/v1/entities/{key}?version=N` | [`DeleteEntityQuery`] | `204 No Content` |
 //! | `POST /api/v1/entities/{key}/fields` | [`CreateFieldRequest`] | `201` [`FieldDefinition`] |
 //! | `PATCH /api/v1/entities/{key}/fields/{field_key}` | [`UpdateFieldRequest`] | `200` [`FieldDefinition`] |
 //! | `POST /api/v1/entities/{key}/fields/{field_key}/deactivate` | [`DeactivateFieldRequest`] | `200` [`FieldDefinition`] |
@@ -373,7 +375,8 @@ pub struct FieldDefinition {
 
 /// 建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
 ///
-/// 目前接受 `kind = master` 與 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
+/// `kind` 可為 `master`（主檔）、`document`（單據，行為與 `master` 相同，可設定單號規則，
+/// 選單中分組顯示）或 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct CreateEntityRequest {
     /// 資料類別代碼，須符合 [`validate_key`]；建立後不可修改。
@@ -421,8 +424,44 @@ pub struct UpdateEntityRequest {
     /// 欄位（含已停用）。`null` 或空白代表清除。
     pub title_template: Option<String>,
     pub sort_order: i32,
-    /// 停用後不出現在選單；系統資料類別不可停用。
+    /// 停用後不出現在選單，資料 API 回傳 `404`；改回 `true` 即重新啟用。系統資料類別不可停用。
     pub is_active: bool,
+}
+
+/// 一次調整多個資料類別的選單排序（`sort_order`）。
+///
+/// 只需列出要調整的資料類別（不必列出全部），每個代碼最多出現一次；系統資料類別也可以調整。
+/// 只有排序改變的資料類別會更新（遞增 `version`）與留紀錄。
+///
+/// 錯誤：代碼不存在（含已刪除）或重複 → `422 VALIDATION`，`details.field` 為 `entities`；
+/// 任一個的 `version` 不符 → `409 CONFLICT`，整批不寫入。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ReorderEntitiesRequest {
+    pub entities: Vec<EntityOrderItem>,
+}
+
+/// [`ReorderEntitiesRequest`] 的一個資料類別。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct EntityOrderItem {
+    pub key: String,
+    /// 讀取時取得的版本號。
+    pub version: i32,
+    /// 新的選單排序。
+    pub sort_order: i32,
+}
+
+/// 刪除自訂資料類別（軟刪除）的 query string：`?version=N`。
+///
+/// - 系統資料類別不可刪除 → `422 VALIDATION`，`details.field` 為 `is_system`
+/// - 其他有效資料類別的有效 `relation` 欄位指向它 → `422 VALIDATION`，`details` 為
+///   `{ "field": "relation_entity_id", "fields": [{ "entity_key", "entity_label", "field_key", "field_label" }] }`
+///   （依資料類別、欄位代碼排序）
+/// - 它的明細子表一起刪除；資料（`custom_records`）保留，動態索引移除
+/// - 刪除後代碼不可再用於建立資料類別；第一版不提供復原
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct DeleteEntityQuery {
+    /// 讀取時取得的版本號；不符時回傳 `409 CONFLICT`。
+    pub version: i32,
 }
 
 /// 建立欄位的輸入。儲存方式固定為 `json`。

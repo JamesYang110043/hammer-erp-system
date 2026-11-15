@@ -2,7 +2,9 @@
 //!
 //! - `entity_definitions`：[`list_active_entities`]、[`find_entity_by_key`]、[`find_entity_by_id`]、
 //!   [`find_entity_by_key_for_update`]、[`find_entity_by_id_for_share`]、[`list_detail_entities`]、[`list_detail_entities_for_share`]、
-//!   [`insert_entity`]、[`update_entity`]
+//!   [`list_entities_by_keys_for_update`]、[`list_detail_entities_for_update`]、
+//!   [`insert_entity`]、[`update_entity`]、[`update_entity_sort_order`]、[`soft_delete_entity`]、
+//!   [`list_relation_references`]
 //! - `field_definitions`：[`list_fields`]、[`list_fields_for_update`]、[`find_field`]、
 //!   [`find_field_for_update`]、[`insert_field`]、[`update_field`]、[`update_field_sort_order`]
 //! - `schema_change_logs`：[`insert_schema_change_log`]
@@ -226,6 +228,53 @@ pub async fn list_detail_entities<'e>(
     Ok(rows)
 }
 
+/// 依代碼列出未刪除的資料類別（含已停用），依 `id` 排序，並鎖定這些列（`FOR UPDATE`）。
+/// 找不到的代碼不會出現在結果中。必須在 transaction 內呼叫。
+pub async fn list_entities_by_keys_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    keys: &[String],
+) -> Result<Vec<EntityRow>, DbError> {
+    let rows = sqlx::query_as!(
+        EntityRow,
+        r#"
+        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,
+               numbering_pattern, title_template, sort_order, is_active,
+               created_at, updated_at, version
+        FROM entity_definitions
+        WHERE key = ANY($1) AND deleted_at IS NULL
+        ORDER BY id
+        FOR UPDATE
+        "#,
+        keys,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 同 [`list_detail_entities`]，並鎖定這些列（`FOR UPDATE`）。必須在 transaction 內呼叫。
+pub async fn list_detail_entities_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    parent_entity_id: Uuid,
+) -> Result<Vec<EntityRow>, DbError> {
+    let rows = sqlx::query_as!(
+        EntityRow,
+        r#"
+        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,
+               numbering_pattern, title_template, sort_order, is_active,
+               created_at, updated_at, version
+        FROM entity_definitions
+        WHERE parent_entity_id = $1 AND kind = 'detail' AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        FOR UPDATE
+        "#,
+        parent_entity_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
 /// 新增資料類別所需的資料。
 #[derive(Debug, Clone)]
 pub struct NewEntity<'a> {
@@ -316,6 +365,91 @@ pub async fn update_entity<'e>(
     .execute(executor)
     .await?;
     Ok(result)
+}
+
+/// 修改資料類別的選單排序並遞增 `version`。版本號不符時影響 0 筆。
+pub async fn update_entity_sort_order<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    version: i32,
+    sort_order: i32,
+    updated_by: Uuid,
+) -> Result<PgQueryResult, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE entity_definitions
+        SET sort_order = $3, updated_by = $4, version = version + 1
+        WHERE id = $1 AND version = $2 AND deleted_at IS NULL
+        "#,
+        id,
+        version,
+        sort_order,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result)
+}
+
+/// 軟刪除資料類別並遞增 `version`。版本號不符或已刪除時影響 0 筆。
+///
+/// 代碼的 UNIQUE 限制包含已刪除的資料類別，所以刪除後代碼不能再使用。
+pub async fn soft_delete_entity<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    version: i32,
+    deleted_at: OffsetDateTime,
+    updated_by: Uuid,
+) -> Result<PgQueryResult, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE entity_definitions
+        SET deleted_at = $3, updated_by = $4, version = version + 1
+        WHERE id = $1 AND version = $2 AND deleted_at IS NULL
+        "#,
+        id,
+        version,
+        deleted_at,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result)
+}
+
+/// 指向某些資料類別的關聯欄位。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationReferenceRow {
+    pub entity_key: String,
+    pub entity_label: String,
+    pub field_key: String,
+    pub field_label: String,
+}
+
+/// 列出 `relation_entity_id` 為 `targets` 之一的有效（啟用、未刪除）關聯欄位，且所屬資料類別
+/// 也有效、不在 `targets` 之中。依資料類別代碼、欄位代碼排序。
+pub async fn list_relation_references<'e>(
+    executor: impl PgExecutor<'e>,
+    targets: &[Uuid],
+) -> Result<Vec<RelationReferenceRow>, DbError> {
+    let rows = sqlx::query_as!(
+        RelationReferenceRow,
+        r#"
+        SELECT e.key AS entity_key, e.label AS entity_label,
+               f.field_key, f.label AS field_label
+        FROM field_definitions f
+        JOIN entity_definitions e ON e.id = f.entity_id
+        WHERE f.relation_entity_id = ANY($1)
+          AND f.data_type = 'relation' AND f.is_active AND f.deleted_at IS NULL
+          AND e.is_active AND e.deleted_at IS NULL
+          AND NOT (e.id = ANY($1))
+        ORDER BY e.key, f.field_key
+        "#,
+        targets,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------

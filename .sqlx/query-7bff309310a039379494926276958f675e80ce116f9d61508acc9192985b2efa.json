@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT e.key AS entity_key, e.label AS entity_label,\n               f.field_key, f.label AS field_label\n        FROM field_definitions f\n        JOIN entity_definitions e ON e.id = f.entity_id\n        WHERE f.relation_entity_id = ANY($1)\n          AND f.data_type = 'relation' AND f.is_active AND f.deleted_at IS NULL\n          AND e.is_active AND e.deleted_at IS NULL\n          AND NOT (e.id = ANY($1))\n        ORDER BY e.key, f.field_key\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "entity_label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "field_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "field_key"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "field_label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "label"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7bff309310a039379494926276958f675e80ce116f9d61508acc9192985b2efa"
+}
