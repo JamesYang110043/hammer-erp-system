@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use hammer_shared::auth::MIN_PASSWORD_CHARS;
+use hammer_shared::record::LOOKUP_DEFAULT_LIMIT;
 use hammer_shared::schema::MAX_KEY_LEN;
 use hammer_shared::{audit, permission};
 
@@ -72,6 +73,9 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::create_layout,
             commands::update_layout,
             commands::delete_layout,
+            commands::lookup_records,
+            commands::upload_attachment,
+            commands::download_attachment,
         ])
         .constant("CLIENT_VERSION", CLIENT_VERSION)
         .constant("PERMISSIONS", permission_constants())
@@ -81,6 +85,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .constant("AUDIT_ACTIONS", audit::ALL)
         // 資料類別、欄位代碼的長度上限（`hammer_shared::schema::MAX_KEY_LEN`），前端即時檢查使用
         .constant("MAX_KEY_LEN", MAX_KEY_LEN as u32)
+        // 選擇器每次搜尋的筆數（`hammer_shared::record::LOOKUP_DEFAULT_LIMIT`）
+        .constant("LOOKUP_DEFAULT_LIMIT", LOOKUP_DEFAULT_LIMIT)
         // 帳號管理
         .typ::<hammer_shared::user::Role>()
         .typ::<hammer_shared::user::User>()
@@ -120,6 +126,12 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::record::CreateRecordRequest>()
         .typ::<hammer_shared::record::UpdateRecordRequest>()
         .typ::<hammer_shared::pagination::Page<hammer_shared::record::Record>>()
+        .typ::<hammer_shared::record::RelationRef>()
+        .typ::<hammer_shared::record::LookupQuery>()
+        .typ::<hammer_shared::record::LookupItem>()
+        // 附件
+        .typ::<hammer_shared::attachment::Attachment>()
+        .typ::<crate::state::UploadProgress>()
         // 列表版面
         .typ::<hammer_shared::layout::LayoutColumn>()
         .typ::<hammer_shared::layout::LayoutConfig>()
@@ -162,6 +174,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

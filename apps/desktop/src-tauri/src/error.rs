@@ -28,7 +28,7 @@ pub enum ClientError {
     /// 使用者輸入不正確（例如伺服器網址格式錯誤）。
     #[error("{message}")]
     InvalidInput { message: String },
-    /// 本機設定檔讀寫失敗。
+    /// 本機檔案讀寫失敗（設定檔、要上傳的檔案、下載後存檔）。
     #[error("{message}")]
     Storage { message: String },
 }

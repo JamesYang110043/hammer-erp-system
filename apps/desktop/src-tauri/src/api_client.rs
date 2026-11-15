@@ -4,9 +4,12 @@
 //! - 需要登入的請求帶 `Authorization: Bearer <token>`；伺服器回 `401` 時轉成
 //!   [`ClientError::SessionExpired`]
 //! - 伺服器回傳的錯誤轉成 shared 的 [`ApiError`]
+//! - 上傳、下載附件的逾時為 [`TRANSFER_TIMEOUT`]（一般請求為 15 秒）
 
+use std::io::Read;
 use std::time::Duration;
 
+use hammer_shared::attachment::{Attachment, UPLOAD_FIELD};
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
 use hammer_shared::constants::{API_PREFIX, CLIENT_VERSION_HEADER};
@@ -17,7 +20,8 @@ use hammer_shared::layout::{
 };
 use hammer_shared::pagination::Page;
 use hammer_shared::record::{
-    CreateRecordRequest, DeleteRecordQuery, Record, RecordListQuery, UpdateRecordRequest,
+    CreateRecordRequest, DeleteRecordQuery, LookupItem, LookupQuery, Record, RecordListQuery,
+    UpdateRecordRequest,
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
@@ -30,7 +34,8 @@ use hammer_shared::user::{
 };
 use hammer_shared::{ApiError, ErrorCode, Id};
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{RequestBuilder, Response, StatusCode};
+use reqwest::multipart::{Form, Part};
+use reqwest::{Body, RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 
 use crate::error::ClientError;
@@ -40,6 +45,22 @@ pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// 上傳、下載附件的逾時（檔案較大、經由 Tailscale 連線時需要較久）。
+pub const TRANSFER_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// 上傳時每次讀取檔案的大小，也是回報進度的間隔。
+pub const UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
+
+/// 要上傳的檔案。
+pub struct UploadFile {
+    /// 原始檔名（伺服器會再去除路徑與控制字元）。
+    pub file_name: String,
+    /// MIME；`None` 時伺服器使用 `application/octet-stream`。
+    pub mime_type: Option<String>,
+    /// 位元組數，必須與 `body` 的內容長度一致。
+    pub size_bytes: u64,
+    /// 檔案內容，見 [`progress_body`]。
+    pub body: Body,
+}
 
 #[derive(Debug, Clone)]
 pub struct ApiClient {
@@ -583,6 +604,97 @@ impl ApiClient {
             .query(query);
         authed(read_empty(send(builder).await?).await)
     }
+
+    /// `GET /api/v1/entities/{key}/records/lookup?q=&limit=`（關聯欄位的選擇器搜尋）。
+    pub async fn lookup_records(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        query: &LookupQuery,
+    ) -> Result<Vec<LookupItem>, ClientError> {
+        let builder = self
+            .http
+            .get(entity_endpoint(server_url, key, None, "/records/lookup")?)
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/attachments`（`multipart/form-data`，檔案在 [`UPLOAD_FIELD`] 欄位）。
+    ///
+    /// 超過伺服器的大小上限時回傳 `413 PAYLOAD_TOO_LARGE`。
+    pub async fn upload_attachment(
+        &self,
+        server_url: &str,
+        token: &str,
+        file: UploadFile,
+    ) -> Result<Attachment, ClientError> {
+        let mut part =
+            Part::stream_with_length(file.body, file.size_bytes).file_name(file.file_name);
+        if let Some(mime) = file.mime_type {
+            part = part
+                .mime_str(&mime)
+                .map_err(|_| ClientError::invalid_input(format!("檔案類型「{mime}」不正確")))?;
+        }
+        let builder = self
+            .http
+            .post(endpoint(server_url, "/attachments"))
+            .bearer_auth(token)
+            .timeout(TRANSFER_TIMEOUT)
+            .multipart(Form::new().part(UPLOAD_FIELD, part));
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/attachments/{id}`，回傳檔案內容。附件不存在或已刪除時回傳 `404 NOT_FOUND`。
+    pub async fn download_attachment(
+        &self,
+        server_url: &str,
+        token: &str,
+        id: Id,
+    ) -> Result<Vec<u8>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, &format!("/attachments/{id}")))
+            .bearer_auth(token)
+            .timeout(TRANSFER_TIMEOUT);
+        let resp = send(builder).await?;
+        let status = resp.status();
+        let body = read_body(resp).await?;
+        if status.is_success() {
+            Ok(body)
+        } else {
+            authed(Err(error_from_body(status, &body)))
+        }
+    }
+}
+
+/// 以 [`UPLOAD_CHUNK_BYTES`] 為單位讀取 `reader` 作為上傳的內容；每讀取一段呼叫一次
+/// `on_progress(已讀取的位元組數)`。讀取失敗時上傳中止。
+pub fn progress_body<R>(reader: R, on_progress: impl FnMut(u64) + Send + 'static) -> Body
+where
+    R: Read + Send + 'static,
+{
+    let stream = futures_util::stream::unfold(
+        (reader, 0u64, on_progress, false),
+        |(mut reader, sent, mut on_progress, failed)| async move {
+            if failed {
+                return None;
+            }
+            let mut buf = vec![0; UPLOAD_CHUNK_BYTES];
+            match reader.read(&mut buf) {
+                Ok(0) => None,
+                Ok(n) => {
+                    buf.truncate(n);
+                    let sent = sent + n as u64;
+                    on_progress(sent);
+                    Some((Ok(buf), (reader, sent, on_progress, false)))
+                }
+                Err(err) => Some((Err(err), (reader, sent, on_progress, true))),
+            }
+        },
+    );
+    Body::wrap_stream(stream)
 }
 
 async fn send(builder: RequestBuilder) -> Result<Response, ClientError> {
@@ -1758,5 +1870,186 @@ mod tests {
                 .await,
             Err(ClientError::InvalidInput { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn lookup_endpoint() {
+        use axum::extract::{Path, RawQuery};
+
+        let url = serve(Router::new().route(
+            "/entities/{key}/records/lookup",
+            get(
+                |Path(key): Path<String>, RawQuery(query): RawQuery| async move {
+                    assert_eq!(key, "equipment");
+                    axum::Json(json!([{
+                        "id": "0196f5a0-0000-7000-8000-000000000201",
+                        "title": format!("{key}?{}", query.unwrap_or_default()),
+                    }]))
+                },
+            ),
+        ))
+        .await;
+        let client = ApiClient::new().unwrap();
+        let query = LookupQuery {
+            q: Some("台北 pump".into()),
+            limit: Some(20),
+        };
+        let items = client
+            .lookup_records(&url, "tok", "equipment", &query)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].title,
+            "equipment?q=%E5%8F%B0%E5%8C%97+pump&limit=20"
+        );
+        // 沒有關鍵字時不帶 q
+        let items = client
+            .lookup_records(&url, "tok", "equipment", &LookupQuery::default())
+            .await
+            .unwrap();
+        assert_eq!(items[0].title, "equipment?");
+    }
+
+    fn attachment_json(file_name: &str, size: usize) -> serde_json::Value {
+        json!({
+            "id": "0196f5a0-0000-7000-8000-000000000401",
+            "file_name": file_name,
+            "mime_type": "text/plain",
+            "size_bytes": size,
+            "sha256": "abc",
+            "created_at": "2026-11-16T01:00:00Z",
+        })
+    }
+
+    #[tokio::test]
+    async fn upload_sends_multipart_and_reports_progress() {
+        use axum::extract::Multipart;
+        use std::sync::{Arc, Mutex};
+
+        let url = serve(Router::new().route(
+            "/attachments",
+            post(
+                |headers: AxumHeaders, mut multipart: Multipart| async move {
+                    assert_eq!(bearer(&headers), "Bearer tok");
+                    let field = multipart.next_field().await.unwrap().unwrap();
+                    assert_eq!(field.name(), Some(UPLOAD_FIELD));
+                    let file_name = field.file_name().unwrap().to_owned();
+                    let mime = field.content_type().unwrap().to_owned();
+                    let content = field.bytes().await.unwrap();
+                    assert_eq!(mime, "text/plain");
+                    assert!(content.iter().all(|&b| b == b'x'));
+                    (
+                        AxumStatus::CREATED,
+                        axum::Json(attachment_json(&file_name, content.len())),
+                    )
+                },
+            ),
+        ))
+        .await;
+        let client = ApiClient::new().unwrap();
+        let size = UPLOAD_CHUNK_BYTES * 2 + 10;
+        let progress = Arc::new(Mutex::new(Vec::new()));
+        let recorded = progress.clone();
+        let file = UploadFile {
+            file_name: "維修報告.txt".into(),
+            mime_type: Some("text/plain".into()),
+            size_bytes: size as u64,
+            body: progress_body(std::io::Cursor::new(vec![b'x'; size]), move |sent| {
+                recorded.lock().unwrap().push(sent);
+            }),
+        };
+        let attachment = client.upload_attachment(&url, "tok", file).await.unwrap();
+        assert_eq!(attachment.file_name, "維修報告.txt");
+        assert_eq!(attachment.size_bytes, size as u64);
+        assert_eq!(
+            *progress.lock().unwrap(),
+            [
+                UPLOAD_CHUNK_BYTES as u64,
+                UPLOAD_CHUNK_BYTES as u64 * 2,
+                size as u64
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_too_large_and_expired_session() {
+        use axum::response::IntoResponse;
+        let url = serve(Router::new().route(
+            "/attachments",
+            post(|headers: AxumHeaders| async move {
+                if bearer(&headers) == "Bearer expired" {
+                    return unauthorized("登入已逾時").into_response();
+                }
+                (
+                    AxumStatus::PAYLOAD_TOO_LARGE,
+                    axum::Json(json!({
+                        "code": "PAYLOAD_TOO_LARGE",
+                        "message": "檔案超過大小上限 20 MB",
+                    })),
+                )
+                    .into_response()
+            }),
+        ))
+        .await;
+        let client = ApiClient::new().unwrap();
+        let file = || UploadFile {
+            file_name: "a.bin".into(),
+            mime_type: None,
+            size_bytes: 3,
+            body: progress_body(std::io::Cursor::new(b"abc".to_vec()), |_| {}),
+        };
+        let err = client
+            .upload_attachment(&url, "tok", file())
+            .await
+            .unwrap_err();
+        let ClientError::Api(api) = err else {
+            panic!("應該是 ApiError：{err:?}");
+        };
+        assert_eq!(api.code, ErrorCode::PayloadTooLarge);
+        assert_eq!(api.message, "檔案超過大小上限 20 MB");
+        assert!(matches!(
+            client.upload_attachment(&url, "expired", file()).await,
+            Err(ClientError::SessionExpired { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn download_returns_content_or_error() {
+        use axum::extract::Path;
+        use axum::response::IntoResponse;
+
+        let ok_id: Id = "0196f5a0-0000-7000-8000-000000000401".parse().unwrap();
+        let url = serve(Router::new().route(
+            "/attachments/{id}",
+            get(move |Path(id): Path<Id>| async move {
+                if id == ok_id {
+                    "中文內容".as_bytes().to_vec().into_response()
+                } else {
+                    (
+                        AxumStatus::NOT_FOUND,
+                        axum::Json(json!({ "code": "NOT_FOUND", "message": "找不到此附件" })),
+                    )
+                        .into_response()
+                }
+            }),
+        ))
+        .await;
+        let client = ApiClient::new().unwrap();
+        assert_eq!(
+            client
+                .download_attachment(&url, "tok", ok_id)
+                .await
+                .unwrap(),
+            "中文內容".as_bytes()
+        );
+        let err = client
+            .download_attachment(&url, "tok", Id::nil())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ClientError::Api(api) if api.code == ErrorCode::NotFound),
+            "{err:?}"
+        );
     }
 }

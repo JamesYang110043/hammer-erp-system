@@ -21,18 +21,22 @@ hammer-shared.workspace = true
 # 預設的 `v1` feature：macOS Keychain、Windows 認證管理員、Linux Secret Service
 keyring = "4"
 
-reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+futures-util = { version = "0.3", default-features = false }
+mime_guess = "2"
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "query", "rustls", "stream"] }
 serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
 specta-typescript.workspace = true
 tauri = { version = "2", features = [] }
+# 上傳選檔、下載存檔的對話框（只在 Rust 端使用，前端不直接呼叫）
+tauri-plugin-dialog = "2"
 tauri-specta = { version = "=2.0.0-rc.28", features = ["derive", "typescript"] }
 thiserror.workspace = true
 url = "2"
 
 [dev-dependencies]
-axum.workspace = true
+axum = { workspace = true, features = ["multipart"] }
 time.workspace = true
 tokio.workspace = true
 
