@@ -143,6 +143,35 @@ export type ApiError_Serialize = {
 	details?: unknown,
 };
 
+/**  附件的資訊：上傳成功的回應，也是 [`crate::record::Record::attachments`] 的值。 */
+export type Attachment = Attachment_Serialize | Attachment_Deserialize;
+
+/**  附件的資訊：上傳成功的回應，也是 [`crate::record::Record::attachments`] 的值。 */
+export type Attachment_Deserialize = {
+	id: string,
+	/**  原始檔名（已去除路徑）。 */
+	file_name: string,
+	mime_type: string,
+	/**  位元組數。 */
+	size_bytes: number | null,
+	/**  檔案內容的 SHA-256（小寫 16 進位）。 */
+	sha256: string,
+	created_at: string,
+};
+
+/**  附件的資訊：上傳成功的回應，也是 [`crate::record::Record::attachments`] 的值。 */
+export type Attachment_Serialize = {
+	id: string,
+	/**  原始檔名（已去除路徑）。 */
+	file_name: string,
+	mime_type: string,
+	/**  位元組數。 */
+	size_bytes: number | null,
+	/**  檔案內容的 SHA-256（小寫 16 進位）。 */
+	sha256: string,
+	created_at: string,
+};
+
 /**  操作紀錄的一筆資料（`GET /api/v1/audit-logs`）。 */
 export type AuditLogEntry = AuditLogEntry_Serialize | AuditLogEntry_Deserialize;
 
@@ -1184,6 +1213,11 @@ export type Record_Deserialize = {
 	 */
 	relations?: { [key in string]: RelationRef },
 	/**
+	 *  附件欄位所指的附件，鍵為 `field_key`；只包含 `data` 中有值、且附件未標記刪除的 `file` 欄位
+	 *  （見模組說明「附件欄位」）。
+	 */
+	attachments?: { [key in string]: Attachment_Deserialize },
+	/**
 	 *  明細，鍵為明細子表的代碼（見模組說明「明細子表」）。單筆查詢與新增、修改的回應包含主表所有
 	 *  有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
 	 */
@@ -1212,6 +1246,11 @@ export type Record_Serialize = {
 	 *  （見模組說明「關聯欄位」）。
 	 */
 	relations: { [key in string]: RelationRef },
+	/**
+	 *  附件欄位所指的附件，鍵為 `field_key`；只包含 `data` 中有值、且附件未標記刪除的 `file` 欄位
+	 *  （見模組說明「附件欄位」）。
+	 */
+	attachments: { [key in string]: Attachment_Serialize },
 	/**
 	 *  明細，鍵為明細子表的代碼（見模組說明「明細子表」）。單筆查詢與新增、修改的回應包含主表所有
 	 *  有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。

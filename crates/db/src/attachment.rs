@@ -2,6 +2,7 @@
 //!
 //! - 上傳：[`insert_attachment`]（未綁定）
 //! - 下載：[`find_attachment`]（未刪除）
+//! - 資料回應的附件資訊：[`find_attachments_by_ids`]（未刪除）
 //! - 綁定到資料（`file` 欄位）：[`lock_attachments`]、[`bind_attachment`]
 //! - 欄位值被換掉或清空：[`mark_attachments_deleted`]（檔案保留）
 //! - 清理：[`delete_unbound_before`]
@@ -89,6 +90,27 @@ pub async fn find_attachment<'e>(
     .fetch_optional(executor)
     .await?;
     Ok(row)
+}
+
+/// 依 id 查詢未刪除的附件（不鎖定），依 id 排序。找不到的 id 不列出。
+pub async fn find_attachments_by_ids<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+) -> Result<Vec<AttachmentRow>, DbError> {
+    let rows = sqlx::query_as!(
+        AttachmentRow,
+        r#"
+        SELECT id, entity_key, record_id, field_key, file_name, mime_type, size_bytes, sha256,
+               storage_path, created_at, created_by, deleted_at IS NOT NULL AS "deleted!"
+        FROM attachments
+        WHERE id = ANY($1) AND deleted_at IS NULL
+        ORDER BY id
+        "#,
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
 }
 
 /// 查詢 `ids` 中未刪除的附件並鎖定（`FOR UPDATE`），依 id 排序。必須在 transaction 內呼叫。
