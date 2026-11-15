@@ -6,7 +6,7 @@ import type {
   RecordListQuery_Deserialize as RecordListQuery,
   RecordSort,
 } from '../bindings';
-import { SUPPORTED_DATA_TYPES } from '../schema/fieldSettings';
+import { VALUE_DATA_TYPES } from '../schema/fieldSettings';
 import type { LayoutConfig } from './columns';
 
 /**
@@ -35,14 +35,17 @@ export interface FilterRow {
 }
 
 /**
- * 可以篩選、排序的欄位：有效、存在 JSON、目前支援的型態。
+ * 可以篩選的欄位：有效、存在 JSON、目前支援的型態。
  *
  * 與伺服器 `hammer_core::records::queryable_field` 的規則相同；以伺服器檢查為準。
  */
 export function isQueryable(field: FieldDefinition): boolean {
-  return (
-    field.is_active && field.storage === 'json' && SUPPORTED_DATA_TYPES.includes(field.data_type)
-  );
+  return field.is_active && field.storage === 'json' && VALUE_DATA_TYPES.includes(field.data_type);
+}
+
+/** 可以排序的欄位：可以篩選的欄位中，`relation`、`file` 以外的型態（docs/architecture.md §10）。 */
+export function isSortable(field: FieldDefinition): boolean {
+  return isQueryable(field) && field.data_type !== 'relation' && field.data_type !== 'file';
 }
 
 /** 欄位型態可用的篩選運算子，第一個為預設（與伺服器 `op_supported` 相同）。 */
@@ -60,9 +63,12 @@ export function filterOps(dataType: DataType): UiFilterOp[] {
       return ['eq', 'gte', 'lte', 'gt', 'lt', ...empty];
     case 'boolean':
     case 'select':
+    case 'relation':
       return ['eq', ...empty];
     case 'multi_select':
       return ['any', ...empty];
+    case 'file':
+      return empty;
     default:
       return [];
   }

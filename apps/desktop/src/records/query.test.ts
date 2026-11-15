@@ -7,6 +7,7 @@ import {
   filterOps,
   fromRecordFilters,
   isQueryable,
+  isSortable,
   sortFromTable,
   toRecordFilters,
 } from './query';
@@ -17,7 +18,9 @@ describe('filterOps', () => {
     expect(filterOps('money')).toEqual(['eq', 'gte', 'lte', 'gt', 'lt', 'empty', 'not_empty']);
     expect(filterOps('boolean')).toEqual(['eq', 'empty', 'not_empty']);
     expect(filterOps('multi_select')).toEqual(['any', 'empty', 'not_empty']);
-    expect(filterOps('relation')).toEqual([]);
+    expect(filterOps('relation')).toEqual(['eq', 'empty', 'not_empty']);
+    expect(filterOps('file')).toEqual(['empty', 'not_empty']);
+    expect(filterOps('formula')).toEqual([]);
   });
 });
 
@@ -26,7 +29,16 @@ describe('isQueryable', () => {
     expect(isQueryable(fieldDef())).toBe(true);
     expect(isQueryable(fieldDef({ is_active: false }))).toBe(false);
     expect(isQueryable(fieldDef({ storage: 'column' }))).toBe(false);
-    expect(isQueryable(fieldDef({ data_type: 'file' }))).toBe(false);
+    expect(isQueryable(fieldDef({ data_type: 'formula' }))).toBe(false);
+    expect(isQueryable(fieldDef({ data_type: 'relation' }))).toBe(true);
+    expect(isQueryable(fieldDef({ data_type: 'file' }))).toBe(true);
+  });
+
+  it('relation_and_file_are_not_sortable', () => {
+    expect(isSortable(fieldDef())).toBe(true);
+    expect(isSortable(fieldDef({ data_type: 'relation' }))).toBe(false);
+    expect(isSortable(fieldDef({ data_type: 'file' }))).toBe(false);
+    expect(isSortable(fieldDef({ is_active: false }))).toBe(false);
   });
 });
 

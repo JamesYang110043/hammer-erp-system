@@ -1,4 +1,4 @@
-import type { FieldDefinition, SelectOption } from '../bindings';
+import type { FieldDefinition, RelationRef, SelectOption } from '../bindings';
 import { formatTaipei } from '../utils/time';
 
 /**
@@ -77,4 +77,12 @@ export function isNumericType(field: FieldDefinition): boolean {
   return (
     field.data_type === 'integer' || field.data_type === 'decimal' || field.data_type === 'money'
   );
+}
+
+/** 已刪除的關聯資料加在標題後面的文字。 */
+export const DELETED_SUFFIX = '（已刪除）';
+
+/** 關聯資料的顯示文字：標題；目標資料已刪除時加上「（已刪除）」。 */
+export function relationLabel(ref: Pick<RelationRef, 'title' | 'deleted'>): string {
+  return ref.deleted ? `${ref.title}${DELETED_SUFFIX}` : ref.title;
 }

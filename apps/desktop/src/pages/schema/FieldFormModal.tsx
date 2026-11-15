@@ -14,7 +14,8 @@ import {
 import type { FieldFormValues } from '../../schema/fieldForm';
 import {
   DATA_TYPE_LABELS,
-  SUPPORTED_DATA_TYPES,
+  VALUE_DATA_TYPES,
+  hasDefaultValue,
   isPropEditable,
   isPropVisible,
 } from '../../schema/fieldSettings';
@@ -96,9 +97,9 @@ export function FieldFormModal({
   };
 
   const typeOptions = (
-    field && !SUPPORTED_DATA_TYPES.includes(field.data_type)
-      ? [...SUPPORTED_DATA_TYPES, field.data_type]
-      : SUPPORTED_DATA_TYPES
+    field && !VALUE_DATA_TYPES.includes(field.data_type)
+      ? [...VALUE_DATA_TYPES, field.data_type]
+      : VALUE_DATA_TYPES
   ).map((t) => ({ value: t, label: DATA_TYPE_LABELS[t] }));
 
   return (
@@ -159,14 +160,19 @@ export function FieldFormModal({
             name="data_type"
             extra={field && !field.is_system ? '要變更型態請使用欄位列表的「變更型態」' : undefined}
           >
-            <Select options={typeOptions} disabled={!editable('data_type')} />
+            {/* 選項不多，不使用虛擬捲動（全部選項都在 DOM 中） */}
+            <Select options={typeOptions} disabled={!editable('data_type')} virtual={false} />
           </Form.Item>
 
           {visible('type_settings') && (
-            <TypeSettingsFields dataType={dataType} disabled={!editable('type_settings')} />
+            <TypeSettingsFields
+              dataType={dataType}
+              disabled={!editable('type_settings')}
+              relationLocked={field !== undefined}
+            />
           )}
 
-          {visible('default_value') && (
+          {visible('default_value') && hasDefaultValue(dataType) && (
             <Form.Item label="預設值" name="default_value">
               <DefaultValueInput
                 dataType={dataType}

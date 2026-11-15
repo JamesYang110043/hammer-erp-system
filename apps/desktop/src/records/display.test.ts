@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { fieldDef } from '../test/schemaFixtures';
-import { formatDecimal, formatFieldText, groupThousands } from './display';
+import { formatDecimal, formatFieldText, groupThousands, relationLabel } from './display';
 
 describe('groupThousands', () => {
   it.each([
@@ -46,5 +46,13 @@ describe('formatFieldText', () => {
     expect(formatFieldText(select, 'removed')).toBe('removed');
     expect(formatFieldText(fieldDef(), null)).toBeUndefined();
     expect(formatFieldText(fieldDef(), '')).toBeUndefined();
+  });
+});
+
+describe('relationLabel', () => {
+  it('marks_deleted_records', () => {
+    expect(relationLabel({ title: '冷氣 A', deleted: false })).toBe('冷氣 A');
+    expect(relationLabel({ title: '冷氣 A', deleted: true })).toBe('冷氣 A（已刪除）');
+    expect(relationLabel({ title: '', deleted: true })).toBe('（已刪除）');
   });
 });

@@ -96,11 +96,40 @@ describe('requests', () => {
       decimal_places: 2,
       options: null,
       validation: null,
+      relation_entity_id: null,
       ui_widget: null,
       column_width: null,
       help_text: null,
       sort_order: 3,
     });
+  });
+
+  it('relation_create_request_has_target_and_no_default', () => {
+    const req = toCreateRequest(
+      {
+        ...NEW_FIELD_VALUES,
+        field_key: 'equipment',
+        label: '設備',
+        data_type: 'relation',
+        relation_entity_id: 'entity-1',
+        default_value: 'leftover',
+      },
+      0,
+    );
+    expect(req.relation_entity_id).toBe('entity-1');
+    expect(req.default_value).toBeNull();
+    // 換成其他型態時不送關聯的資料類別
+    const text = toCreateRequest(
+      { ...NEW_FIELD_VALUES, field_key: 'a', label: 'A', relation_entity_id: 'entity-1' },
+      0,
+    );
+    expect(text.relation_entity_id).toBeNull();
+  });
+
+  it('relation_update_keeps_target', () => {
+    const field = fieldDef({ data_type: 'relation', relation_entity_id: 'entity-1' });
+    const req = toUpdateRequest(field, { ...toFormValues(field), relation_entity_id: 'other' });
+    expect(req.relation_entity_id).toBe('entity-1');
   });
 
   it('update_request_round_trips_unchanged_field', () => {
@@ -127,6 +156,7 @@ describe('requests', () => {
       decimal_places: null,
       options: [{ value: 'a', label: 'A', color: 'blue' }],
       validation: null,
+      relation_entity_id: null,
       ui_widget: 'radio',
       column_width: 120,
       help_text: null,

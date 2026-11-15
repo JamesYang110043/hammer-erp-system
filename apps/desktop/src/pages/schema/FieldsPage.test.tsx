@@ -228,6 +228,76 @@ describe('欄位定義頁', () => {
     );
   });
 
+  it('creates_relation_field_with_target_entity', async () => {
+    const EQUIPMENT = { ...REPAIR, id: 'entity-equipment', key: 'equipment', label: '設備' };
+    const PARTS = {
+      ...REPAIR,
+      id: 'entity-parts',
+      key: 'parts',
+      label: '更換零件',
+      kind: 'detail' as const,
+      parent_entity_id: REPAIR.id,
+    };
+    const invoke = renderFieldsPage({
+      list_entities: () => [REPAIR, EQUIPMENT, PARTS],
+      create_field: () =>
+        fieldDef({
+          field_key: 'equipment',
+          data_type: 'relation',
+          relation_entity_id: EQUIPMENT.id,
+        }),
+    });
+    const { user, dialog } = await openNewFieldDialog();
+
+    await user.type(dialog.getByLabelText('欄位代碼'), 'equipment');
+    await user.type(dialog.getByLabelText('顯示名稱'), '設備');
+    await chooseOption(user, '資料型態', '關聯');
+    // 關聯欄位不可設定預設值
+    expect(dialog.queryByLabelText('預設值')).not.toBeInTheDocument();
+
+    // 必須選擇目標；明細子表不能當作目標
+    await user.click(dialog.getByRole('button', { name: /儲\s*存/ }));
+    expect(await dialog.findByText('請選擇關聯的資料類別')).toBeInTheDocument();
+    await user.click(screen.getByLabelText('關聯的資料類別'));
+    expect(screen.queryByTitle('更換零件')).not.toBeInTheDocument();
+    await user.click((await screen.findAllByTitle('設備')).at(-1)!);
+    await user.click(dialog.getByRole('button', { name: /儲\s*存/ }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('create_field', {
+        key: 'repair',
+        req: expect.objectContaining({
+          field_key: 'equipment',
+          data_type: 'relation',
+          relation_entity_id: EQUIPMENT.id,
+          default_value: null,
+        }),
+      }),
+    );
+  });
+
+  it('relation_target_is_locked_when_editing', async () => {
+    const EQUIPMENT = { ...REPAIR, id: 'entity-equipment', key: 'equipment', label: '設備' };
+    const relation = fieldDef({
+      id: 'f-equipment',
+      field_key: 'equipment',
+      label: '設備',
+      data_type: 'relation',
+      relation_entity_id: EQUIPMENT.id,
+      sort_order: 2,
+    });
+    renderFieldsPage({
+      list_entities: () => [REPAIR, EQUIPMENT],
+      get_entity: () => entityDetail([SYSTEM_FIELD, CUSTOM_FIELD, relation]),
+    });
+    const user = userEvent.setup();
+    const row = await rowOf('equipment');
+    await user.click(row.getByRole('button', { name: '編輯' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByLabelText('關聯的資料類別')).toBeDisabled();
+    expect(await dialog.findByTitle('設備')).toBeInTheDocument();
+  });
+
   it('system_field_key_and_type_are_not_editable', async () => {
     const invoke = renderFieldsPage({
       update_field: () => ({ ...SYSTEM_FIELD, label: '編號', version: 3 }),

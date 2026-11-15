@@ -199,7 +199,12 @@ function RecordForm({
               ]}
             >
               {/* 傳 false 會蓋過 Form 的 disabled（唯讀者），只在唯讀欄位時指定 */}
-              <RecordFieldInput field={field} disabled={field.is_readonly || undefined} />
+              <RecordFieldInput
+                field={field}
+                disabled={field.is_readonly || undefined}
+                relation={record?.relations?.[field.field_key]}
+                attachment={record?.attachments?.[field.field_key]}
+              />
             </Form.Item>
           ))}
           {canWrite && (
