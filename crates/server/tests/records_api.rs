@@ -391,14 +391,19 @@ async fn viewer_can_read_but_not_write(pool: PgPool) {
     // viewer 可以讀取
     let page = list(&pool, &viewer, &[]).await;
     assert_eq!(page.total, 1);
-    assert_eq!(page.items, std::slice::from_ref(&record));
+    // 列表不回傳明細
+    let listed = Record {
+        lines: None,
+        ..record.clone()
+    };
+    assert_eq!(page.items, std::slice::from_ref(&listed));
     let (status, body) = call(&pool, Method::GET, &record_uri(record.id), &viewer, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     // 被拒絕的寫入沒有改變資料、沒有留紀錄
     assert_eq!(
         list(&pool, &admin, &[]).await.items,
-        std::slice::from_ref(&record)
+        std::slice::from_ref(&listed)
     );
     assert_eq!(audit_logs(&pool, record.id).await.len(), 1);
 

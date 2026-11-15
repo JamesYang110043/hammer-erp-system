@@ -422,14 +422,14 @@ export type CreateAdminRequest = {
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
- *  M2a 只接受 `kind = master`；明細子表在 M2b 支援。
+ *  目前接受 `kind = master` 與 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
  */
 export type CreateEntityRequest = CreateEntityRequest_Serialize | CreateEntityRequest_Deserialize;
 
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
- *  M2a 只接受 `kind = master`；明細子表在 M2b 支援。
+ *  目前接受 `kind = master` 與 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
  */
 export type CreateEntityRequest_Deserialize = {
 	/**  資料類別代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -439,8 +439,14 @@ export type CreateEntityRequest_Deserialize = {
 	icon?: string | null,
 	kind: EntityKind,
 	/**
+	 *  明細子表所屬的主表（資料類別 id）。`kind = detail` 時必填，且必須是有效的自訂資料類別、
+	 *  `kind` 為 `master` 或 `document`（不可是另一個明細子表）；其他 `kind` 不可指定。
+	 *  不符合時回傳 `422 VALIDATION`，`details.field` 為 `parent_entity_id`。建立後不可更換。
+	 */
+	parent_entity_id?: string | null,
+	/**
 	 *  單號規則，例如 `SO{yyyyMM}-{0000}`（格式見 architecture.md §8.4）；空白或 `null` 代表不使用單號。
-	 *  格式不合法時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
+	 *  格式不合法、明細子表設定單號規則時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
 	 */
 	numbering_pattern?: string | null,
 	/**
@@ -456,7 +462,7 @@ export type CreateEntityRequest_Deserialize = {
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
- *  M2a 只接受 `kind = master`；明細子表在 M2b 支援。
+ *  目前接受 `kind = master` 與 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
  */
 export type CreateEntityRequest_Serialize = {
 	/**  資料類別代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -466,8 +472,14 @@ export type CreateEntityRequest_Serialize = {
 	icon: string | null,
 	kind: EntityKind,
 	/**
+	 *  明細子表所屬的主表（資料類別 id）。`kind = detail` 時必填，且必須是有效的自訂資料類別、
+	 *  `kind` 為 `master` 或 `document`（不可是另一個明細子表）；其他 `kind` 不可指定。
+	 *  不符合時回傳 `422 VALIDATION`，`details.field` 為 `parent_entity_id`。建立後不可更換。
+	 */
+	parent_entity_id: string | null,
+	/**
 	 *  單號規則，例如 `SO{yyyyMM}-{0000}`（格式見 architecture.md §8.4）；空白或 `null` 代表不使用單號。
-	 *  格式不合法時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
+	 *  格式不合法、明細子表設定單號規則時回傳 `422 VALIDATION`，`details.field` 為 `numbering_pattern`。
 	 */
 	numbering_pattern: string | null,
 	/**
@@ -571,11 +583,15 @@ export type CreateRecordRequest = CreateRecordRequest_Serialize | CreateRecordRe
 /**  新增資料的輸入。沒有帶到的欄位套用預設值。單號由伺服器產生，request 中的 `record_no` 會被忽略。 */
 export type CreateRecordRequest_Deserialize = {
 	data?: { [key in string]: unknown },
+	/**  明細，鍵為明細子表的代碼；與主表一起建立（見模組說明「明細子表」）。明細不可帶 `id`。 */
+	lines?: { [key in string]: LineInput_Deserialize[] },
 };
 
 /**  新增資料的輸入。沒有帶到的欄位套用預設值。單號由伺服器產生，request 中的 `record_no` 會被忽略。 */
 export type CreateRecordRequest_Serialize = {
 	data: { [key in string]: unknown },
+	/**  明細，鍵為明細子表的代碼；與主表一起建立（見模組說明「明細子表」）。明細不可帶 `id`。 */
+	lines?: { [key in string]: LineInput_Serialize[] },
 };
 
 /**  `POST /api/v1/users` 的輸入。建立後 `must_change_password = true`。 */
@@ -1049,6 +1065,31 @@ export type LayoutSource =
  */
 "generated";
 
+/**  一列明細的輸入（[`CreateRecordRequest::lines`]、[`UpdateRecordRequest::lines`]）。 */
+export type LineInput = LineInput_Serialize | LineInput_Deserialize;
+
+/**  一列明細的輸入（[`CreateRecordRequest::lines`]、[`UpdateRecordRequest::lines`]）。 */
+export type LineInput_Deserialize = {
+	/**  既有明細的 id；新的明細不帶（或 `null`）。 */
+	id?: string | null,
+	/**
+	 *  欄位的值，格式同主表的 `data`。新的明細沒有帶到的欄位套用預設值；既有的明細只合併有帶到的欄位，
+	 *  `null` 代表清空。
+	 */
+	data?: { [key in string]: unknown },
+};
+
+/**  一列明細的輸入（[`CreateRecordRequest::lines`]、[`UpdateRecordRequest::lines`]）。 */
+export type LineInput_Serialize = {
+	/**  既有明細的 id；新的明細不帶（或 `null`）。 */
+	id: string | null,
+	/**
+	 *  欄位的值，格式同主表的 `data`。新的明細沒有帶到的欄位套用預設值；既有的明細只合併有帶到的欄位，
+	 *  `null` 代表清空。
+	 */
+	data: { [key in string]: unknown },
+};
+
 /**  `POST /api/v1/auth/login` 的輸入。 */
 export type LoginRequest = {
 	username: string,
@@ -1139,6 +1180,11 @@ export type Record_Deserialize = {
 	 *  （見模組說明「關聯欄位」）。
 	 */
 	relations?: { [key in string]: RelationRef },
+	/**
+	 *  明細，鍵為明細子表的代碼（見模組說明「明細子表」）。單筆查詢與新增、修改的回應包含主表所有
+	 *  有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
+	 */
+	lines?: { [key in string]: Record_Deserialize[] } | null,
 	/**  建立時間（RFC 3339）。 */
 	created_at: string,
 	created_by?: string | null,
@@ -1163,6 +1209,11 @@ export type Record_Serialize = {
 	 *  （見模組說明「關聯欄位」）。
 	 */
 	relations: { [key in string]: RelationRef },
+	/**
+	 *  明細，鍵為明細子表的代碼（見模組說明「明細子表」）。單筆查詢與新增、修改的回應包含主表所有
+	 *  有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
+	 */
+	lines?: { [key in string]: Record_Serialize[] },
 	/**  建立時間（RFC 3339）。 */
 	created_at: string,
 	created_by: string | null,
@@ -1243,10 +1294,10 @@ export type SetupStatus = {
 	needs_setup: boolean,
 };
 
-/**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage` 不可修改。 */
+/**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage`、`parent_entity_id` 不可修改。 */
 export type UpdateEntityRequest = UpdateEntityRequest_Serialize | UpdateEntityRequest_Deserialize;
 
-/**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage` 不可修改。 */
+/**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage`、`parent_entity_id` 不可修改。 */
 export type UpdateEntityRequest_Deserialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
@@ -1257,7 +1308,7 @@ export type UpdateEntityRequest_Deserialize = {
 	icon?: string | null,
 	/**
 	 *  單號規則（格式同 [`CreateEntityRequest::numbering_pattern`]）；`null` 或空白代表清除。
-	 *  修改後只影響之後新增的資料，既有的單號不變。
+	 *  修改後只影響之後新增的資料，既有的單號不變。明細子表不可設定。
 	 */
 	numbering_pattern?: string | null,
 	/**
@@ -1270,7 +1321,7 @@ export type UpdateEntityRequest_Deserialize = {
 	is_active: boolean,
 };
 
-/**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage` 不可修改。 */
+/**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage`、`parent_entity_id` 不可修改。 */
 export type UpdateEntityRequest_Serialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
@@ -1281,7 +1332,7 @@ export type UpdateEntityRequest_Serialize = {
 	icon: string | null,
 	/**
 	 *  單號規則（格式同 [`CreateEntityRequest::numbering_pattern`]）；`null` 或空白代表清除。
-	 *  修改後只影響之後新增的資料，既有的單號不變。
+	 *  修改後只影響之後新增的資料，既有的單號不變。明細子表不可設定。
 	 */
 	numbering_pattern: string | null,
 	/**
@@ -1383,6 +1434,11 @@ export type UpdateRecordRequest_Deserialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
 	data?: { [key in string]: unknown },
+	/**
+	 *  要修改的明細子表，鍵為明細子表的代碼。有帶到的明細子表以陣列「整組取代」：有 `id` 的更新、
+	 *  沒有 `id` 的新增、沒列出的刪除；沒帶到的明細子表不變（見模組說明「明細子表」）。
+	 */
+	lines?: { [key in string]: LineInput_Deserialize[] },
 };
 
 /**  修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。單號不可修改，`record_no` 會被忽略。 */
@@ -1390,6 +1446,11 @@ export type UpdateRecordRequest_Serialize = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
 	data: { [key in string]: unknown },
+	/**
+	 *  要修改的明細子表，鍵為明細子表的代碼。有帶到的明細子表以陣列「整組取代」：有 `id` 的更新、
+	 *  沒有 `id` 的新增、沒列出的刪除；沒帶到的明細子表不變（見模組說明「明細子表」）。
+	 */
+	lines?: { [key in string]: LineInput_Serialize[] },
 };
 
 /**  `PATCH /api/v1/users/{id}` 的輸入。省略或 `null` 的欄位不修改。 */

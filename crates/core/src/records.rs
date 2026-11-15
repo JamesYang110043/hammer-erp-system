@@ -24,34 +24,46 @@
 //!
 //! 附件欄位（`file`）：寫入時在同一個 transaction 內檢查並綁定有變動的附件，被換掉或清空的舊附件
 //! 標記為刪除（[`crate::attachments`]）；軟刪除資料時附件保留。篩選只支援 `empty`，不能排序。
+//!
+//! 明細子表（`kind = detail`）：不能透過這裡的函式直接存取（[`CoreError::NotFound`]），明細與主表
+//! 一起存檔（request 的 `lines`，檢查在 [`crate::record_lines`]）。修改時有帶到的明細子表整組取代；
+//! 明細的樂觀鎖定由主表的 `version` 負責，明細有變動時主表的 `version` 也遞增；軟刪除主表時明細一起
+//! 軟刪除。明細的變動記在主表那筆操作紀錄的 `lines.<明細子表代碼>`。單筆查詢與寫入的回應包含明細
+//! （[`Record::lines`]），列表不包含。
 
 use hammer_db::DbError;
 use hammer_db::ensure_version_matched;
 use hammer_db::number_sequence;
 use hammer_db::record::{
-    self as db, CompareOp, JsonCast, NewRecord, OrderTarget, RECORD_NO_UNIQUE, RecordCondition,
-    RecordListFilter, RecordOrder, RecordRow,
+    self as db, CompareOp, JsonCast, LineRow, NewRecord, OrderTarget, RECORD_NO_UNIQUE,
+    RecordCondition, RecordListFilter, RecordOrder, RecordRow,
 };
 use hammer_db::schema as schema_db;
 use hammer_db::sqlx::{PgConnection, PgPool, PgTransaction};
 use hammer_shared::pagination::{Page, PageRequest};
 use hammer_shared::record::{
-    CreateRecordRequest, FilterOp, LookupItem, LookupQuery, QueryParamError, RECORD_NO, Record,
-    RecordFilter, RecordListQuery, UpdateRecordRequest, query_param, title_matches,
+    CreateRecordRequest, FilterOp, LineInput, LookupItem, LookupQuery, QueryParamError, RECORD_NO,
+    Record, RecordFilter, RecordListQuery, UpdateRecordRequest, query_param, title_matches,
 };
 use hammer_shared::schema::{
-    DataType, EntityDefinition, EntityStorage, FieldDefinition, FieldStorage, parse_value, to_json,
+    DataType, EntityDefinition, EntityKind, EntityStorage, FieldDefinition, FieldStorage,
+    parse_value, to_json,
 };
 use hammer_shared::{Id, audit as action, new_id, permission};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use time::OffsetDateTime;
 
 use crate::CoreError;
-use crate::attachments::{apply_file_changes, prepare_file_changes};
+use crate::attachments::{FileChanges, apply_file_changes, prepare_file_changes};
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
 use crate::numbering::{NumberingPattern, numbering_date};
 use crate::record_data::{FieldError, WriteMode, normalize_record_data};
+use crate::record_lines::{
+    LineError, LineFiles, LineTarget, audit_key, audit_value, duplicate_attachments,
+    duplicate_line_values, match_lines, unknown_details, validation_error,
+};
 use crate::relations::{attach_relations, check_relations};
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version, entity_from_row, field_from_row};
 use crate::title::TitleRenderer;
@@ -116,8 +128,12 @@ pub async fn get_record(
     let row = db::find_record(&mut *conn, entity.id, id)
         .await?
         .ok_or_else(record_not_found)?;
+    let details = schema_db::list_detail_entities(&mut *conn, entity.id).await?;
+    let details = load_details(&mut conn, details).await?;
     let record = record_from_row(row, &renderer(&entity, &fields))?;
-    with_relations(&mut conn, &fields, record).await
+    let mut record = with_relations(&mut conn, &fields, record).await?;
+    record.lines = Some(fetch_lines(&mut conn, &details, id).await?);
+    Ok(record)
 }
 
 /// 選擇器搜尋：依關鍵字比對資料標題，回傳未刪除的資料的 id 與標題。需要 `record.read`。
@@ -178,7 +194,10 @@ pub async fn lookup_records(
 ///
 /// 資料類別有設定單號規則時，依 `now` 的 Asia/Taipei 日期取號並寫入 `record_no`。
 ///
+/// 明細（`req.lines`）與主表一起建立，順序為陣列中的位置。
+///
 /// - `data` 不符合欄位定義、違反「不可重複」→ [`CoreError::InvalidFields`]
+/// - 明細不合法 → [`CoreError::InvalidLines`]（含主表的欄位錯誤）
 /// - 產生的單號與既有的單號重複 → [`CoreError::Validation`]（[`RECORD_NO_TAKEN`]）
 pub async fn create_record(
     pool: &PgPool,
@@ -192,10 +211,14 @@ pub async fn create_record(
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
     let (entity, fields) = load_entity_for_write(&mut tx, entity_key).await?;
-    let data = normalize_record_data(&fields, &req.data, WriteMode::Create)
-        .map_err(CoreError::InvalidFields)?;
+    let details = load_details_for_write(&mut tx, &entity).await?;
+    let master = normalize_record_data(&fields, &req.data, WriteMode::Create);
+    let mut line_errors = Vec::new();
+    let lines = prepare_lines(&mut tx, &details, &req.lines, None, &mut line_errors).await?;
+    let data = validation_error(master, line_errors)?;
     check_relations(&mut tx, &fields, &data, None).await?;
     let files = prepare_file_changes(&mut tx, &fields, &data, None).await?;
+    ensure_unique_attachments(&files, &lines)?;
     let data = Value::Object(data);
 
     // 驗證通過後才取號：流水號的列鎖定到 transaction 結束，越晚取號鎖定的時間越短
@@ -207,6 +230,8 @@ pub async fn create_record(
             id,
             entity_id: entity.id,
             record_no: record_no.as_deref(),
+            parent_record_id: None,
+            sort_order: 0,
             data: &data,
             created_by: ctx.user_id,
             created_at: now,
@@ -216,12 +241,21 @@ pub async fn create_record(
     if let Err(err) = inserted {
         return Err(write_error(pool, tx, err, entity.id, id, &fields, &data).await);
     }
+    if let Err(err) = write_lines(&mut tx, ctx, id, &lines, now).await {
+        return Err(line_write_error(pool, tx, err, id, &lines).await);
+    }
     apply_file_changes(&mut tx, ctx, &entity.key, id, &files, client_info, now).await?;
+    apply_line_files(&mut tx, ctx, &lines, client_info, now).await?;
 
-    // 操作紀錄包含產生的單號（`record_no` 是保留的代碼，不會與欄位衝突）
+    // 操作紀錄包含產生的單號（`record_no` 是保留的代碼，不會與欄位衝突）與明細
     let mut after = data;
-    if let (Some(no), Value::Object(map)) = (&record_no, &mut after) {
-        map.insert(RECORD_NO.to_owned(), Value::String(no.clone()));
+    if let Value::Object(map) = &mut after {
+        if let Some(no) = &record_no {
+            map.insert(RECORD_NO.to_owned(), Value::String(no.clone()));
+        }
+        for detail in lines.iter().filter(|d| !d.lines.is_empty()) {
+            map.insert(audit_key(&detail.detail.entity.key), detail.after_audit());
+        }
     }
     record_audit(
         &mut tx,
@@ -234,7 +268,7 @@ pub async fn create_record(
         now,
     )
     .await?;
-    let record = fetch_record(&mut tx, &entity, &fields, id).await?;
+    let record = fetch_record(&mut tx, &entity, &fields, &details, id).await?;
     commit(tx).await?;
 
     tracing::info!(actor = %ctx.user_id, entity = %entity.key, record_id = %id, "已新增資料");
@@ -243,10 +277,14 @@ pub async fn create_record(
 
 /// 修改資料：只合併有帶到的欄位，`null` 代表清空。需要 `record.write`。
 ///
+/// 有帶到的明細子表（`req.lines`）整組取代：有 `id` 的更新、沒有 `id` 的新增、沒列出的軟刪除；
+/// 沒帶到的明細子表不變。明細有任何變動（含順序）時主表的 `version` 也遞增。
+///
 /// - 資料不存在或已刪除 → [`CoreError::NotFound`]
 /// - `version` 不符 → `Conflict`（§9.4）
 /// - `data` 不符合欄位定義、違反「不可重複」→ [`CoreError::InvalidFields`]
-/// - 沒有任何變動時不寫入，回傳目前的資料（`version` 不變）
+/// - 明細不合法 → [`CoreError::InvalidLines`]（含主表的欄位錯誤）
+/// - 主表與明細都沒有任何變動時不寫入，回傳目前的資料（`version` 不變）
 pub async fn update_record(
     pool: &PgPool,
     ctx: &AuthContext,
@@ -263,20 +301,26 @@ pub async fn update_record(
     let current = lock_record(&mut tx, entity.id, id).await?;
     ensure_version(current.version, req.version)?;
 
+    let details = load_details_for_write(&mut tx, &entity).await?;
     let existing = data_object(&current.data)?;
-    let data = normalize_record_data(&fields, &req.data, WriteMode::Update { existing })
-        .map_err(CoreError::InvalidFields)?;
-    if data == *existing {
+    let master = normalize_record_data(&fields, &req.data, WriteMode::Update { existing });
+    let mut line_errors = Vec::new();
+    let lines = prepare_lines(&mut tx, &details, &req.lines, Some(id), &mut line_errors).await?;
+    let data = validation_error(master, line_errors)?;
+    if data == *existing && lines.iter().all(|d| !d.changed()) {
         let record = record_from_row(current, &renderer(&entity, &fields))?;
-        let record = with_relations(&mut tx, &fields, record).await?;
+        let mut record = with_relations(&mut tx, &fields, record).await?;
+        record.lines = Some(fetch_lines(&mut tx, &details, id).await?);
         commit(tx).await?;
         return Ok(record);
     }
     // 只檢查有變動的關聯：目標之後被刪除時，仍可修改其他欄位
     check_relations(&mut tx, &fields, &data, Some(existing)).await?;
     let files = prepare_file_changes(&mut tx, &fields, &data, Some(existing)).await?;
+    ensure_unique_attachments(&files, &lines)?;
     let data = Value::Object(data);
 
+    // 只有明細變動時 data 不變，但 version 仍遞增
     let updated = db::update_record_data(&mut *tx, id, req.version, &data, ctx.user_id).await;
     match updated {
         Ok(result) => {
@@ -284,27 +328,40 @@ pub async fn update_record(
         }
         Err(err) => return Err(write_error(pool, tx, err, entity.id, id, &fields, &data).await),
     }
+    if let Err(err) = write_lines(&mut tx, ctx, id, &lines, now).await {
+        return Err(line_write_error(pool, tx, err, id, &lines).await);
+    }
     apply_file_changes(&mut tx, ctx, &entity.key, id, &files, client_info, now).await?;
+    apply_line_files(&mut tx, ctx, &lines, client_info, now).await?;
 
+    let mut before = current.data.clone();
+    let mut after = data;
+    if let (Value::Object(b), Value::Object(a)) = (&mut before, &mut after) {
+        for detail in &lines {
+            let key = audit_key(&detail.detail.entity.key);
+            b.insert(key.clone(), detail.before_audit());
+            a.insert(key, detail.after_audit());
+        }
+    }
     record_audit(
         &mut tx,
         ctx,
         action::UPDATE,
         &entity.key,
         id,
-        AuditDiff::between(Some(&current.data), Some(&data))?,
+        AuditDiff::between(Some(&before), Some(&after))?,
         client_info,
         now,
     )
     .await?;
-    let record = fetch_record(&mut tx, &entity, &fields, id).await?;
+    let record = fetch_record(&mut tx, &entity, &fields, &details, id).await?;
     commit(tx).await?;
 
     tracing::info!(actor = %ctx.user_id, entity = %entity.key, record_id = %id, "已修改資料");
     Ok(record)
 }
 
-/// 軟刪除資料。需要 `record.write`。
+/// 軟刪除資料，明細一起軟刪除（附件保留）。需要 `record.write`。
 ///
 /// - 資料不存在或已刪除 → [`CoreError::NotFound`]
 /// - `version` 不符 → `Conflict`（§9.4）
@@ -323,15 +380,32 @@ pub async fn delete_record(
     let (entity, _) = load_entity_for_write(&mut tx, entity_key).await?;
     let current = lock_record(&mut tx, entity.id, id).await?;
     ensure_version(current.version, version)?;
+    let details = schema_db::list_detail_entities_for_share(&mut *tx, entity.id).await?;
+    let lines = db::list_lines(&mut *tx, id).await?;
 
     ensure_version_matched(db::soft_delete_record(&mut *tx, id, version, now, ctx.user_id).await?)?;
+    db::soft_delete_child_records(&mut *tx, id, now, ctx.user_id).await?;
+
+    // 操作紀錄包含所有明細（含已停用的明細子表）
+    let mut before = current.data.clone();
+    if let Value::Object(map) = &mut before {
+        for detail in &details {
+            let rows: Vec<&LineRow> = lines.iter().filter(|r| r.entity_id == detail.id).collect();
+            if !rows.is_empty() {
+                map.insert(
+                    audit_key(&detail.key),
+                    audit_value(rows.iter().map(|r| (r.id, &r.data))),
+                );
+            }
+        }
+    }
     record_audit(
         &mut tx,
         ctx,
         action::DELETE,
         &entity.key,
         id,
-        AuditDiff::between(Some(&current.data), None)?,
+        AuditDiff::between(Some(&before), None)?,
         client_info,
         now,
     )
@@ -604,7 +678,10 @@ async fn load_fields_of(
     let entity = row
         .map(entity_from_row)
         .transpose()?
-        .filter(|e| e.is_active && e.storage == EntityStorage::CustomRecords)
+        // 明細子表只能透過主表存取
+        .filter(|e| {
+            e.is_active && e.storage == EntityStorage::CustomRecords && e.kind != EntityKind::Detail
+        })
         .ok_or_else(|| CoreError::NotFound(ENTITY_NOT_FOUND.into()))?;
     let fields = schema_db::list_fields(&mut *conn, entity.id)
         .await?
@@ -633,6 +710,7 @@ pub fn record_from_row(row: RecordRow, titles: &TitleRenderer<'_>) -> Result<Rec
         record_no: row.record_no,
         data,
         relations: Default::default(),
+        lines: None,
         created_at: row.created_at,
         created_by: row.created_by,
         updated_at: row.updated_at,
@@ -756,13 +834,16 @@ async fn fetch_record(
     tx: &mut PgTransaction<'_>,
     entity: &EntityDefinition,
     fields: &[FieldDefinition],
+    details: &[Detail],
     id: Id,
 ) -> Result<Record, CoreError> {
     let row = db::find_record(&mut **tx, entity.id, id)
         .await?
         .ok_or_else(|| CoreError::Internal("寫入後找不到資料".into()))?;
     let record = record_from_row(row, &renderer(entity, fields))?;
-    with_relations(tx, fields, record).await
+    let mut record = with_relations(tx, fields, record).await?;
+    record.lines = Some(fetch_lines(tx, details, id).await?);
+    Ok(record)
 }
 
 /// 填入一筆資料的 [`Record::relations`]。
@@ -784,6 +865,383 @@ fn record_not_found() -> CoreError {
 async fn commit(tx: PgTransaction<'_>) -> Result<(), CoreError> {
     tx.commit().await.map_err(DbError::from)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 明細
+// ---------------------------------------------------------------------------
+
+/// 主表的一個明細子表與其所有欄位定義（含已停用）。
+struct Detail {
+    entity: EntityDefinition,
+    fields: Vec<FieldDefinition>,
+}
+
+/// 載入明細子表的欄位定義。
+async fn load_details(
+    conn: &mut PgConnection,
+    rows: Vec<schema_db::EntityRow>,
+) -> Result<Vec<Detail>, CoreError> {
+    let mut details = Vec::with_capacity(rows.len());
+    for row in rows {
+        let entity = entity_from_row(row)?;
+        let fields = schema_db::list_fields(&mut *conn, entity.id)
+            .await?
+            .into_iter()
+            .map(field_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        details.push(Detail { entity, fields });
+    }
+    Ok(details)
+}
+
+/// 寫入時載入主表的明細子表（含已停用），以 `FOR SHARE` 鎖定（同 [`load_entity_for_write`]）。
+async fn load_details_for_write(
+    tx: &mut PgTransaction<'_>,
+    master: &EntityDefinition,
+) -> Result<Vec<Detail>, CoreError> {
+    let rows = schema_db::list_detail_entities_for_share(&mut **tx, master.id).await?;
+    load_details(tx, rows).await
+}
+
+/// 一列明細的寫入方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineAction {
+    Insert,
+    Update,
+    /// 資料與順序都沒有變動。
+    Unchanged,
+}
+
+/// 一列要寫入的明細（已驗證）。
+struct LineWrite {
+    id: Id,
+    /// 在 request 陣列中的位置，也是寫入的 `sort_order`。
+    index: usize,
+    sort_order: i32,
+    action: LineAction,
+    data: Value,
+    files: FileChanges,
+}
+
+/// 一個明細子表要寫入的內容（request 有帶到的明細子表）。
+struct DetailWrite<'a> {
+    detail: &'a Detail,
+    /// 依 request 的順序。
+    lines: Vec<LineWrite>,
+    /// 沒有列出、要軟刪除的既有明細。
+    removed: Vec<Id>,
+    /// 修改前的明細 `(id, data)`，依順序（操作紀錄用）。
+    before: Vec<(Id, Value)>,
+}
+
+impl DetailWrite<'_> {
+    fn changed(&self) -> bool {
+        !self.removed.is_empty() || self.lines.iter().any(|l| l.action != LineAction::Unchanged)
+    }
+
+    fn before_audit(&self) -> Value {
+        audit_value(self.before.iter().map(|(id, data)| (*id, data)))
+    }
+
+    fn after_audit(&self) -> Value {
+        audit_value(self.lines.iter().map(|l| (l.id, &l.data)))
+    }
+}
+
+/// 驗證 request 的明細（`input`），回傳每個有帶到的明細子表要寫入的內容。驗證錯誤加入 `errors`
+/// （不中斷，以便一次列出所有錯誤）；有錯誤時回傳的內容不可寫入。
+///
+/// `parent_id` 為修改的主表資料（鎖定並比對既有明細）；新增時為 `None`。
+async fn prepare_lines<'d>(
+    tx: &mut PgTransaction<'_>,
+    details: &'d [Detail],
+    input: &BTreeMap<String, Vec<LineInput>>,
+    parent_id: Option<Id>,
+    errors: &mut Vec<LineError>,
+) -> Result<Vec<DetailWrite<'d>>, CoreError> {
+    let active: Vec<&EntityDefinition> = details
+        .iter()
+        .filter(|d| d.entity.is_active)
+        .map(|d| &d.entity)
+        .collect();
+    errors.extend(unknown_details(input, &active));
+
+    let mut writes = Vec::new();
+    for (key, inputs) in input {
+        let Some(detail) = details
+            .iter()
+            .find(|d| d.entity.is_active && d.entity.key == *key)
+        else {
+            continue;
+        };
+        let existing = match parent_id {
+            Some(parent_id) => {
+                db::list_lines_for_update(&mut **tx, detail.entity.id, parent_id).await?
+            }
+            None => Vec::new(),
+        };
+        let existing_ids: Vec<Id> = existing.iter().map(|r| r.id).collect();
+        let matched = match match_lines(key, inputs, &existing_ids, parent_id.is_none()) {
+            Ok(matched) => matched,
+            Err(e) => {
+                errors.extend(e);
+                continue;
+            }
+        };
+
+        let mut lines = Vec::with_capacity(inputs.len());
+        let mut normalized: Vec<Option<Map<String, Value>>> = Vec::with_capacity(inputs.len());
+        for (index, (line, target)) in inputs.iter().zip(&matched.targets).enumerate() {
+            let current = match *target {
+                LineTarget::Existing(i) => Some(&existing[i]),
+                LineTarget::New => None,
+            };
+            let sort_order =
+                i32::try_from(index).map_err(|_| CoreError::Validation("明細的列數過多".into()))?;
+            match prepare_line(tx, detail, line, current).await? {
+                Ok((data, files)) => {
+                    let action = match current {
+                        None => LineAction::Insert,
+                        Some(row)
+                            if row.sort_order == sort_order
+                                && row.data.as_object() == Some(&data) =>
+                        {
+                            LineAction::Unchanged
+                        }
+                        Some(_) => LineAction::Update,
+                    };
+                    normalized.push(Some(data.clone()));
+                    lines.push(LineWrite {
+                        id: current.map_or_else(new_id, |r| r.id),
+                        index,
+                        sort_order,
+                        action,
+                        data: Value::Object(data),
+                        files,
+                    });
+                }
+                Err(field_errors) => {
+                    errors.extend(LineError::from_fields(key, index, field_errors));
+                    normalized.push(None);
+                }
+            }
+        }
+        let refs: Vec<Option<&Map<String, Value>>> =
+            normalized.iter().map(Option::as_ref).collect();
+        errors.extend(duplicate_line_values(key, &detail.fields, &refs));
+
+        writes.push(DetailWrite {
+            detail,
+            lines,
+            removed: matched.removed.iter().map(|&i| existing[i].id).collect(),
+            before: existing.iter().map(|r| (r.id, r.data.clone())).collect(),
+        });
+    }
+    Ok(writes)
+}
+
+/// 驗證一列明細：正規化 `data`、檢查有變動的關聯與附件。欄位錯誤放在內層的 `Err`。
+async fn prepare_line(
+    tx: &mut PgTransaction<'_>,
+    detail: &Detail,
+    line: &LineInput,
+    current: Option<&LineRow>,
+) -> Result<Result<(Map<String, Value>, FileChanges), Vec<FieldError>>, CoreError> {
+    let existing = current.map(|r| data_object(&r.data)).transpose()?;
+    let mode = match existing {
+        Some(existing) => WriteMode::Update { existing },
+        None => WriteMode::Create,
+    };
+    let data = match normalize_record_data(&detail.fields, &line.data, mode) {
+        Ok(data) => data,
+        Err(errors) => return Ok(Err(errors)),
+    };
+    match check_relations(tx, &detail.fields, &data, existing).await {
+        Ok(()) => {}
+        Err(CoreError::InvalidFields(errors)) => return Ok(Err(errors)),
+        Err(e) => return Err(e),
+    }
+    match prepare_file_changes(tx, &detail.fields, &data, existing).await {
+        Ok(files) => Ok(Ok((data, files))),
+        Err(CoreError::InvalidFields(errors)) => Ok(Err(errors)),
+        Err(e) => Err(e),
+    }
+}
+
+/// 同一個附件不可同時用在主表與明細（或兩列明細）。
+fn ensure_unique_attachments(
+    master: &FileChanges,
+    details: &[DetailWrite<'_>],
+) -> Result<(), CoreError> {
+    let lines: Vec<LineFiles<'_>> = details
+        .iter()
+        .flat_map(|d| {
+            d.lines.iter().map(|l| LineFiles {
+                detail_key: &d.detail.entity.key,
+                index: l.index,
+                bind: &l.files.bind,
+            })
+        })
+        .collect();
+    let errors = duplicate_attachments(&master.bind, &lines);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CoreError::InvalidLines {
+            fields: Vec::new(),
+            lines: errors,
+        })
+    }
+}
+
+/// 寫入明細：先軟刪除沒列出的，再更新、新增（先刪除才不會與「不可重複」的值衝突）。
+async fn write_lines(
+    tx: &mut PgTransaction<'_>,
+    ctx: &AuthContext,
+    parent_id: Id,
+    details: &[DetailWrite<'_>],
+    now: OffsetDateTime,
+) -> Result<(), DbError> {
+    for detail in details {
+        if !detail.removed.is_empty() {
+            db::soft_delete_lines(&mut **tx, &detail.removed, now, ctx.user_id).await?;
+        }
+    }
+    for detail in details {
+        for line in &detail.lines {
+            match line.action {
+                LineAction::Unchanged => {}
+                LineAction::Update => {
+                    // 已由 list_lines_for_update 鎖定
+                    db::update_line(&mut **tx, line.id, line.sort_order, &line.data, ctx.user_id)
+                        .await?;
+                }
+                LineAction::Insert => {
+                    db::insert_record(
+                        &mut **tx,
+                        &NewRecord {
+                            id: line.id,
+                            entity_id: detail.detail.entity.id,
+                            record_no: None,
+                            parent_record_id: Some(parent_id),
+                            sort_order: line.sort_order,
+                            data: &line.data,
+                            created_by: ctx.user_id,
+                            created_at: now,
+                        },
+                    )
+                    .await?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 綁定明細的附件（同 [`apply_file_changes`]，資料類別為明細子表、資料為該列明細）。
+async fn apply_line_files(
+    tx: &mut PgTransaction<'_>,
+    ctx: &AuthContext,
+    details: &[DetailWrite<'_>],
+    client_info: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<(), CoreError> {
+    for detail in details {
+        for line in detail.lines.iter().filter(|l| !l.files.is_empty()) {
+            apply_file_changes(
+                tx,
+                ctx,
+                &detail.detail.entity.key,
+                line.id,
+                &line.files,
+                client_info,
+                now,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// 寫入明細失敗時的錯誤。違反「不可重複」的唯一索引時 rollback 後找出與其他主表的明細重複的欄位
+/// （同一次存檔內的重複已在 [`duplicate_line_values`] 檢查）。
+async fn line_write_error(
+    pool: &PgPool,
+    tx: PgTransaction<'_>,
+    err: DbError,
+    parent_id: Id,
+    details: &[DetailWrite<'_>],
+) -> CoreError {
+    if err.unique_violation().is_none() {
+        return err.into();
+    }
+    // transaction 已中止，不能再查詢
+    if let Err(e) = tx.rollback().await {
+        return DbError::from(e).into();
+    }
+    let mut errors = Vec::new();
+    for detail in details {
+        let key = &detail.detail.entity.key;
+        for line in detail
+            .lines
+            .iter()
+            .filter(|l| l.action != LineAction::Unchanged)
+        {
+            for field in detail.detail.fields.iter().filter(|f| f.is_unique) {
+                let Some(value) = line.data.get(&field.field_key) else {
+                    continue;
+                };
+                match db::line_value_taken(
+                    pool,
+                    detail.detail.entity.id,
+                    parent_id,
+                    &field.field_key,
+                    value,
+                )
+                .await
+                {
+                    Ok(true) => errors.push(LineError::field(
+                        key,
+                        line.index,
+                        &field.field_key,
+                        VALUE_TAKEN,
+                    )),
+                    Ok(false) => {}
+                    Err(e) => return e.into(),
+                }
+            }
+        }
+    }
+    if errors.is_empty() {
+        CoreError::Validation(DUPLICATE_RECORD.into())
+    } else {
+        CoreError::InvalidLines {
+            fields: Vec::new(),
+            lines: errors,
+        }
+    }
+}
+
+/// 主表資料 `parent_id` 的明細，鍵為**有效的**明細子表代碼（沒有明細時為空陣列），依 `sort_order`。
+async fn fetch_lines(
+    conn: &mut PgConnection,
+    details: &[Detail],
+    parent_id: Id,
+) -> Result<BTreeMap<String, Vec<Record>>, CoreError> {
+    let rows = db::list_lines(&mut *conn, parent_id).await?;
+    let mut out = BTreeMap::new();
+    for detail in details.iter().filter(|d| d.entity.is_active) {
+        let titles = renderer(&detail.entity, &detail.fields);
+        let mut lines = rows
+            .iter()
+            .filter(|r| r.entity_id == detail.entity.id)
+            .map(|r| record_from_row(r.clone().into_record_row(), &titles))
+            .collect::<Result<Vec<_>, _>>()?;
+        attach_relations(conn, &detail.fields, &mut lines).await?;
+        out.insert(detail.entity.key.clone(), lines);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

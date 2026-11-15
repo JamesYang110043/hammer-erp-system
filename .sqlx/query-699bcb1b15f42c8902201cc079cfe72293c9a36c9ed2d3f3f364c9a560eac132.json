@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO custom_records\n            (id, entity_id, record_no, parent_record_id, sort_order, data,\n             created_at, created_by, updated_at, updated_by)\n        VALUES ($1, $2, $3, $7, $8, $4, $5, $6, $5, $6)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Timestamptz",
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "699bcb1b15f42c8902201cc079cfe72293c9a36c9ed2d3f3f364c9a560eac132"
+}

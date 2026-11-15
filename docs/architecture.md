@@ -492,8 +492,8 @@ products ───────────────────────�
 | is_system | BOOLEAN | |
 | storage | TEXT | `table`（系統資料表）/ `custom_records` |
 | table_name | TEXT | storage = table 時，對應的資料表 |
-| parent_entity_id | UUID FK → self | 明細子表所屬的主表 |
-| numbering_pattern | TEXT | 單號規則 |
+| parent_entity_id | UUID FK → self | 明細子表所屬的主表（`kind = detail` 時必填，其他為空）；必須是有效的自訂 `master` 或 `document`，不可是另一個明細子表；建立後不可更換 |
+| numbering_pattern | TEXT | 單號規則；明細子表不可設定 |
 | title_template | TEXT | 資料標題範本，例如 `{record_no} {name}`；規則見下方 |
 | sort_order | INTEGER | 選單排序 |
 | is_active | BOOLEAN | |
@@ -583,10 +583,23 @@ products ───────────────────────�
 | entity_id | UUID FK → entity_definitions | |
 | parent_record_id | UUID FK → self | 明細子表指向主表的資料 |
 | record_no | TEXT | 依單號規則產生（如果有設定），見 §8.4 `number_sequences` |
+| sort_order | INTEGER | 明細的順序（存檔時 request 陣列中的位置，從 0 開始）；主表的資料固定為 0 |
 | data | JSONB | 所有欄位的值，鍵為 field_key |
 | ＋共通欄位 | | |
 
-索引：`(entity_id)`、`(parent_record_id)`、`GIN(data)`、部分唯一索引 `(entity_id, record_no) WHERE record_no IS NOT NULL`（含已刪除的資料），以及第 7.5 節所述的動態索引。
+索引：`(entity_id)`、`(parent_record_id, entity_id, sort_order, id) WHERE parent_record_id IS NOT NULL`、`GIN(data)`、部分唯一索引 `(entity_id, record_no) WHERE record_no IS NOT NULL`（含已刪除的資料），以及第 7.5 節所述的動態索引。
+
+**明細子表**（`kind = detail`；邏輯在 `hammer_core::records`、`hammer_core::record_lines`，型別在 `hammer_shared::record`）：
+
+- 明細也存在 `custom_records`，`entity_id` 為明細子表、`parent_record_id` 為主表的資料；沒有單號。欄位定義沿用欄位 API。只支援一層明細。
+- 明細**只能透過主表存取**：`/api/v1/entities/{明細子表代碼}/records`（含 `lookup`）一律 `404`。
+- 順序：採用 `sort_order` 欄位（不沿用 id 順序），值為存檔時 request 陣列中的位置，讀取時依 `sort_order, id` 排序；修改時調整陣列順序即可重新排序。
+- 樂觀鎖定只看主表的 `version`（§9.4）。明細有任何變動（新增、修改、刪除、順序）時，主表的 `version` 也遞增；明細本身的 `version` 在每次被修改時遞增，但不用於檢查。
+- 刪除主表時，明細在同一個 transaction 內一起軟刪除；附件保留（與主表相同）。
+- 「不可重複」的明細欄位：同一個明細子表的所有明細（不分主表）不可重複。同一次存檔內的重複在寫入前檢查；與其他主表的明細重複由唯一索引擋下。
+- 操作紀錄：明細不另外寫紀錄，變動記在主表那筆紀錄的 diff，鍵為 `lines.<明細子表代碼>`（欄位代碼不能有 `.`，不會衝突），值為該明細子表所有明細依順序的 `[{ "id", "data" }]`；只有變動的明細子表會出現。
+- 已停用的明細子表：不出現在回應的 `lines`，request 帶到時視為不存在；刪除主表時其明細仍一起軟刪除。
+- Payload 格式見 §10「主表與明細」。
 
 ---
 
@@ -1024,6 +1037,21 @@ GROUP BY product_id;
   - `relation` 只支援 `eq`、`empty`，不能排序（§7.3）。
   - 欄位不存在或已停用、運算子不適用於該型態、值的格式錯誤 → `422 VALIDATION`，`details.field` 為參數名稱（例如 `filter.qty.gte`）。不認得的參數名稱忽略。
   - 單號：`sort` 與 `filter` 可使用 `record_no`（保留的代碼，不是欄位），依文字排序，篩選只支援 `eq`、`contains`（§8.4）。
+- 主表與明細（明細子表的規則見 §8.5 `custom_records`；型別在 `hammer_shared::record`）：
+  - 新增與修改的 payload 以 `lines` 帶明細，鍵為明細子表代碼：
+    ```json
+    { "version": 3, "data": { … }, "lines": { "parts": [ { "id": "…", "data": { "qty": 2 } }, { "data": { … } } ] } }
+    ```
+  - 新增：所有明細與主表一起建立；明細不可帶 `id`。
+  - 修改：有帶到的明細子表「整組取代」——有 `id` 的更新（`data` 只合併有帶到的欄位）、沒有 `id` 的新增、目前有但沒列出的軟刪除；沒帶到的明細子表不變。`id` 必須是這筆主表在該明細子表的未刪除明細，且不可重複出現。主表與明細都沒有變動時不寫入、`version` 不變。
+  - 主表與明細在同一個 transaction 內存檔，任一筆驗證失敗整筆不寫入（也不消耗單號）。
+  - 回應：單筆查詢與新增、修改的回應有 `lines`，包含主表所有有效的明細子表（沒有明細時為空陣列），每一列的格式與一般資料相同（`record_no`、`lines` 為 `null`），依順序排列；列表不回傳 `lines`。
+  - 錯誤：明細不合法時為 `422 VALIDATION`，`details` 為
+    ```json
+    { "fields": [ { "field_key", "message" } ],
+      "lines": [ { "detail_key": "parts", "index": 1, "field_key": "qty", "message": "必須是整數" } ] }
+    ```
+    `fields` 為主表的欄位錯誤（可能為空）；`index` 為該列在 request 陣列中的位置（從 0 開始），不屬於某一列（明細子表不存在）時為 `null`；`field_key` 不屬於某個欄位（`id` 不存在或重複）時為 `null`。只有主表錯誤時維持原本的 `{ "fields": [ … ] }`。
 
 ---
 
