@@ -3,7 +3,7 @@
 //! 前端不直接呼叫 HTTP API，一律經過這裡（`docs/architecture.md` §3.3）。
 //! 新增 command 後要加進 [`crate::specta_builder`]，並執行 `pnpm gen:bindings`。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hammer_shared::Id;
 use hammer_shared::attachment::Attachment;
@@ -452,7 +452,8 @@ pub async fn upload_attachment(
 
 /// 開啟另存新檔的對話框（預設檔名 `file_name`），下載附件並存到選擇的位置（需要 `record.read`）。
 ///
-/// 存檔成功回傳 `true`；使用者取消時回傳 `false`。
+/// 存檔成功回傳實際存檔的檔名（使用者可能在對話框改名；只回傳檔名，不含路徑）；使用者取消時回傳
+/// `None`。
 #[tauri::command]
 #[specta::specta]
 pub async fn download_attachment(
@@ -460,18 +461,25 @@ pub async fn download_attachment(
     state: State<'_, AppState>,
     id: Id,
     file_name: String,
-) -> Result<bool, ClientError> {
+) -> Result<Option<String>, ClientError> {
     let dialog = window
         .dialog()
         .file()
         .set_parent(&window)
         .set_title("儲存附件")
-        .set_file_name(file_name);
+        .set_file_name(&file_name);
     let Some(dest) = run_dialog(dialog, FileDialogBuilder::blocking_save_file).await? else {
-        return Ok(false);
+        return Ok(None);
     };
     state.download_attachment(id, &dest).await?;
-    Ok(true)
+    Ok(Some(saved_file_name(&dest, file_name)))
+}
+
+/// 存檔路徑的檔名；路徑沒有檔名部分時（不應發生）改用預設檔名。
+fn saved_file_name(dest: &Path, fallback: String) -> String {
+    dest.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or(fallback)
 }
 
 /// 在背景執行緒開啟檔案對話框（blocking 版本不可在主執行緒或 async 執行緒上等待），回傳選擇的路徑。
@@ -488,4 +496,26 @@ async fn run_dialog(
                 .map_err(|err| ClientError::storage(format!("無法使用選擇的檔案位置：{err}")))
         })
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_file_name_uses_chosen_name() {
+        let dest = Path::new("/tmp/附件/維修報告_下載.txt");
+        assert_eq!(
+            saved_file_name(dest, "維修報告.txt".into()),
+            "維修報告_下載.txt"
+        );
+    }
+
+    #[test]
+    fn saved_file_name_falls_back_without_file_name() {
+        assert_eq!(
+            saved_file_name(Path::new("/"), "維修報告.txt".into()),
+            "維修報告.txt"
+        );
+    }
 }

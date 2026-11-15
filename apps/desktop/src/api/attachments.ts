@@ -22,9 +22,9 @@ export function uploadAttachment(
 /**
  * 開啟另存新檔的對話框（預設檔名 `fileName`），下載附件存到選擇的位置（需要 `record.read`）。
  *
- * 存檔成功回傳 `true`；使用者取消時回傳 `false`。
+ * 存檔成功回傳實際存檔的檔名（使用者可能在對話框改名；不含路徑）；使用者取消時回傳 `null`。
  */
-export function downloadAttachment(id: string, fileName: string): Promise<boolean> {
+export function downloadAttachment(id: string, fileName: string): Promise<string | null> {
   return unwrap(commands.downloadAttachment(id, fileName));
 }
 

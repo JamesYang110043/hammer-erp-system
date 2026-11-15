@@ -112,9 +112,10 @@ export const commands = {
 	/**
 	 *  開啟另存新檔的對話框（預設檔名 `file_name`），下載附件並存到選擇的位置（需要 `record.read`）。
 	 * 
-	 *  存檔成功回傳 `true`；使用者取消時回傳 `false`。
+	 *  存檔成功回傳實際存檔的檔名（使用者可能在對話框改名；只回傳檔名，不含路徑）；使用者取消時回傳
+	 *  `None`。
 	 */
-	downloadAttachment: (id: string, fileName: string) => typedError<boolean, ClientError_Serialize>(__TAURI_INVOKE("download_attachment", { id, fileName })),
+	downloadAttachment: (id: string, fileName: string) => typedError<string | null, ClientError_Serialize>(__TAURI_INVOKE("download_attachment", { id, fileName })),
 };
 
 /* Constants */

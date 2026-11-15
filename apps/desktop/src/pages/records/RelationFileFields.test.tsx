@@ -254,7 +254,8 @@ describe('附件欄位', () => {
   it('viewer_can_download_but_not_upload', async () => {
     const invoke = renderAt(
       '#/entities/repair/' + RECORD_ID,
-      { download_attachment: () => true },
+      // 使用者在另存新檔對話框改了檔名
+      { download_attachment: () => '維修報告_下載.pdf' },
       VIEWER,
     );
     const user = userEvent.setup();
@@ -272,7 +273,8 @@ describe('附件欄位', () => {
         fileName: '維修報告.pdf',
       }),
     );
-    expect(await screen.findByText('已儲存「維修報告.pdf」')).toBeInTheDocument();
+    // 成功訊息顯示實際存檔的檔名，不是附件原始檔名
+    expect(await screen.findByText('已儲存「維修報告_下載.pdf」')).toBeInTheDocument();
   });
 });
 
@@ -313,7 +315,7 @@ describe('列表', () => {
   }
 
   it('shows_relation_title_and_downloadable_file_name', async () => {
-    const invoke = renderList({ download_attachment: () => false });
+    const invoke = renderList({ download_attachment: () => null });
     const user = userEvent.setup();
     const row = await firstRow();
 
@@ -335,6 +337,8 @@ describe('列表', () => {
       }),
     );
     expect(window.location.hash).toBe('#/entities/repair');
+    // 取消另存新檔時不顯示成功訊息
+    expect(screen.queryByText(/已儲存/)).not.toBeInTheDocument();
   });
 
   it('filters_relation_by_record_and_file_by_empty', async () => {

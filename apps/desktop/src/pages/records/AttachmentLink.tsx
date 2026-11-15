@@ -22,8 +22,9 @@ export function AttachmentLink({
   const download = async () => {
     setDownloading(true);
     try {
-      if (await downloadAttachment(attachment.id, attachment.file_name)) {
-        message.success(`已儲存「${attachment.file_name}」`);
+      const savedName = await downloadAttachment(attachment.id, attachment.file_name);
+      if (savedName !== null) {
+        message.success(`已儲存「${savedName}」`);
       }
     } catch (err) {
       message.error(`下載失敗：${errorMessage(err)}`);
