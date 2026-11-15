@@ -4,6 +4,7 @@
 
 use crate::record_data::FieldError;
 use crate::record_lines::LineError;
+use crate::schema::RelationReference;
 use crate::schema::index::DuplicateValue;
 use crate::schema::type_change::ConversionFailure;
 use hammer_db::DbError;
@@ -75,6 +76,12 @@ pub enum CoreError {
         total: usize,
     },
 
+    /// 刪除資料類別時，其他有效資料類別的有效 `relation` 欄位還指向它（§8.5）。
+    /// API 回應為 `VALIDATION`，`details` 為
+    /// `{ "field": "relation_entity_id", "fields": [{ "entity_key", "entity_label", "field_key", "field_label" }] }`。
+    #[error("此資料類別還有 {} 個關聯欄位引用，請先停用或刪除這些欄位", .0.len())]
+    EntityReferenced(Vec<RelationReference>),
+
     /// 操作後系統沒有任何有效（啟用、未刪除）的管理者（§6.2）。
     /// API 回應為 `VALIDATION`，`details.reason` 為 [`LAST_ADMIN_REASON`]。
     #[error("系統至少需要保留一個有效的管理者，無法停用、刪除最後一個管理者或變更其角色")]
@@ -135,6 +142,7 @@ impl CoreError {
             | Self::InvalidLines { .. }
             | Self::ConversionFailed { .. }
             | Self::DuplicateValues { .. }
+            | Self::EntityReferenced(_)
             | Self::LastAdmin => ErrorCode::Validation,
             Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::PayloadTooLarge(_) => ErrorCode::PayloadTooLarge,
@@ -231,6 +239,22 @@ impl From<CoreError> for ApiError {
                 "total": total,
                 "values": values,
             }))
+        } else if let CoreError::EntityReferenced(refs) = &err {
+            let fields: Vec<_> = refs
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "entity_key": r.entity_key,
+                        "entity_label": r.entity_label,
+                        "field_key": r.field_key,
+                        "field_label": r.field_label,
+                    })
+                })
+                .collect();
+            ApiError::new(code, err.to_string()).with_details(serde_json::json!({
+                "field": "relation_entity_id",
+                "fields": fields,
+            }))
         } else if let CoreError::LastAdmin = err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "reason": LAST_ADMIN_REASON }))
@@ -289,6 +313,34 @@ mod tests {
                 { "field_key": "name", "message": "此欄位為必填" },
                 { "field_key": "qty", "message": "不可小於 1" },
             ] }))
+        );
+    }
+
+    #[test]
+    fn entity_referenced_lists_fields_in_details() {
+        let err = CoreError::EntityReferenced(vec![RelationReference {
+            entity_key: "repair_order".into(),
+            entity_label: "維修單".into(),
+            field_key: "customer".into(),
+            field_label: "客戶".into(),
+        }]);
+        assert_eq!(err.code(), ErrorCode::Validation);
+        let api: ApiError = err.into();
+        assert_eq!(
+            api.message,
+            "此資料類別還有 1 個關聯欄位引用，請先停用或刪除這些欄位"
+        );
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({
+                "field": "relation_entity_id",
+                "fields": [{
+                    "entity_key": "repair_order",
+                    "entity_label": "維修單",
+                    "field_key": "customer",
+                    "field_label": "客戶",
+                }],
+            }))
         );
     }
 

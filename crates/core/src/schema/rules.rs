@@ -6,6 +6,8 @@
 //! - [`validate_relation_target`]：`relation` 欄位的目標資料類別
 //! - [`validate_parent_entity`]：明細子表的主表
 //! - [`plan_reorder`]：調整欄位排序
+//! - [`plan_reorder_entities`]：調整資料類別的選單排序
+//! - [`validate_delete_entity`]：刪除資料類別
 //! - [`plan_change_type`]：變更欄位資料型態的新定義（§7.4；資料的轉換在 [`super::type_change`]）
 //!
 //! 錯誤都是 [`CoreError::InvalidField`]，`field` 為 request 的欄位名稱（[`field`]）。
@@ -15,8 +17,8 @@ use std::collections::{HashMap, HashSet};
 use hammer_shared::record::RECORD_NO;
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DataType, EntityDefinition,
-    EntityKind, EntityStorage, FieldDefinition, FieldOrderItem, FieldStorage, UpdateEntityRequest,
-    UpdateFieldRequest, validate_key,
+    EntityKind, EntityOrderItem, EntityStorage, FieldDefinition, FieldOrderItem, FieldStorage,
+    UpdateEntityRequest, UpdateFieldRequest, validate_key,
 };
 use hammer_shared::{Id, new_id};
 use serde_json::Value;
@@ -38,6 +40,8 @@ pub mod field {
     pub const NUMBERING_PATTERN: &str = "numbering_pattern";
     pub const TITLE_TEMPLATE: &str = "title_template";
     pub const IS_ACTIVE: &str = "is_active";
+    pub const IS_SYSTEM: &str = "is_system";
+    pub const ENTITIES: &str = "entities";
     pub const FIELD_KEY: &str = "field_key";
     pub const DATA_TYPE: &str = "data_type";
     pub const IS_REQUIRED: &str = "is_required";
@@ -72,8 +76,8 @@ pub struct NewEntityPlan {
     pub sort_order: i32,
 }
 
-/// 檢查新增資料類別的輸入。目前允許 `kind = master` 與 `detail`（`document` 在 #73 開放），
-/// 儲存方式固定為 `custom_records`。單號規則依 [`normalize_pattern`] 檢查；標題範本依
+/// 檢查新增資料類別的輸入。`kind` 可為 `master`、`document`（單據，行為與 `master` 相同）、
+/// `detail`，儲存方式固定為 `custom_records`。單號規則依 [`normalize_pattern`] 檢查；標題範本依
 /// [`normalize_template`] 檢查，新的資料類別還沒有欄位，只能引用 `{record_no}`。
 ///
 /// `parent` 為依 `req.parent_entity_id` 查到的未刪除資料類別（沒有指定或找不到時為 `None`）。
@@ -87,7 +91,7 @@ pub fn plan_create_entity(
     let label = validate_label(&req.label)?;
     let numbering_pattern = validate_numbering_pattern(req.numbering_pattern.as_deref())?;
     let parent_entity_id = match req.kind {
-        EntityKind::Master => {
+        EntityKind::Master | EntityKind::Document => {
             if req.parent_entity_id.is_some() {
                 return Err(invalid(
                     field::PARENT_ENTITY_ID,
@@ -108,12 +112,6 @@ pub fn plan_create_entity(
                 ));
             }
             Some(parent.id)
-        }
-        EntityKind::Document => {
-            return Err(invalid(
-                field::KIND,
-                "目前只能建立主檔（master）或明細子表（detail）類型的資料類別",
-            ));
         }
     };
     Ok(NewEntityPlan {
@@ -594,6 +592,64 @@ impl ReorderStep {
     }
 }
 
+/// 檢查調整資料類別排序的輸入，回傳每個資料類別的新排序與輸入的版本號（依輸入的順序）。
+///
+/// `find` 依代碼查詢未刪除的資料類別。代碼找不到或重複出現 → 錯誤（`entities`）。
+/// 只需列出要調整的資料類別。
+pub fn plan_reorder_entities<'a>(
+    items: &[EntityOrderItem],
+    find: impl Fn(&str) -> Option<&'a EntityDefinition>,
+) -> Result<Vec<EntityReorderStep>, CoreError> {
+    let mut seen = HashSet::new();
+    items
+        .iter()
+        .map(|item| {
+            let entity = find(&item.key).ok_or_else(|| {
+                invalid(field::ENTITIES, &format!("找不到資料類別「{}」", item.key))
+            })?;
+            if !seen.insert(item.key.as_str()) {
+                return Err(invalid(
+                    field::ENTITIES,
+                    &format!("資料類別「{}」重複", item.key),
+                ));
+            }
+            Ok(EntityReorderStep {
+                entity: entity.clone(),
+                version: item.version,
+                sort_order: item.sort_order,
+            })
+        })
+        .collect()
+}
+
+/// 調整排序時一個資料類別的變更。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntityReorderStep {
+    /// 目前的定義。
+    pub entity: EntityDefinition,
+    /// 輸入的版本號。
+    pub version: i32,
+    /// 新的排序。
+    pub sort_order: i32,
+}
+
+impl EntityReorderStep {
+    /// 排序是否改變。
+    pub fn changes(&self) -> bool {
+        self.entity.sort_order != self.sort_order
+    }
+}
+
+/// 檢查資料類別是否可以刪除：系統資料類別不可刪除（`is_system`）。
+///
+/// 被關聯欄位引用的檢查需要查詢資料庫，在 [`super::delete_entity`]。
+pub fn validate_delete_entity(entity: &EntityDefinition) -> Result<(), CoreError> {
+    if entity.is_system || entity.storage != EntityStorage::CustomRecords {
+        return Err(invalid(field::IS_SYSTEM, "系統資料類別不可刪除"));
+    }
+    Ok(())
+}
+
 fn validate_label(label: &str) -> Result<String, CoreError> {
     let label = label.trim();
     if label.is_empty() {
@@ -807,11 +863,13 @@ mod tests {
                 field::LABEL,
             ),
             (
+                // 單據不可指定主表
                 CreateEntityRequest {
                     kind: EntityKind::Document,
+                    parent_entity_id: Some(new_id()),
                     ..base.clone()
                 },
-                field::KIND,
+                field::PARENT_ENTITY_ID,
             ),
             (
                 // 明細子表必須指定主表
@@ -865,6 +923,105 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn create_document_entity_with_numbering_pattern() {
+        let plan = plan_create_entity(
+            &CreateEntityRequest {
+                key: "repair_order".into(),
+                label: "維修單".into(),
+                icon: Some("tool".into()),
+                kind: EntityKind::Document,
+                parent_entity_id: None,
+                numbering_pattern: Some("RO{yyyyMM}-{000}".into()),
+                title_template: None,
+                sort_order: 2,
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(plan.kind, EntityKind::Document);
+        assert_eq!(plan.parent_entity_id, None);
+        assert_eq!(plan.numbering_pattern.as_deref(), Some("RO{yyyyMM}-{000}"));
+        assert_eq!(plan.storage, EntityStorage::CustomRecords);
+    }
+
+    fn order_item(key: &str, version: i32, sort_order: i32) -> EntityOrderItem {
+        EntityOrderItem {
+            key: key.into(),
+            version,
+            sort_order,
+        }
+    }
+
+    #[test]
+    fn reorder_entities_plans_listed_entities() {
+        let a = EntityDefinition {
+            key: "a".into(),
+            sort_order: 1,
+            ..entity(false)
+        };
+        let b = EntityDefinition {
+            key: "b".into(),
+            sort_order: 2,
+            ..entity(true)
+        };
+        let all = [a.clone(), b.clone()];
+        let find = |key: &str| all.iter().find(|e| e.key == key);
+
+        // 只列出部分資料類別；系統資料類別也可以調整
+        let steps =
+            plan_reorder_entities(&[order_item("b", 3, 0), order_item("a", 3, 1)], find).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].entity.key, "b");
+        assert_eq!((steps[0].version, steps[0].sort_order), (3, 0));
+        assert!(steps[0].changes());
+        assert_eq!(steps[1].entity.key, "a");
+        assert!(!steps[1].changes());
+
+        assert!(plan_reorder_entities(&[], find).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reorder_entities_rejects_unknown_and_duplicate_keys() {
+        let all = [entity(false)];
+        let find = |key: &str| all.iter().find(|e| e.key == key);
+        for items in [
+            vec![order_item("missing", 1, 0)],
+            vec![
+                order_item("repair_order", 3, 0),
+                order_item("repair_order", 3, 1),
+            ],
+        ] {
+            assert_eq!(
+                field_of(&plan_reorder_entities(&items, find).unwrap_err()),
+                field::ENTITIES
+            );
+        }
+    }
+
+    #[test]
+    fn delete_entity_rules() {
+        assert!(validate_delete_entity(&entity(false)).is_ok());
+        let document = EntityDefinition {
+            kind: EntityKind::Document,
+            is_active: false,
+            ..entity(false)
+        };
+        assert!(validate_delete_entity(&document).is_ok());
+        assert_eq!(
+            field_of(&validate_delete_entity(&entity(true)).unwrap_err()),
+            field::IS_SYSTEM
+        );
+        let table = EntityDefinition {
+            storage: EntityStorage::Table,
+            ..entity(false)
+        };
+        assert_eq!(
+            field_of(&validate_delete_entity(&table).unwrap_err()),
+            field::IS_SYSTEM
+        );
     }
 
     fn detail_req(parent_id: Id) -> CreateEntityRequest {

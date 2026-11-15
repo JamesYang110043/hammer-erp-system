@@ -102,9 +102,20 @@ fn protected_routes() -> Router<AppState> {
         .route("/users/{id}/unlock", post(users::unlock))
         .route("/audit-logs", get(audit_logs::list))
         .route("/entities", get(entities::list).post(entities::create))
+        // 固定路徑 `order` 優先於 `{key}`。`order` 也是合法的資料類別代碼，
+        // 所以同一路徑的 GET、PATCH、DELETE 轉給單一資料類別的端點
+        .route(
+            "/entities/order",
+            put(entities::reorder)
+                .get(entities::get_order_entity)
+                .patch(entities::update_order_entity)
+                .delete(entities::delete_order_entity),
+        )
         .route(
             "/entities/{key}",
-            get(entities::get).patch(entities::update),
+            get(entities::get)
+                .patch(entities::update)
+                .delete(entities::delete),
         )
         .route("/entities/{key}/fields", post(entities::create_field))
         // 固定路徑 `order` 優先於 `{field_key}`。`order` 也是合法的欄位代碼，

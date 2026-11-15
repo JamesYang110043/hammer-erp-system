@@ -4,13 +4,13 @@
 //! request / response 型別、端點清單與錯誤見 [`hammer_shared::schema`]。
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use hammer_core::schema;
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
-    EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateEntityRequest,
-    UpdateFieldRequest,
+    DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ReorderEntitiesRequest,
+    ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
 };
 use time::OffsetDateTime;
 
@@ -72,6 +72,77 @@ pub async fn update(
     )
     .await?;
     Ok(Json(detail))
+}
+
+/// `DELETE /api/v1/entities/{key}?version=N`
+pub async fn delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    Path(key): Path<String>,
+    Query(query): Query<DeleteEntityQuery>,
+) -> Result<StatusCode, AppError> {
+    let info = request_client_info(&headers);
+    schema::delete_entity(
+        &state.pool,
+        &auth,
+        &key,
+        query.version,
+        info.as_deref(),
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `PUT /api/v1/entities/order`
+pub async fn reorder(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    Json(req): Json<ReorderEntitiesRequest>,
+) -> Result<Json<Vec<EntityDefinition>>, AppError> {
+    let info = request_client_info(&headers);
+    let entities = schema::reorder_entities(
+        &state.pool,
+        &auth,
+        &req,
+        info.as_deref(),
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(Json(entities))
+}
+
+/// 資料類別代碼 `order` 與調整排序的固定路徑相同，路由轉給這些端點（見 `routes::protected_routes`）。
+const ORDER_KEY: &str = "order";
+
+/// `GET /api/v1/entities/order`：取得代碼為 `order` 的資料類別。
+pub async fn get_order_entity(
+    state: State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<EntityDetail>, AppError> {
+    get(state, auth, Path(ORDER_KEY.to_owned())).await
+}
+
+/// `PATCH /api/v1/entities/order`：修改代碼為 `order` 的資料類別。
+pub async fn update_order_entity(
+    state: State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    req: Json<UpdateEntityRequest>,
+) -> Result<Json<EntityDetail>, AppError> {
+    update(state, headers, auth, Path(ORDER_KEY.to_owned()), req).await
+}
+
+/// `DELETE /api/v1/entities/order?version=N`：刪除代碼為 `order` 的資料類別。
+pub async fn delete_order_entity(
+    state: State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    query: Query<DeleteEntityQuery>,
+) -> Result<StatusCode, AppError> {
+    delete(state, headers, auth, Path(ORDER_KEY.to_owned()), query).await
 }
 
 /// `POST /api/v1/entities/{key}/fields`

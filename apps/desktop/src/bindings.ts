@@ -422,14 +422,16 @@ export type CreateAdminRequest = {
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
- *  目前接受 `kind = master` 與 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
+ *  `kind` 可為 `master`（主檔）、`document`（單據，行為與 `master` 相同，可設定單號規則，
+ *  選單中分組顯示）或 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
  */
 export type CreateEntityRequest = CreateEntityRequest_Serialize | CreateEntityRequest_Deserialize;
 
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
- *  目前接受 `kind = master` 與 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
+ *  `kind` 可為 `master`（主檔）、`document`（單據，行為與 `master` 相同，可設定單號規則，
+ *  選單中分組顯示）或 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
  */
 export type CreateEntityRequest_Deserialize = {
 	/**  資料類別代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -462,7 +464,8 @@ export type CreateEntityRequest_Deserialize = {
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
- *  目前接受 `kind = master` 與 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
+ *  `kind` 可為 `master`（主檔）、`document`（單據，行為與 `master` 相同，可設定單號規則，
+ *  選單中分組顯示）或 `detail`（明細子表，見 [`crate::record`]「明細子表」）。
  */
 export type CreateEntityRequest_Serialize = {
 	/**  資料類別代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -1317,7 +1320,7 @@ export type UpdateEntityRequest_Deserialize = {
 	 */
 	title_template?: string | null,
 	sort_order: number,
-	/**  停用後不出現在選單；系統資料類別不可停用。 */
+	/**  停用後不出現在選單，資料 API 回傳 `404`；改回 `true` 即重新啟用。系統資料類別不可停用。 */
 	is_active: boolean,
 };
 
@@ -1341,7 +1344,7 @@ export type UpdateEntityRequest_Serialize = {
 	 */
 	title_template: string | null,
 	sort_order: number,
-	/**  停用後不出現在選單；系統資料類別不可停用。 */
+	/**  停用後不出現在選單，資料 API 回傳 `404`；改回 `true` 即重新啟用。系統資料類別不可停用。 */
 	is_active: boolean,
 };
 

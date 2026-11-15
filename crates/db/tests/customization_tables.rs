@@ -144,7 +144,7 @@ async fn enum_columns_reject_unknown_values(pool: PgPool) {
         "INSERT INTO schema_change_logs (id, target_type, target_id, action)
          VALUES ($1, 'view', $1, 'create')",
         "INSERT INTO schema_change_logs (id, target_type, target_id, action)
-         VALUES ($1, 'field', $1, 'delete')",
+         VALUES ($1, 'field', $1, 'purge')",
     ];
     for sql in cases {
         let err = sqlx::query(sql)
@@ -154,6 +154,15 @@ async fn enum_columns_reject_unknown_values(pool: PgPool) {
             .unwrap_err();
         assert_eq!(db_error(&err).0, "23514", "{sql}");
     }
+    // 資料類別的軟刪除（#73）
+    sqlx::query(
+        "INSERT INTO schema_change_logs (id, target_type, target_id, action)
+         VALUES ($1, 'entity', $1, 'delete')",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await
+    .unwrap();
 }
 
 #[sqlx::test(migrator = "hammer_db::MIGRATOR")]

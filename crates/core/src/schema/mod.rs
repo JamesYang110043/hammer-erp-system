@@ -1,8 +1,9 @@
 //! 資料類別與欄位定義的管理（docs/architecture.md §6.1、§7.1、§7.2、§8.5、§9.4）。
 //!
 //! - 查詢（需要登入，不需特定權限）：[`list_entities`]、[`get_entity`]
-//! - 寫入（需要 `schema.manage`）：[`create_entity`]、[`update_entity`]、[`create_field`]、
-//!   [`update_field`]、[`deactivate_field`]、[`reorder_fields`]、[`change_field_type`]
+//! - 寫入（需要 `schema.manage`）：[`create_entity`]、[`update_entity`]、[`reorder_entities`]、
+//!   [`delete_entity`]、[`create_field`]、[`update_field`]、[`deactivate_field`]、[`reorder_fields`]、
+//!   [`change_field_type`]
 //!
 //! 寫入都在單一 transaction 內完成：先鎖定資料類別（`FOR UPDATE`），讓同一個資料類別的
 //! 欄位變更依序進行；檢查 `version`（§9.4）；每個有變動的定義寫入一筆 `schema_change_logs`
@@ -28,8 +29,8 @@ use hammer_db::{DbError, ensure_version_matched};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DataType, EntityDefinition,
     EntityDetail, EntityKind, EntityStorage, FieldDefinition, FieldStorage,
-    MAX_CONVERSION_FAILURES, MAX_DUPLICATE_VALUES, ReorderFieldsRequest, UpdateEntityRequest,
-    UpdateFieldRequest,
+    MAX_CONVERSION_FAILURES, MAX_DUPLICATE_VALUES, ReorderEntitiesRequest, ReorderFieldsRequest,
+    UpdateEntityRequest, UpdateFieldRequest,
 };
 use hammer_shared::{Id, audit as action, new_id, permission};
 use serde::Serialize;
@@ -86,6 +87,8 @@ pub enum ChangeAction {
     Create,
     Update,
     Deactivate,
+    /// 軟刪除（目前只有資料類別）。
+    Delete,
 }
 
 impl ChangeAction {
@@ -94,6 +97,7 @@ impl ChangeAction {
             Self::Create => "create",
             Self::Update => "update",
             Self::Deactivate => "deactivate",
+            Self::Delete => "delete",
         }
     }
 
@@ -102,6 +106,7 @@ impl ChangeAction {
         match self {
             Self::Create => action::CREATE,
             Self::Update | Self::Deactivate => action::UPDATE,
+            Self::Delete => action::DELETE,
         }
     }
 
@@ -113,6 +118,15 @@ impl ChangeAction {
             Self::Update
         }
     }
+}
+
+/// 刪除資料類別時，引用它的關聯欄位（[`CoreError::EntityReferenced`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationReference {
+    pub entity_key: String,
+    pub entity_label: String,
+    pub field_key: String,
+    pub field_label: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +308,7 @@ pub async fn get_entity(
 // 資料類別
 // ---------------------------------------------------------------------------
 
-/// 建立自訂資料類別（`kind = master` 或 `detail`、`storage = custom_records`）。
+/// 建立自訂資料類別（`kind = master`、`document` 或 `detail`，`storage = custom_records`）。
 ///
 /// 明細子表（`detail`）必須指定主表（[`rules::validate_parent_entity`]），且不可設定單號規則；
 /// 不符合 → [`CoreError::InvalidField`]（`parent_entity_id`、`numbering_pattern`）。
@@ -434,6 +448,173 @@ pub async fn update_entity(
     Ok(EntityDetail { entity, fields })
 }
 
+/// 一次調整多個資料類別的選單排序（[`rules::plan_reorder_entities`]）。
+///
+/// - 代碼不存在（含已刪除）或重複 → [`CoreError::InvalidField`]（`entities`）
+/// - 任一個的 `version` 不符 → `Conflict`，整批不寫入
+/// - 只有排序改變的資料類別會更新與留紀錄（`update`）
+///
+/// 回傳有效的資料類別（同 [`list_entities`]），依新的排序。
+pub async fn reorder_entities(
+    pool: &PgPool,
+    ctx: &AuthContext,
+    req: &ReorderEntitiesRequest,
+    client_info: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<Vec<EntityDefinition>, CoreError> {
+    ctx.require(permission::SCHEMA_MANAGE)?;
+
+    let mut tx = pool.begin().await.map_err(DbError::from)?;
+    let keys: Vec<String> = req.entities.iter().map(|e| e.key.clone()).collect();
+    // 依 id 順序鎖定，避免與其他批次排序互相等待
+    let current = db::list_entities_by_keys_for_update(&mut *tx, &keys)
+        .await?
+        .into_iter()
+        .map(entity_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    let steps =
+        rules::plan_reorder_entities(&req.entities, |key| current.iter().find(|e| e.key == key))?;
+    for step in &steps {
+        ensure_version(step.entity.version, step.version)?;
+    }
+    for step in steps.iter().filter(|s| s.changes()) {
+        ensure_version_matched(
+            db::update_entity_sort_order(
+                &mut *tx,
+                step.entity.id,
+                step.version,
+                step.sort_order,
+                ctx.user_id,
+            )
+            .await?,
+        )?;
+        let next = EntityDefinition {
+            sort_order: step.sort_order,
+            ..step.entity.clone()
+        };
+        log_change(
+            &mut tx,
+            ctx,
+            ChangeTarget::Entity,
+            step.entity.id,
+            ChangeAction::Update,
+            Some(&snapshot(&step.entity)?),
+            Some(&snapshot(&next)?),
+            client_info,
+            now,
+        )
+        .await?;
+    }
+    let entities = db::list_active_entities(&mut *tx)
+        .await?
+        .into_iter()
+        .map(entity_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    commit(tx).await?;
+
+    tracing::info!(actor = %ctx.user_id, count = steps.len(), "已調整資料類別排序");
+    Ok(entities)
+}
+
+/// 刪除自訂資料類別（軟刪除，§7.1）。
+///
+/// 在同一個 transaction 內：
+///
+/// 1. 鎖定資料類別與它的明細子表（`FOR UPDATE`）。寫入資料時以 `FOR SHARE` 鎖定資料類別，
+///    所以會等進行中的寫入完成；新增關聯欄位時也以 `FOR SHARE` 鎖定目標資料類別
+/// 2. 檢查 `version`；系統資料類別不可刪除（[`rules::validate_delete_entity`]）
+/// 3. 其他有效資料類別的有效 `relation` 欄位指向它（或它的明細子表）→
+///    [`CoreError::EntityReferenced`]，列出這些欄位
+/// 4. 移除它與明細子表所有欄位的動態索引（§7.5），軟刪除它與明細子表，各寫入一筆
+///    `schema_change_logs`（`delete`）與 `audit_logs`
+///
+/// 資料（`custom_records`）與欄位定義保留，但資料類別刪除後一律視為不存在（資料 API 回傳 `404`）。
+/// 代碼的 UNIQUE 限制包含已刪除的資料類別，所以代碼不能再用於建立資料類別。
+///
+/// 錯誤：不存在或已刪除 → [`CoreError::NotFound`]；`version` 不符 → `Conflict`；
+/// 系統資料類別 → [`CoreError::InvalidField`]（`is_system`）。
+pub async fn delete_entity(
+    pool: &PgPool,
+    ctx: &AuthContext,
+    key: &str,
+    version: i32,
+    client_info: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<(), CoreError> {
+    ctx.require(permission::SCHEMA_MANAGE)?;
+
+    let mut tx = pool.begin().await.map_err(DbError::from)?;
+    let entity = lock_entity(&mut tx, key).await?;
+    ensure_version(entity.version, version)?;
+    rules::validate_delete_entity(&entity)?;
+    let details = if entity.kind == EntityKind::Detail {
+        Vec::new()
+    } else {
+        db::list_detail_entities_for_update(&mut *tx, entity.id)
+            .await?
+            .into_iter()
+            .map(entity_from_row)
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let targets: Vec<Id> = std::iter::once(entity.id)
+        .chain(details.iter().map(|d| d.id))
+        .collect();
+    let references = db::list_relation_references(&mut *tx, &targets).await?;
+    if !references.is_empty() {
+        return Err(CoreError::EntityReferenced(
+            references
+                .into_iter()
+                .map(|r| RelationReference {
+                    entity_key: r.entity_key,
+                    entity_label: r.entity_label,
+                    field_key: r.field_key,
+                    field_label: r.field_label,
+                })
+                .collect(),
+        ));
+    }
+
+    for target in std::iter::once(&entity).chain(&details) {
+        drop_entity_indexes(&mut tx, target).await?;
+        ensure_version_matched(
+            db::soft_delete_entity(&mut *tx, target.id, target.version, now, ctx.user_id).await?,
+        )?;
+        log_change(
+            &mut tx,
+            ctx,
+            ChangeTarget::Entity,
+            target.id,
+            ChangeAction::Delete,
+            Some(&snapshot(target)?),
+            None,
+            client_info,
+            now,
+        )
+        .await?;
+        tracing::info!(actor = %ctx.user_id, entity = %target.key, "已刪除資料類別");
+    }
+    commit(tx).await?;
+    Ok(())
+}
+
+/// 移除資料類別所有欄位（含已停用）的動態索引（§7.5）。索引不存在時不動作。
+async fn drop_entity_indexes(
+    tx: &mut PgTransaction<'_>,
+    entity: &EntityDefinition,
+) -> Result<(), CoreError> {
+    if entity.storage != EntityStorage::CustomRecords {
+        return Ok(());
+    }
+    for f in load_fields(tx, entity.id).await? {
+        for kind in [IndexKind::Searchable, IndexKind::Unique] {
+            let name = index::index_name(kind, &entity.key, &f.field_key)?;
+            dynamic_index::drop_index(&mut **tx, &name).await?;
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // 欄位
 // ---------------------------------------------------------------------------
@@ -460,8 +641,9 @@ pub async fn create_field(
     let entity = lock_entity(&mut tx, entity_key).await?;
     let def = rules::plan_create_field(entity.id, req, now)?;
     if let Some(target_id) = def.relation_entity_id {
+        // 以 FOR SHARE 鎖定目標，避免檢查後被刪除（[`delete_entity`]）；
         // 目標是自己時，上面已以 FOR UPDATE 鎖定
-        let target = match db::find_entity_by_id(&mut *tx, target_id).await? {
+        let target = match db::find_entity_by_id_for_share(&mut *tx, target_id).await? {
             Some(row) => Some(entity_from_row(row)?),
             None => None,
         };
@@ -1157,10 +1339,13 @@ mod tests {
         assert_eq!(ChangeAction::for_update(false, true), ChangeAction::Update);
         assert_eq!(ChangeAction::Deactivate.audit_action(), action::UPDATE);
         assert_eq!(ChangeAction::Create.audit_action(), action::CREATE);
+        assert_eq!(ChangeAction::Delete.as_str(), "delete");
+        assert_eq!(ChangeAction::Delete.audit_action(), action::DELETE);
         for a in [
             ChangeAction::Create,
             ChangeAction::Update,
             ChangeAction::Deactivate,
+            ChangeAction::Delete,
         ] {
             assert!(action::is_valid(a.audit_action()));
         }
