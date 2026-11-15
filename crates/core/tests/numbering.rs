@@ -60,6 +60,7 @@ async fn setup(pool: &PgPool, pattern: Option<&str>) -> AuthContext {
             label: "維修單".into(),
             icon: None,
             kind: EntityKind::Master,
+            parent_entity_id: None,
             numbering_pattern: pattern.map(str::to_owned),
             title_template: None,
             sort_order: 0,
@@ -87,6 +88,7 @@ async fn create_at(
 ) -> Result<Record, CoreError> {
     let req = CreateRecordRequest {
         data: json!({ "code": code }).as_object().unwrap().clone(),
+        lines: Default::default(),
     };
     records::create_record(pool, ctx, ENTITY, &req, None, now).await
 }
@@ -269,6 +271,7 @@ async fn entities_have_independent_sequences(pool: PgPool) {
             label: "其他".into(),
             icon: None,
             kind: EntityKind::Master,
+            parent_entity_id: None,
             numbering_pattern: Some("RO-{000}".into()),
             title_template: None,
             sort_order: 0,

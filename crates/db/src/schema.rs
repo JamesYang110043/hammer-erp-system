@@ -1,7 +1,8 @@
 //! 客製化模組的資料類別與欄位定義存取（docs/architecture.md §7、§8.5）。
 //!
 //! - `entity_definitions`：[`list_active_entities`]、[`find_entity_by_key`]、[`find_entity_by_id`]、
-//!   [`find_entity_by_key_for_update`]、[`insert_entity`]、[`update_entity`]
+//!   [`find_entity_by_key_for_update`]、[`find_entity_by_id_for_share`]、[`list_detail_entities`]、[`list_detail_entities_for_share`]、
+//!   [`insert_entity`]、[`update_entity`]
 //! - `field_definitions`：[`list_fields`]、[`list_fields_for_update`]、[`find_field`]、
 //!   [`find_field_for_update`]、[`insert_field`]、[`update_field`]、[`update_field_sort_order`]
 //! - `schema_change_logs`：[`insert_schema_change_log`]
@@ -157,6 +158,74 @@ pub async fn find_entity_by_key_for_share<'e>(
     Ok(row)
 }
 
+/// 同 [`find_entity_by_id`]，並以 `FOR SHARE` 鎖定該列。必須在 transaction 內呼叫。
+pub async fn find_entity_by_id_for_share<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<EntityRow>, DbError> {
+    let row = sqlx::query_as!(
+        EntityRow,
+        r#"
+        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,
+               numbering_pattern, title_template, sort_order, is_active,
+               created_at, updated_at, version
+        FROM entity_definitions
+        WHERE id = $1 AND deleted_at IS NULL
+        FOR SHARE
+        "#,
+        id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 列出主表 `parent_entity_id` 的明細子表（未刪除，含已停用），依 `sort_order`、`id` 排序，
+/// 並以 `FOR SHARE` 鎖定這些列（等待進行中的欄位定義變更完成）。必須在 transaction 內呼叫。
+pub async fn list_detail_entities_for_share<'e>(
+    executor: impl PgExecutor<'e>,
+    parent_entity_id: Uuid,
+) -> Result<Vec<EntityRow>, DbError> {
+    let rows = sqlx::query_as!(
+        EntityRow,
+        r#"
+        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,
+               numbering_pattern, title_template, sort_order, is_active,
+               created_at, updated_at, version
+        FROM entity_definitions
+        WHERE parent_entity_id = $1 AND kind = 'detail' AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        FOR SHARE
+        "#,
+        parent_entity_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 列出主表 `parent_entity_id` 的明細子表（未刪除，含已停用），依 `sort_order`、`id` 排序。
+pub async fn list_detail_entities<'e>(
+    executor: impl PgExecutor<'e>,
+    parent_entity_id: Uuid,
+) -> Result<Vec<EntityRow>, DbError> {
+    let rows = sqlx::query_as!(
+        EntityRow,
+        r#"
+        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,
+               numbering_pattern, title_template, sort_order, is_active,
+               created_at, updated_at, version
+        FROM entity_definitions
+        WHERE parent_entity_id = $1 AND kind = 'detail' AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        "#,
+        parent_entity_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
 /// 新增資料類別所需的資料。
 #[derive(Debug, Clone)]
 pub struct NewEntity<'a> {
@@ -166,6 +235,8 @@ pub struct NewEntity<'a> {
     pub icon: Option<&'a str>,
     pub kind: &'a str,
     pub storage: &'a str,
+    /// 明細子表所屬的主表；`kind = detail` 時必須有值，其他為 `None`。
+    pub parent_entity_id: Option<Uuid>,
     pub numbering_pattern: Option<&'a str>,
     pub title_template: Option<&'a str>,
     pub sort_order: i32,
@@ -183,9 +254,9 @@ pub async fn insert_entity<'e>(
     sqlx::query!(
         r#"
         INSERT INTO entity_definitions
-            (id, key, label, icon, kind, is_system, storage, numbering_pattern, title_template,
-             sort_order, created_at, created_by, updated_at, updated_by)
-        VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, $10, $11, $10, $11)
+            (id, key, label, icon, kind, is_system, storage, parent_entity_id, numbering_pattern,
+             title_template, sort_order, created_at, created_by, updated_at, updated_by)
+        VALUES ($1, $2, $3, $4, $5, false, $6, $12, $7, $8, $9, $10, $11, $10, $11)
         "#,
         new.id,
         new.key,
@@ -198,6 +269,7 @@ pub async fn insert_entity<'e>(
         new.sort_order,
         new.created_at,
         new.created_by,
+        new.parent_entity_id,
     )
     .execute(executor)
     .await?;

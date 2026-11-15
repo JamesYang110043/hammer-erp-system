@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS (\n            SELECT 1 FROM custom_records\n            WHERE entity_id = $1 AND parent_record_id IS DISTINCT FROM $2 AND deleted_at IS NULL\n              AND data -> $3 = $4\n        ) AS \"taken!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "taken!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "127ab1ca1d75975e6e4db7adda300b7d0cbbd94317d1158bb63da1dc5e5b2a67"
+}

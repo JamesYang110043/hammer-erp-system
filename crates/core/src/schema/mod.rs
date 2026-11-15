@@ -294,7 +294,10 @@ pub async fn get_entity(
 // 資料類別
 // ---------------------------------------------------------------------------
 
-/// 建立自訂資料類別（`kind = master`、`storage = custom_records`）。
+/// 建立自訂資料類別（`kind = master` 或 `detail`、`storage = custom_records`）。
+///
+/// 明細子表（`detail`）必須指定主表（[`rules::validate_parent_entity`]），且不可設定單號規則；
+/// 不符合 → [`CoreError::InvalidField`]（`parent_entity_id`、`numbering_pattern`）。
 ///
 /// 代碼與既有資料類別（含已刪除）重複 → [`CoreError::InvalidField`]（`key`）。
 pub async fn create_entity(
@@ -305,9 +308,19 @@ pub async fn create_entity(
     now: OffsetDateTime,
 ) -> Result<EntityDetail, CoreError> {
     ctx.require(permission::SCHEMA_MANAGE)?;
-    let plan = rules::plan_create_entity(req)?;
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
+    // 明細子表的主表：以 FOR SHARE 鎖定，避免建立期間被停用或刪除
+    let parent = match (req.kind, req.parent_entity_id) {
+        (EntityKind::Detail, Some(parent_id)) => {
+            db::find_entity_by_id_for_share(&mut *tx, parent_id)
+                .await?
+                .map(entity_from_row)
+                .transpose()?
+        }
+        _ => None,
+    };
+    let plan = rules::plan_create_entity(req, parent.as_ref())?;
     let id = new_id();
     db::insert_entity(
         &mut *tx,
@@ -318,6 +331,7 @@ pub async fn create_entity(
             icon: plan.icon.as_deref(),
             kind: plan.kind.as_str(),
             storage: plan.storage.as_str(),
+            parent_entity_id: plan.parent_entity_id,
             numbering_pattern: plan.numbering_pattern.as_deref(),
             title_template: plan.title_template.as_deref(),
             sort_order: plan.sort_order,

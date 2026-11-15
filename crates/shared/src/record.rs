@@ -48,11 +48,36 @@
 //! - 篩選只支援 `eq`（值為資料 id）與 `empty`；不能排序
 //! - 選擇器：`GET /api/v1/entities/{key}/records/lookup` 搜尋 `{key}` 的資料，見 [`LookupQuery`]
 //!
+//! # 明細子表（`lines`）
+//!
+//! 明細子表是 `kind = detail` 的資料類別（例如維修單的「更換零件」），屬於一個主表
+//! （`parent_entity_id`，`master` 或 `document`）。明細的資料只能透過主表存取：
+//! `/api/v1/entities/{明細子表代碼}/records`（含 `lookup`）一律回傳 `404 NOT_FOUND`。
+//!
+//! - 新增、修改的 request 以 `lines: { "<明細子表代碼>": [ { "id"?, "data": { … } } ] }` 帶明細
+//!   （[`LineInput`]）
+//!   - 新增：所有明細與主表一起建立；明細不可帶 `id`
+//!   - 修改：有帶到的明細子表「整組取代」——有 `id` 的更新（`data` 只合併有帶到的欄位）、沒有 `id`
+//!     的新增、目前有但沒列出的刪除（軟刪除）；沒帶到的明細子表不變。`id` 必須是這筆主表在該明細子表
+//!     的未刪除明細，同一個 `id` 不可出現兩次
+//! - 明細的順序為陣列中的位置（`sort_order`，從 0 開始）；修改時調整陣列順序即可重新排序
+//! - 主表與明細在同一個 transaction 內存檔，任一筆不合法就整筆不寫入
+//! - 樂觀鎖定只看主表的 `version`；明細有任何變動（含順序）時主表的 `version` 也遞增
+//! - 回應：單筆查詢與新增、修改的回應 [`Record::lines`] 包含主表所有有效的明細子表，每一列明細的
+//!   格式同 [`Record`]（`record_no`、`lines` 為 `null`）；列表不回傳明細
+//! - 刪除主表時明細一起刪除（軟刪除）
+//! - 操作紀錄：明細的變動記在主表那筆紀錄的 diff，鍵為 `lines.<明細子表代碼>`，值為該明細子表
+//!   所有明細的 `[{ "id", "data" }]`（依順序）；只有變動的明細子表會出現
+//!
 //! 錯誤：
 //!
 //! - 資料類別不存在、已停用或不是自訂資料類別；資料不存在或已刪除 → `404 NOT_FOUND`
 //! - `data` 不符合欄位定義（含違反「不可重複」）→ `422 VALIDATION`，
 //!   `details.fields` 為 `[{ "field_key", "message" }]`，列出所有出錯的欄位
+//! - 明細不合法（欄位錯誤、明細子表不存在、`id` 不存在或重複）→ `422 VALIDATION`，`details` 為
+//!   `{ "fields": [ … 主表的欄位錯誤 … ], "lines": [{ "detail_key", "index", "field_key", "message" }] }`：
+//!   `index` 為該列在 request 陣列中的位置（從 0 開始），`field_key` 為出錯的欄位；
+//!   不屬於某一列（明細子表不存在）時 `index` 為 `null`，不屬於某個欄位時 `field_key` 為 `null`
 //! - 列表的篩選、排序參數不合法 → `422 VALIDATION`，`details.field` 為參數名稱（例如 `filter.qty.gte`）
 //! - `page`、`page_size` 不是整數 → `400 BAD_REQUEST`
 //! - `version` 不符 → `409 CONFLICT`（§9.4）
@@ -105,6 +130,10 @@ pub struct Record {
     /// （見模組說明「關聯欄位」）。
     #[serde(default)]
     pub relations: BTreeMap<String, RelationRef>,
+    /// 明細，鍵為明細子表的代碼（見模組說明「明細子表」）。單筆查詢與新增、修改的回應包含主表所有
+    /// 有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<BTreeMap<String, Vec<Record>>>,
     /// 建立時間（RFC 3339）。
     #[serde(with = "time::serde::rfc3339")]
     #[specta(type = String)]
@@ -232,6 +261,22 @@ pub struct CreateRecordRequest {
     #[serde(default)]
     #[specta(type = std::collections::HashMap<String, specta_typescript::Unknown>)]
     pub data: Map<String, Value>,
+    /// 明細，鍵為明細子表的代碼；與主表一起建立（見模組說明「明細子表」）。明細不可帶 `id`。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lines: BTreeMap<String, Vec<LineInput>>,
+}
+
+/// 一列明細的輸入（[`CreateRecordRequest::lines`]、[`UpdateRecordRequest::lines`]）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+pub struct LineInput {
+    /// 既有明細的 id；新的明細不帶（或 `null`）。
+    #[serde(default)]
+    pub id: Option<Id>,
+    /// 欄位的值，格式同主表的 `data`。新的明細沒有帶到的欄位套用預設值；既有的明細只合併有帶到的欄位，
+    /// `null` 代表清空。
+    #[serde(default)]
+    #[specta(type = std::collections::HashMap<String, specta_typescript::Unknown>)]
+    pub data: Map<String, Value>,
 }
 
 /// 修改資料的輸入。只合併有帶到的欄位，值為 `null` 代表清空。單號不可修改，`record_no` 會被忽略。
@@ -242,6 +287,10 @@ pub struct UpdateRecordRequest {
     #[serde(default)]
     #[specta(type = std::collections::HashMap<String, specta_typescript::Unknown>)]
     pub data: Map<String, Value>,
+    /// 要修改的明細子表，鍵為明細子表的代碼。有帶到的明細子表以陣列「整組取代」：有 `id` 的更新、
+    /// 沒有 `id` 的新增、沒列出的刪除；沒帶到的明細子表不變（見模組說明「明細子表」）。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lines: BTreeMap<String, Vec<LineInput>>,
 }
 
 /// `DELETE /api/v1/entities/{key}/records/{id}` 的 query string。
@@ -671,6 +720,7 @@ mod tests {
             title: "SO202611-0001".into(),
             data: json!({ "qty": 1 }).as_object().unwrap().clone(),
             relations: BTreeMap::new(),
+            lines: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,
             updated_at: OffsetDateTime::UNIX_EPOCH,
@@ -710,5 +760,52 @@ mod tests {
         let req: CreateRecordRequest =
             serde_json::from_value(json!({ "record_no": "X-001", "data": {} })).unwrap();
         assert_eq!(req, CreateRecordRequest::default());
+    }
+
+    #[test]
+    fn lines_json_shape() {
+        let line = Record {
+            id: crate::new_id(),
+            record_no: None,
+            title: "濾網".into(),
+            data: json!({ "part": "濾網" }).as_object().unwrap().clone(),
+            relations: BTreeMap::new(),
+            lines: None,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            created_by: None,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            updated_by: None,
+            version: 1,
+        };
+        // 列表與明細本身不輸出 lines
+        let v = serde_json::to_value(&line).unwrap();
+        assert!(v.get("lines").is_none());
+
+        let master = Record {
+            lines: Some(BTreeMap::from([
+                ("parts".to_owned(), vec![line.clone()]),
+                ("labor".to_owned(), vec![]),
+            ])),
+            ..line.clone()
+        };
+        let v = serde_json::to_value(&master).unwrap();
+        assert_eq!(v["lines"]["parts"][0]["data"], json!({ "part": "濾網" }));
+        assert_eq!(v["lines"]["labor"], json!([]));
+        assert_eq!(serde_json::from_value::<Record>(v).unwrap(), master);
+
+        let id = crate::new_id();
+        let req: UpdateRecordRequest = serde_json::from_value(json!({
+            "version": 3,
+            "lines": { "parts": [ { "id": id, "data": { "qty": 2 } }, { "data": {} }, {} ] }
+        }))
+        .unwrap();
+        let parts = &req.lines["parts"];
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].id, Some(id));
+        assert_eq!(parts[0].data["qty"], 2);
+        assert_eq!(parts[1], LineInput::default());
+        assert_eq!(parts[2], LineInput::default());
+        let req: UpdateRecordRequest = serde_json::from_value(json!({ "version": 3 })).unwrap();
+        assert!(req.lines.is_empty());
     }
 }

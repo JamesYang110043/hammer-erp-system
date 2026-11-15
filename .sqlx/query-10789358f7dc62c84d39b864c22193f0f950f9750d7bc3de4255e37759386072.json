@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE custom_records\n        SET deleted_at = $2, updated_by = $3, version = version + 1\n        WHERE parent_record_id = $1 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "10789358f7dc62c84d39b864c22193f0f950f9750d7bc3de4255e37759386072"
+}

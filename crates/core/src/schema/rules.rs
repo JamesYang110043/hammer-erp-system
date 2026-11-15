@@ -4,6 +4,7 @@
 //! - [`plan_create_field`]、[`plan_update_field`]：欄位，含 §7.2 系統欄位的限制
 //! - [`validate_field_config`]：欄位設定與型態相符（小數位數、選項、驗證規則、預設值、關聯）
 //! - [`validate_relation_target`]：`relation` 欄位的目標資料類別
+//! - [`validate_parent_entity`]：明細子表的主表
 //! - [`plan_reorder`]：調整欄位排序
 //! - [`plan_change_type`]：變更欄位資料型態的新定義（§7.4；資料的轉換在 [`super::type_change`]）
 //!
@@ -33,6 +34,7 @@ pub mod field {
     pub const KEY: &str = "key";
     pub const LABEL: &str = "label";
     pub const KIND: &str = "kind";
+    pub const PARENT_ENTITY_ID: &str = "parent_entity_id";
     pub const NUMBERING_PATTERN: &str = "numbering_pattern";
     pub const TITLE_TEMPLATE: &str = "title_template";
     pub const IS_ACTIVE: &str = "is_active";
@@ -63,40 +65,100 @@ pub struct NewEntityPlan {
     pub icon: Option<String>,
     pub kind: EntityKind,
     pub storage: EntityStorage,
+    /// 明細子表所屬的主表；`kind = detail` 時有值。
+    pub parent_entity_id: Option<Id>,
     pub numbering_pattern: Option<String>,
     pub title_template: Option<String>,
     pub sort_order: i32,
 }
 
-/// 檢查新增資料類別的輸入。M2a 只允許 `kind = master`，儲存方式固定為 `custom_records`。
-/// 單號規則依 [`normalize_pattern`] 檢查；標題範本依 [`normalize_template`] 檢查，新的資料類別
-/// 還沒有欄位，只能引用 `{record_no}`。
-pub fn plan_create_entity(req: &CreateEntityRequest) -> Result<NewEntityPlan, CoreError> {
+/// 檢查新增資料類別的輸入。目前允許 `kind = master` 與 `detail`（`document` 在 #73 開放），
+/// 儲存方式固定為 `custom_records`。單號規則依 [`normalize_pattern`] 檢查；標題範本依
+/// [`normalize_template`] 檢查，新的資料類別還沒有欄位，只能引用 `{record_no}`。
+///
+/// `parent` 為依 `req.parent_entity_id` 查到的未刪除資料類別（沒有指定或找不到時為 `None`）。
+/// 明細子表（`detail`）必須指定主表，主表須符合 [`validate_parent_entity`]，且不可設定單號規則；
+/// 其他 `kind` 不可指定主表。
+pub fn plan_create_entity(
+    req: &CreateEntityRequest,
+    parent: Option<&EntityDefinition>,
+) -> Result<NewEntityPlan, CoreError> {
     validate_key(&req.key).map_err(|e| invalid(field::KEY, e.message()))?;
     let label = validate_label(&req.label)?;
-    if req.kind != EntityKind::Master {
-        return Err(invalid(
-            field::KIND,
-            "目前只能建立主檔（master）類型的資料類別",
-        ));
-    }
+    let numbering_pattern = validate_numbering_pattern(req.numbering_pattern.as_deref())?;
+    let parent_entity_id = match req.kind {
+        EntityKind::Master => {
+            if req.parent_entity_id.is_some() {
+                return Err(invalid(
+                    field::PARENT_ENTITY_ID,
+                    "只有明細子表（detail）可以指定主表",
+                ));
+            }
+            None
+        }
+        EntityKind::Detail => {
+            if req.parent_entity_id.is_none() {
+                return Err(invalid(field::PARENT_ENTITY_ID, "明細子表必須指定主表"));
+            }
+            let parent = validate_parent_entity(parent)?;
+            if numbering_pattern.is_some() {
+                return Err(invalid(
+                    field::NUMBERING_PATTERN,
+                    MSG_DETAIL_NUMBERING_PATTERN,
+                ));
+            }
+            Some(parent.id)
+        }
+        EntityKind::Document => {
+            return Err(invalid(
+                field::KIND,
+                "目前只能建立主檔（master）或明細子表（detail）類型的資料類別",
+            ));
+        }
+    };
     Ok(NewEntityPlan {
         key: req.key.clone(),
         label,
         icon: optional_text(req.icon.as_deref()),
-        kind: EntityKind::Master,
+        kind: req.kind,
         storage: EntityStorage::CustomRecords,
-        numbering_pattern: validate_numbering_pattern(req.numbering_pattern.as_deref())?,
+        parent_entity_id,
+        numbering_pattern,
         title_template: validate_title_template(req.title_template.as_deref(), &[])?,
         sort_order: req.sort_order,
     })
+}
+
+/// 明細子表設定單號規則時的錯誤訊息。
+const MSG_DETAIL_NUMBERING_PATTERN: &str = "明細子表不可設定單號規則";
+
+/// 檢查明細子表的主表：必須存在、是**自訂**（`storage = custom_records`）、有效、`kind` 為
+/// `master` 或 `document`（不可是另一個明細子表）。錯誤為 [`CoreError::InvalidField`]
+/// （`parent_entity_id`）。
+pub fn validate_parent_entity(
+    parent: Option<&EntityDefinition>,
+) -> Result<&EntityDefinition, CoreError> {
+    let fail = |message: &str| Err(invalid(field::PARENT_ENTITY_ID, message));
+    let Some(parent) = parent else {
+        return fail("找不到主表的資料類別");
+    };
+    if parent.storage != EntityStorage::CustomRecords {
+        return fail("主表必須是自訂資料類別");
+    }
+    if !parent.is_active {
+        return fail("主表的資料類別已停用");
+    }
+    match parent.kind {
+        EntityKind::Master | EntityKind::Document => Ok(parent),
+        EntityKind::Detail => fail("主表不可是另一個明細子表"),
+    }
 }
 
 /// 檢查修改資料類別的輸入，回傳修改後的定義（`version` 等不變）。
 ///
 /// - `key` 有帶且與目前不同 → 錯誤（`key`）
 /// - 系統資料類別不可停用（`is_active`）
-/// - 單號規則依 [`normalize_pattern`] 檢查；修改後只影響之後新增的資料
+/// - 單號規則依 [`normalize_pattern`] 檢查；修改後只影響之後新增的資料；明細子表不可設定
 /// - 標題範本依 [`normalize_template`] 檢查，只能引用 `fields`（資料類別目前的所有欄位，含已停用）
 pub fn plan_update_entity(
     current: &EntityDefinition,
@@ -111,10 +173,17 @@ pub fn plan_update_entity(
     if current.is_system && !req.is_active {
         return Err(invalid(field::IS_ACTIVE, "系統資料類別不可停用"));
     }
+    let numbering_pattern = validate_numbering_pattern(req.numbering_pattern.as_deref())?;
+    if current.kind == EntityKind::Detail && numbering_pattern.is_some() {
+        return Err(invalid(
+            field::NUMBERING_PATTERN,
+            MSG_DETAIL_NUMBERING_PATTERN,
+        ));
+    }
     Ok(EntityDefinition {
         label: validate_label(&req.label)?,
         icon: optional_text(req.icon.as_deref()),
-        numbering_pattern: validate_numbering_pattern(req.numbering_pattern.as_deref())?,
+        numbering_pattern,
         title_template: validate_title_template(req.title_template.as_deref(), fields)?,
         sort_order: req.sort_order,
         is_active: req.is_active,
@@ -688,15 +757,19 @@ mod tests {
 
     #[test]
     fn create_entity_normalizes_input() {
-        let plan = plan_create_entity(&CreateEntityRequest {
-            key: "repair_order".into(),
-            label: " 維修單 ".into(),
-            icon: Some("  ".into()),
-            kind: EntityKind::Master,
-            numbering_pattern: Some(" RO{yyyyMM}-{000} ".into()),
-            title_template: Some(" {record_no} ".into()),
-            sort_order: 5,
-        })
+        let plan = plan_create_entity(
+            &CreateEntityRequest {
+                key: "repair_order".into(),
+                label: " 維修單 ".into(),
+                icon: Some("  ".into()),
+                kind: EntityKind::Master,
+                parent_entity_id: None,
+                numbering_pattern: Some(" RO{yyyyMM}-{000} ".into()),
+                title_template: Some(" {record_no} ".into()),
+                sort_order: 5,
+            },
+            None,
+        )
         .unwrap();
         assert_eq!(plan.label, "維修單");
         assert_eq!(plan.icon, None);
@@ -713,6 +786,7 @@ mod tests {
             label: "維修單".into(),
             icon: None,
             kind: EntityKind::Master,
+            parent_entity_id: None,
             numbering_pattern: None,
             title_template: None,
             sort_order: 0,
@@ -740,11 +814,20 @@ mod tests {
                 field::KIND,
             ),
             (
+                // 明細子表必須指定主表
                 CreateEntityRequest {
                     kind: EntityKind::Detail,
                     ..base.clone()
                 },
-                field::KIND,
+                field::PARENT_ENTITY_ID,
+            ),
+            (
+                // 主檔不可指定主表
+                CreateEntityRequest {
+                    parent_entity_id: Some(new_id()),
+                    ..base.clone()
+                },
+                field::PARENT_ENTITY_ID,
             ),
             (
                 CreateEntityRequest {
@@ -777,8 +860,116 @@ mod tests {
             ),
         ];
         for (req, expected) in cases {
-            assert_eq!(field_of(&plan_create_entity(&req).unwrap_err()), expected);
+            assert_eq!(
+                field_of(&plan_create_entity(&req, None).unwrap_err()),
+                expected
+            );
         }
+    }
+
+    fn detail_req(parent_id: Id) -> CreateEntityRequest {
+        CreateEntityRequest {
+            key: "repair_parts".into(),
+            label: "更換零件".into(),
+            icon: None,
+            kind: EntityKind::Detail,
+            parent_entity_id: Some(parent_id),
+            numbering_pattern: None,
+            title_template: None,
+            sort_order: 0,
+        }
+    }
+
+    #[test]
+    fn create_detail_entity_with_parent() {
+        let parent = entity(false);
+        let plan = plan_create_entity(&detail_req(parent.id), Some(&parent)).unwrap();
+        assert_eq!(plan.kind, EntityKind::Detail);
+        assert_eq!(plan.parent_entity_id, Some(parent.id));
+        assert_eq!(plan.storage, EntityStorage::CustomRecords);
+
+        let document = EntityDefinition {
+            kind: EntityKind::Document,
+            ..entity(false)
+        };
+        let plan = plan_create_entity(&detail_req(document.id), Some(&document)).unwrap();
+        assert_eq!(plan.parent_entity_id, Some(document.id));
+    }
+
+    #[test]
+    fn create_detail_entity_rejects_invalid_parent_and_numbering() {
+        let parent = entity(false);
+        let parent_error = |p: Option<&EntityDefinition>| {
+            let err = plan_create_entity(&detail_req(parent.id), p).unwrap_err();
+            assert_eq!(field_of(&err), field::PARENT_ENTITY_ID);
+            err.to_string()
+        };
+        assert!(parent_error(None).contains("找不到"));
+        let detail = EntityDefinition {
+            kind: EntityKind::Detail,
+            ..entity(false)
+        };
+        assert!(parent_error(Some(&detail)).contains("明細子表"));
+        let inactive = EntityDefinition {
+            is_active: false,
+            ..entity(false)
+        };
+        assert!(parent_error(Some(&inactive)).contains("停用"));
+        let table = EntityDefinition {
+            storage: EntityStorage::Table,
+            ..entity(true)
+        };
+        assert!(parent_error(Some(&table)).contains("自訂"));
+
+        let err = plan_create_entity(
+            &CreateEntityRequest {
+                numbering_pattern: Some("RP-{000}".into()),
+                ..detail_req(parent.id)
+            },
+            Some(&parent),
+        )
+        .unwrap_err();
+        assert_eq!(field_of(&err), field::NUMBERING_PATTERN);
+        // 空白視為沒有單號規則
+        assert!(
+            plan_create_entity(
+                &CreateEntityRequest {
+                    numbering_pattern: Some(" ".into()),
+                    ..detail_req(parent.id)
+                },
+                Some(&parent),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn update_detail_entity_rejects_numbering_pattern() {
+        let current = EntityDefinition {
+            kind: EntityKind::Detail,
+            parent_entity_id: Some(new_id()),
+            ..entity(false)
+        };
+        let err = plan_update_entity(
+            &current,
+            &[],
+            &UpdateEntityRequest {
+                numbering_pattern: Some("RP-{000}".into()),
+                ..entity_update(&current)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(field_of(&err), field::NUMBERING_PATTERN);
+        let next = plan_update_entity(
+            &current,
+            &[],
+            &UpdateEntityRequest {
+                label: "零件".into(),
+                ..entity_update(&current)
+            },
+        )
+        .unwrap();
+        assert_eq!(next.parent_entity_id, current.parent_entity_id);
     }
 
     #[test]

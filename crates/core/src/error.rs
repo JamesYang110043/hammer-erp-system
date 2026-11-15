@@ -3,6 +3,7 @@
 //! 每個錯誤都對應一個 [`ErrorCode`]，由 `server` 轉成統一的 API 錯誤格式（§10）。
 
 use crate::record_data::FieldError;
+use crate::record_lines::LineError;
 use crate::schema::index::DuplicateValue;
 use crate::schema::type_change::ConversionFailure;
 use hammer_db::DbError;
@@ -44,6 +45,15 @@ pub enum CoreError {
     /// API 回應為 `VALIDATION`，`details.fields` 為 `[{ "field_key", "message" }]`，列出所有出錯的欄位。
     #[error("資料有 {} 個欄位不正確，請修正後再送出", .0.len())]
     InvalidFields(Vec<FieldError>),
+
+    /// 主表與明細一起存檔時，明細不合法（[`crate::record_lines`]）；`fields` 為主表的欄位錯誤
+    /// （可能為空）。API 回應為 `VALIDATION`，`details` 為
+    /// `{ "fields": [{ "field_key", "message" }], "lines": [{ "detail_key", "index", "field_key", "message" }] }`。
+    #[error("資料有 {} 個錯誤，請修正後再送出", .fields.len() + .lines.len())]
+    InvalidLines {
+        fields: Vec<FieldError>,
+        lines: Vec<LineError>,
+    },
 
     /// 變更欄位型態時，有資料無法轉換（§7.4）。`failures` 最多
     /// [`hammer_shared::schema::MAX_CONVERSION_FAILURES`] 筆，`total` 為失敗總筆數。
@@ -122,6 +132,7 @@ impl CoreError {
             | Self::InvalidField { .. }
             | Self::InvalidParam { .. }
             | Self::InvalidFields(_)
+            | Self::InvalidLines { .. }
             | Self::ConversionFailed { .. }
             | Self::DuplicateValues { .. }
             | Self::LastAdmin => ErrorCode::Validation,
@@ -169,6 +180,24 @@ impl From<CoreError> for ApiError {
                 .collect();
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "fields": fields }))
+        } else if let CoreError::InvalidLines { fields, lines } = &err {
+            let fields: Vec<_> = fields
+                .iter()
+                .map(|e| serde_json::json!({ "field_key": e.field_key, "message": e.message }))
+                .collect();
+            let lines: Vec<_> = lines
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "detail_key": e.detail_key,
+                        "index": e.index,
+                        "field_key": e.field_key,
+                        "message": e.message,
+                    })
+                })
+                .collect();
+            ApiError::new(code, err.to_string())
+                .with_details(serde_json::json!({ "fields": fields, "lines": lines }))
         } else if let CoreError::ConversionFailed { failures, total } = &err {
             let records: Vec<_> = failures
                 .iter()
@@ -260,6 +289,43 @@ mod tests {
                 { "field_key": "name", "message": "此欄位為必填" },
                 { "field_key": "qty", "message": "不可小於 1" },
             ] }))
+        );
+    }
+
+    #[test]
+    fn invalid_lines_lists_rows_and_fields_in_details() {
+        let err = CoreError::InvalidLines {
+            fields: vec![FieldError {
+                field_key: "name".into(),
+                message: "此欄位為必填".into(),
+            }],
+            lines: vec![
+                LineError {
+                    detail_key: "parts".into(),
+                    index: Some(1),
+                    field_key: Some("qty".into()),
+                    message: "必須是整數".into(),
+                },
+                LineError {
+                    detail_key: "missing".into(),
+                    index: None,
+                    field_key: None,
+                    message: "沒有此明細子表".into(),
+                },
+            ],
+        };
+        assert_eq!(err.code(), ErrorCode::Validation);
+        let api: ApiError = err.into();
+        assert_eq!(api.message, "資料有 3 個錯誤，請修正後再送出");
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({
+                "fields": [{ "field_key": "name", "message": "此欄位為必填" }],
+                "lines": [
+                    { "detail_key": "parts", "index": 1, "field_key": "qty", "message": "必須是整數" },
+                    { "detail_key": "missing", "index": null, "field_key": null, "message": "沒有此明細子表" },
+                ],
+            }))
         );
     }
 

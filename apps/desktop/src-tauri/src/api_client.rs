@@ -1369,6 +1369,7 @@ mod tests {
                     label: "維修單".into(),
                     icon: None,
                     kind: EntityKind::Master,
+                    parent_entity_id: None,
                     numbering_pattern: None,
                     title_template: None,
                     sort_order: 0,
@@ -1653,6 +1654,7 @@ mod tests {
                         .as_object()
                         .unwrap()
                         .clone(),
+                    lines: Default::default(),
                 },
             )
             .await
@@ -1671,6 +1673,7 @@ mod tests {
                         .as_object()
                         .unwrap()
                         .clone(),
+                    lines: Default::default(),
                 },
             )
             .await

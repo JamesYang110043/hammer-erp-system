@@ -3,7 +3,9 @@
 //! - 單筆：[`find_record`]、[`find_record_for_update`]、[`insert_record`]、[`update_record_data`]、
 //!   [`soft_delete_record`]
 //! - 列表：[`list_records`]、[`count_records`]，條件為 [`RecordListFilter`]
-//! - 唯一性：[`value_taken`]；單號不可重複的索引為 [`RECORD_NO_UNIQUE`]
+//! - 唯一性：[`value_taken`]、[`line_value_taken`]；單號不可重複的索引為 [`RECORD_NO_UNIQUE`]
+//! - 明細（`parent_record_id` 有值的資料）：[`list_lines`]、[`list_lines_for_update`]、
+//!   [`update_line`]、[`soft_delete_lines`]、[`soft_delete_child_records`]；新增也用 [`insert_record`]
 //! - 欄位型態變更（含已軟刪除的資料）：[`list_all_record_data_for_update`]、[`update_records_data`]
 //! - 關聯欄位（§7.3）：[`lock_existing_records`]（寫入時檢查目標）、[`find_records_by_ids`]
 //!   （回應的關聯資訊，含已軟刪除）、[`list_records_before`]（選擇器搜尋）
@@ -90,6 +92,10 @@ pub struct NewRecord<'a> {
     pub entity_id: Uuid,
     /// 依單號規則產生的單號；沒有規則時為 `None`。
     pub record_no: Option<&'a str>,
+    /// 明細所屬的主表資料；不是明細時為 `None`。
+    pub parent_record_id: Option<Uuid>,
+    /// 明細的順序；不是明細時為 0。
+    pub sort_order: i32,
     /// JSON 物件。
     pub data: &'a Value,
     pub created_by: Uuid,
@@ -105,8 +111,9 @@ pub async fn insert_record<'e>(
     sqlx::query!(
         r#"
         INSERT INTO custom_records
-            (id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $5, $6)
+            (id, entity_id, record_no, parent_record_id, sort_order, data,
+             created_at, created_by, updated_at, updated_by)
+        VALUES ($1, $2, $3, $7, $8, $4, $5, $6, $5, $6)
         "#,
         new.id,
         new.entity_id,
@@ -114,6 +121,8 @@ pub async fn insert_record<'e>(
         new.data,
         new.created_at,
         new.created_by,
+        new.parent_record_id,
+        new.sort_order,
     )
     .execute(executor)
     .await?;
@@ -186,6 +195,185 @@ pub async fn value_taken<'e>(
         "#,
         entity_id,
         exclude_id,
+        field_key,
+        value,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(taken)
+}
+
+// ---------------------------------------------------------------------------
+// 明細
+// ---------------------------------------------------------------------------
+
+/// 明細的資料列（`parent_record_id` 有值的 `custom_records`，不含 `deleted_at`）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineRow {
+    pub id: Uuid,
+    /// 明細子表（`kind = detail` 的資料類別）。
+    pub entity_id: Uuid,
+    pub parent_record_id: Uuid,
+    pub sort_order: i32,
+    pub data: Value,
+    pub created_at: OffsetDateTime,
+    pub created_by: Option<Uuid>,
+    pub updated_at: OffsetDateTime,
+    pub updated_by: Option<Uuid>,
+    pub version: i32,
+}
+
+impl LineRow {
+    /// 轉成 [`RecordRow`]（明細沒有單號）。
+    pub fn into_record_row(self) -> RecordRow {
+        RecordRow {
+            id: self.id,
+            entity_id: self.entity_id,
+            record_no: None,
+            data: self.data,
+            created_at: self.created_at,
+            created_by: self.created_by,
+            updated_at: self.updated_at,
+            updated_by: self.updated_by,
+            version: self.version,
+        }
+    }
+}
+
+/// 主表資料 `parent_record_id` 的所有未刪除明細（不分明細子表），依明細子表、`sort_order`、`id` 排序。
+pub async fn list_lines<'e>(
+    executor: impl PgExecutor<'e>,
+    parent_record_id: Uuid,
+) -> Result<Vec<LineRow>, DbError> {
+    let rows = sqlx::query_as!(
+        LineRow,
+        r#"
+        SELECT id, entity_id, parent_record_id AS "parent_record_id!", sort_order, data,
+               created_at, created_by, updated_at, updated_by, version
+        FROM custom_records
+        WHERE parent_record_id = $1 AND deleted_at IS NULL
+        ORDER BY entity_id, sort_order, id
+        "#,
+        parent_record_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 主表資料 `parent_record_id` 在明細子表 `entity_id` 的未刪除明細，依 `sort_order`、`id` 排序，
+/// 並鎖定這些列（`FOR UPDATE`）。必須在 transaction 內呼叫。
+pub async fn list_lines_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_id: Uuid,
+    parent_record_id: Uuid,
+) -> Result<Vec<LineRow>, DbError> {
+    let rows = sqlx::query_as!(
+        LineRow,
+        r#"
+        SELECT id, entity_id, parent_record_id AS "parent_record_id!", sort_order, data,
+               created_at, created_by, updated_at, updated_by, version
+        FROM custom_records
+        WHERE entity_id = $1 AND parent_record_id = $2 AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        FOR UPDATE
+        "#,
+        entity_id,
+        parent_record_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 取代明細的 `data` 與 `sort_order` 並遞增 `version`。明細的樂觀鎖定由主表的 `version` 負責，
+/// 這裡不檢查版本；呼叫前必須已用 [`list_lines_for_update`] 鎖定。回傳影響的筆數。
+pub async fn update_line<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    sort_order: i32,
+    data: &Value,
+    updated_by: Uuid,
+) -> Result<u64, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE custom_records
+        SET data = $3, sort_order = $2, updated_by = $4, version = version + 1
+        WHERE id = $1 AND parent_record_id IS NOT NULL AND deleted_at IS NULL
+        "#,
+        id,
+        sort_order,
+        data,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// 軟刪除多筆明細並遞增 `version`。回傳影響的筆數。
+pub async fn soft_delete_lines<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+    deleted_at: OffsetDateTime,
+    deleted_by: Uuid,
+) -> Result<u64, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE custom_records
+        SET deleted_at = $2, updated_by = $3, version = version + 1
+        WHERE id = ANY($1) AND parent_record_id IS NOT NULL AND deleted_at IS NULL
+        "#,
+        ids,
+        deleted_at,
+        deleted_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// 軟刪除主表資料 `parent_record_id` 的所有未刪除明細（不分明細子表）。回傳影響的筆數。
+pub async fn soft_delete_child_records<'e>(
+    executor: impl PgExecutor<'e>,
+    parent_record_id: Uuid,
+    deleted_at: OffsetDateTime,
+    deleted_by: Uuid,
+) -> Result<u64, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE custom_records
+        SET deleted_at = $2, updated_by = $3, version = version + 1
+        WHERE parent_record_id = $1 AND deleted_at IS NULL
+        "#,
+        parent_record_id,
+        deleted_at,
+        deleted_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// 明細子表 `entity_id` 中，**不屬於**主表資料 `parent_record_id` 的未刪除明細，是否有在
+/// `field_key` 有相同的值。用於明細違反「不可重複」時找出重複的欄位（同一筆主表內的重複在寫入前檢查）。
+pub async fn line_value_taken<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_id: Uuid,
+    parent_record_id: Uuid,
+    field_key: &str,
+    value: &Value,
+) -> Result<bool, DbError> {
+    let taken = sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM custom_records
+            WHERE entity_id = $1 AND parent_record_id IS DISTINCT FROM $2 AND deleted_at IS NULL
+              AND data -> $3 = $4
+        ) AS "taken!"
+        "#,
+        entity_id,
+        parent_record_id,
         field_key,
         value,
     )

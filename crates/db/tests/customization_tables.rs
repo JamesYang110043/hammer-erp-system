@@ -208,7 +208,8 @@ async fn custom_records_has_required_indexes(pool: PgPool) {
             .unwrap();
     for expected in [
         "btree (entity_id)",
-        "btree (parent_record_id)",
+        // 0007：依主表讀取明細並排序
+        "btree (parent_record_id, entity_id, sort_order, id) WHERE (parent_record_id IS NOT NULL)",
         "gin (data)",
     ] {
         assert!(

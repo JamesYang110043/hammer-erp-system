@@ -7,6 +7,7 @@
 //! - [`layouts`]：列表版面（`view_layouts`）
 //! - [`numbering`]：單號規則的解析與產生
 //! - [`record_data`]：依欄位定義驗證並正規化資料的 `data`
+//! - [`record_lines`]：明細子表的明細與主表一起存檔時的檢查（比對 id、不可重複、操作紀錄）
 //! - [`records`]：自訂資料類別的資料（通用資料 API）
 //! - [`relations`]：關聯欄位的檢查與回應中的關聯資訊
 //! - [`schema`]：資料類別與欄位定義的管理
@@ -25,6 +26,7 @@ mod error;
 pub mod layouts;
 pub mod numbering;
 pub mod record_data;
+pub mod record_lines;
 pub mod records;
 pub mod relations;
 pub mod schema;
