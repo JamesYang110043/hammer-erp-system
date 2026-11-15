@@ -645,12 +645,20 @@ async fn cleanup_removes_only_old_unbound(pool: PgPool) {
     assert!(exists(&env.dir, old_bound.id));
 }
 
+/// 上傳回應的 `created_at` 是寫入前的時間（Linux 上有奈秒），資料庫只存到微秒；
+/// 截成資料庫的精度，才能和之後從資料庫讀出的附件資訊比對。
+fn as_stored(mut attachment: Attachment) -> Attachment {
+    let t = attachment.created_at;
+    attachment.created_at = t.replace_microsecond(t.microsecond()).unwrap();
+    attachment
+}
+
 /// 列表、單筆、新增與修改的回應都有 `attachments`（檔名、大小），換掉的附件不再列出。
 #[sqlx::test(migrations = "../db/migrations")]
 async fn record_responses_include_attachment_info(pool: PgPool) {
     let env = Env::new(&pool);
     let admin = setup(&env).await;
-    let photo = env.upload(&admin, "報價單.pdf", b"pdf").await;
+    let photo = as_stored(env.upload(&admin, "報價單.pdf", b"pdf").await);
     let doc = env.upload(&admin, "合約.docx", b"docx!").await;
 
     let created = env
@@ -676,7 +684,7 @@ async fn record_responses_include_attachment_info(pool: PgPool) {
     );
 
     // 換掉 photo、清空 doc：只列出新的附件
-    let replacement = env.upload(&admin, "新照片.jpg", b"jpg").await;
+    let replacement = as_stored(env.upload(&admin, "新照片.jpg", b"jpg").await);
     let updated = env
         .update(
             &admin,
