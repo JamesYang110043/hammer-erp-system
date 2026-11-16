@@ -48,10 +48,12 @@ describe('formFields', () => {
       fieldDef({ field_key: 'a', sort_order: 1 }),
       fieldDef({ field_key: 'hidden', is_visible: false }),
       fieldDef({ field_key: 'inactive', is_active: false }),
-      fieldDef({ field_key: 'rel', data_type: 'relation' }),
+      fieldDef({ field_key: 'rel', data_type: 'relation', sort_order: 3 }),
+      fieldDef({ field_key: 'doc', data_type: 'file', sort_order: 4 }),
+      fieldDef({ field_key: 'calc', data_type: 'formula' }),
       fieldDef({ field_key: 'sys', storage: 'column' }),
     ];
-    expect(formFields(fields).map((f) => f.field_key)).toEqual(['a', 'b']);
+    expect(formFields(fields).map((f) => f.field_key)).toEqual(['a', 'b', 'rel', 'doc']);
   });
 });
 

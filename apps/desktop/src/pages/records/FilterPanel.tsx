@@ -12,6 +12,7 @@ import {
   toRecordFilters,
 } from '../../records/query';
 import type { FilterRow } from '../../records/query';
+import { RelationSelect } from './RelationSelect';
 
 /** 日期時間篩選值：選擇的時間視為台北時間（D13）。 */
 const DATETIME_VALUE_FORMAT = 'YYYY-MM-DDTHH:mm:ss';
@@ -80,6 +81,16 @@ function ValueInput({
           value={Array.isArray(row.value) ? row.value : []}
           onChange={onChange}
           options={options}
+        />
+      );
+    case 'relation':
+      return (
+        <RelationSelect
+          aria-label={label}
+          field={field}
+          style={{ width: 240 }}
+          value={text || undefined}
+          onChange={(v) => onChange(v ?? null)}
         />
       );
     case 'integer':

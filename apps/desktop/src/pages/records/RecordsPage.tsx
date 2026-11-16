@@ -39,6 +39,7 @@ import {
   buildRecordListQuery,
   columnSortOrder,
   isQueryable,
+  isSortable,
   sortFromTable,
 } from '../../records/query';
 import { entityIcon } from '../schema/entityIcons';
@@ -143,9 +144,11 @@ function RecordList({
       width,
       align: isNumericType(field) ? 'right' : undefined,
       ellipsis: field.data_type === 'long_text',
-      sorter: isQueryable(field),
+      sorter: isSortable(field),
       sortOrder: columnSortOrder(config.sort, field.field_key),
-      render: (value: unknown) => <FieldValue field={field} value={value} />,
+      render: (value: unknown, record) => (
+        <FieldValue field={field} value={value} record={record} />
+      ),
     }),
   );
   if (canWrite) {

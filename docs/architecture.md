@@ -233,6 +233,7 @@ desktop(src-tauri) ──▶ shared, formula
 - 先上傳 `POST /api/v1/attachments`（`multipart/form-data`，檔案放在 `file` 欄位；需要 `record.write`），回傳 `id`、`file_name`、`mime_type`、`size_bytes`、`sha256`。此時附件**未綁定**。
 - 新增或修改資料時把附件 id 寫入 `file` 欄位：值必須是未刪除、未綁定的附件，否則 `422 VALIDATION`（`details.fields` 指出欄位）；同一個附件不可用在第二筆資料或第二個欄位。寫入資料的 transaction 內以 `FOR UPDATE` 鎖定附件並綁定（寫入 `attachments` 的 `entity_key`、`record_id`、`field_key`）。修改資料時只處理有變動的 `file` 欄位。
 - 欄位值被換掉或清空：舊附件標記刪除（`deleted_at`），檔案保留，之後無法下載。資料被軟刪除：附件保留，仍可下載。
+- 回應：列表與單筆回應有 `attachments: { "<field_key>": { "id", "file_name", "mime_type", "size_bytes", "sha256", "created_at" } }`，列出 `data` 中每個有值的 `file` 欄位所指的附件（供顯示檔名、大小）；附件已標記刪除時不列出（`hammer_core::attachments::attach_files`）。
 - 下載 `GET /api/v1/attachments/{id}`（需要 `record.read`）：`Content-Disposition: attachment` 帶原始檔名（`filename*` 為 UTF-8，支援中文）；未綁定的附件也可以下載（存檔前預覽）。
 - 不可設定預設值、不能變更型態（§7.4）。篩選只支援 `empty`；不能排序。資料標題中為空字串（§8.5）。
 - 不做：一個欄位多個檔案、圖片縮圖、線上預覽。

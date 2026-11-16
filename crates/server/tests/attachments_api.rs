@@ -644,3 +644,68 @@ async fn cleanup_removes_only_old_unbound(pool: PgPool) {
     assert!(!exists(&env.dir, new_unbound.id));
     assert!(exists(&env.dir, old_bound.id));
 }
+
+/// 上傳回應的 `created_at` 是寫入前的時間（Linux 上有奈秒），資料庫只存到微秒；
+/// 截成資料庫的精度，才能和之後從資料庫讀出的附件資訊比對。
+fn as_stored(mut attachment: Attachment) -> Attachment {
+    let t = attachment.created_at;
+    attachment.created_at = t.replace_microsecond(t.microsecond()).unwrap();
+    attachment
+}
+
+/// 列表、單筆、新增與修改的回應都有 `attachments`（檔名、大小），換掉的附件不再列出。
+#[sqlx::test(migrations = "../db/migrations")]
+async fn record_responses_include_attachment_info(pool: PgPool) {
+    let env = Env::new(&pool);
+    let admin = setup(&env).await;
+    let photo = as_stored(env.upload(&admin, "報價單.pdf", b"pdf").await);
+    let doc = env.upload(&admin, "合約.docx", b"docx!").await;
+
+    let created = env
+        .create(&admin, json!({ "photo": photo.id, "doc": doc.id }))
+        .await;
+    assert_eq!(created.attachments.len(), 2);
+    assert_eq!(created.attachments["photo"], photo);
+    assert_eq!(created.attachments["doc"].file_name, "合約.docx");
+    assert_eq!(created.attachments["doc"].size_bytes, 5);
+
+    let (status, body) = env
+        .call(
+            Method::GET,
+            &format!("/api/v1/entities/{REPAIR}/records/{}", created.id),
+            &admin,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["attachments"]["photo"]["file_name"],
+        json!("報價單.pdf")
+    );
+
+    // 換掉 photo、清空 doc：只列出新的附件
+    let replacement = as_stored(env.upload(&admin, "新照片.jpg", b"jpg").await);
+    let updated = env
+        .update(
+            &admin,
+            &created,
+            json!({ "photo": replacement.id, "doc": null }),
+        )
+        .await;
+    assert_eq!(updated.attachments.keys().collect::<Vec<_>>(), ["photo"]);
+    assert_eq!(updated.attachments["photo"].id, replacement.id);
+
+    let (status, body) = env
+        .call(
+            Method::GET,
+            &format!("/api/v1/entities/{REPAIR}/records"),
+            &admin,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["items"][0]["attachments"],
+        json!({ "photo": serde_json::to_value(&replacement).unwrap() })
+    );
+}

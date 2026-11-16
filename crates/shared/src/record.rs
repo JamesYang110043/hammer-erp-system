@@ -48,6 +48,14 @@
 //! - 篩選只支援 `eq`（值為資料 id）與 `empty`；不能排序
 //! - 選擇器：`GET /api/v1/entities/{key}/records/lookup` 搜尋 `{key}` 的資料，見 [`LookupQuery`]
 //!
+//! # 附件欄位（`file`）
+//!
+//! `file` 欄位的值是附件 id，上傳與綁定的規則見 [`crate::attachment`]。
+//!
+//! - 回應：[`Record::attachments`] 列出 `data` 中每個有值的 `file` 欄位所指的附件
+//!   `{ "<field_key>": { "id", "file_name", "mime_type", "size_bytes", "sha256", "created_at" } }`
+//!   （[`Attachment`]），供顯示檔名、大小；找不到附件（已標記刪除）時不列出
+//!
 //! # 明細子表（`lines`）
 //!
 //! 明細子表是 `kind = detail` 的資料類別（例如維修單的「更換零件」），屬於一個主表
@@ -110,6 +118,7 @@ use specta::Type;
 use time::OffsetDateTime;
 
 use crate::Id;
+use crate::attachment::Attachment;
 use crate::pagination::field as page_field;
 
 /// 單號在列表排序、篩選中使用的代碼，也是保留的欄位代碼（不可作為 `field_key`）。
@@ -130,6 +139,10 @@ pub struct Record {
     /// （見模組說明「關聯欄位」）。
     #[serde(default)]
     pub relations: BTreeMap<String, RelationRef>,
+    /// 附件欄位所指的附件，鍵為 `field_key`；只包含 `data` 中有值、且附件未標記刪除的 `file` 欄位
+    /// （見模組說明「附件欄位」）。
+    #[serde(default)]
+    pub attachments: BTreeMap<String, Attachment>,
     /// 明細，鍵為明細子表的代碼（見模組說明「明細子表」）。單筆查詢與新增、修改的回應包含主表所有
     /// 有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -720,6 +733,7 @@ mod tests {
             title: "SO202611-0001".into(),
             data: json!({ "qty": 1 }).as_object().unwrap().clone(),
             relations: BTreeMap::new(),
+            attachments: BTreeMap::new(),
             lines: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,
@@ -733,6 +747,7 @@ mod tests {
         assert_eq!(v["title"], json!("SO202611-0001"));
         assert_eq!(v["created_at"], json!("1970-01-01T00:00:00Z"));
         assert_eq!(v["relations"], json!({}));
+        assert_eq!(v["attachments"], json!({}));
         assert_eq!(serde_json::from_value::<Record>(v).unwrap(), r);
 
         let target = crate::new_id();
@@ -752,6 +767,28 @@ mod tests {
         );
         assert_eq!(serde_json::from_value::<Record>(v).unwrap(), with_relation);
 
+        let file_id = crate::new_id();
+        let mut with_file = r.clone();
+        with_file.attachments.insert(
+            "photo".into(),
+            Attachment {
+                id: file_id,
+                file_name: "報價單.pdf".into(),
+                mime_type: "application/pdf".into(),
+                size_bytes: 12,
+                sha256: "abc".into(),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            },
+        );
+        let v = serde_json::to_value(&with_file).unwrap();
+        assert_eq!(v["attachments"]["photo"]["file_name"], json!("報價單.pdf"));
+        assert_eq!(v["attachments"]["photo"]["size_bytes"], json!(12));
+        assert_eq!(serde_json::from_value::<Record>(v).unwrap(), with_file);
+        // 舊版回應沒有 attachments 時視為空
+        let mut v = serde_json::to_value(&r).unwrap();
+        v.as_object_mut().unwrap().remove("attachments");
+        assert_eq!(serde_json::from_value::<Record>(v).unwrap(), r);
+
         let req: UpdateRecordRequest = serde_json::from_value(json!({ "version": 2 })).unwrap();
         assert!(req.data.is_empty());
         let req: CreateRecordRequest = serde_json::from_value(json!({})).unwrap();
@@ -770,6 +807,7 @@ mod tests {
             title: "濾網".into(),
             data: json!({ "part": "濾網" }).as_object().unwrap().clone(),
             relations: BTreeMap::new(),
+            attachments: BTreeMap::new(),
             lines: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,

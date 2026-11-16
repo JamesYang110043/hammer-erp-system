@@ -11,7 +11,7 @@ import type {
   Validation,
 } from '../bindings';
 import { TAIPEI_OFFSET_MINUTES } from '../utils/time';
-import { isPropEditable, typeSettings } from './fieldSettings';
+import { hasDefaultValue, isPropEditable, typeSettings } from './fieldSettings';
 
 /** 選項的表單值。 */
 export interface OptionFormValue {
@@ -41,6 +41,8 @@ export interface FieldFormValues {
   max?: string | null;
   max_length?: number | null;
   pattern?: string | null;
+  /** `relation` 關聯的資料類別 id。 */
+  relation_entity_id?: string | null;
   default_value?: unknown;
   column_width?: number | null;
   help_text?: string | null;
@@ -82,6 +84,7 @@ export function toFormValues(field: FieldDefinition): FieldFormValues {
     max: field.validation?.max ?? null,
     max_length: field.validation?.max_length ?? null,
     pattern: field.validation?.pattern ?? null,
+    relation_entity_id: field.relation_entity_id ?? null,
     default_value: defaultToForm(field.data_type, field.default_value),
     column_width: field.column_width ?? null,
     help_text: field.help_text ?? null,
@@ -129,8 +132,12 @@ export function toCreateRequest(values: FieldFormValues, sortOrder: number): Cre
     is_readonly: values.is_readonly,
     is_searchable: values.is_searchable,
     is_unique: values.is_unique,
-    default_value: defaultToJson(values.data_type, values.default_value),
+    default_value: hasDefaultValue(values.data_type)
+      ? defaultToJson(values.data_type, values.default_value)
+      : null,
     ...toTypeConfig(values.data_type, values),
+    relation_entity_id:
+      values.data_type === 'relation' ? (values.relation_entity_id ?? null) : null,
     ui_widget: null,
     column_width: values.column_width ?? null,
     help_text: blankToNull(values.help_text),
@@ -170,6 +177,8 @@ export function toUpdateRequest(
       ? defaultToJson(field.data_type, values.default_value)
       : (field.default_value ?? null),
     ...config,
+    // 關聯的資料類別建立後不可修改，送出原值
+    relation_entity_id: field.relation_entity_id ?? null,
     ui_widget: field.ui_widget ?? null,
     column_width: can('column_width')
       ? (values.column_width ?? null)

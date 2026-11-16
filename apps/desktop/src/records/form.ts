@@ -18,6 +18,8 @@ import { TAIPEI_OFFSET_MINUTES } from '../utils/time';
  * | `boolean` | boolean | boolean |
  * | `select` | string | string |
  * | `multi_select` | string[] | string[] |
+ * | `relation` | string（資料 id） | string（資料 id） |
+ * | `file` | string（附件 id） | string（附件 id） |
  *
  * 沒有值時表單值為 `undefined`（勾選為 `false`），JSON 存值為 `null`。
  */
@@ -34,9 +36,9 @@ export const MAX_SAFE_INTEGER_TEXT = '9007199254740991';
 /** 日期時間送出的格式：選擇的時間視為台北時間（D13）。 */
 const DATETIME_VALUE_FORMAT = 'YYYY-MM-DDTHH:mm:ss';
 
-/** 表單可以輸入的型態（`relation`、`file`、`formula` 在 M2b、M2c 處理）。 */
+/** 表單可以輸入的型態（`formula` 在 M2c 處理）。 */
 export function isFormSupported(field: FieldDefinition): boolean {
-  return !['relation', 'file', 'formula'].includes(field.data_type);
+  return field.data_type !== 'formula';
 }
 
 /** 表單顯示的欄位：有效、設定為顯示、存在 JSON 的欄位，依 `sort_order`。 */

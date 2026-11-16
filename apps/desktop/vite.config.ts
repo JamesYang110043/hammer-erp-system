@@ -31,6 +31,9 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     setupFiles: ['src/test/setup.ts'],
     restoreMocks: true,
+    // 以 userEvent 操作完整表單的測試，在 CI（開覆蓋率、多個 worker 並行）上常要 3～5 秒，
+    // 預設的 5 秒上限容易誤判逾時
+    testTimeout: 15_000,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],

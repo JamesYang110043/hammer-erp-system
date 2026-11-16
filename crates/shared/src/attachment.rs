@@ -44,7 +44,7 @@ pub const UNBOUND_RETENTION_HOURS: i64 = 24;
 /// 沒有或無法辨識 MIME 時使用的值。
 pub const DEFAULT_MIME_TYPE: &str = "application/octet-stream";
 
-/// 上傳成功的回應。
+/// 附件的資訊：上傳成功的回應，也是 [`crate::record::Record::attachments`] 的值。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct Attachment {
     pub id: Id,

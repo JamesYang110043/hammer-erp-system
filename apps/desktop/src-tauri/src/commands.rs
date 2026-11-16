@@ -3,7 +3,10 @@
 //! 前端不直接呼叫 HTTP API，一律經過這裡（`docs/architecture.md` §3.3）。
 //! 新增 command 後要加進 [`crate::specta_builder`]，並執行 `pnpm gen:bindings`。
 
+use std::path::{Path, PathBuf};
+
 use hammer_shared::Id;
+use hammer_shared::attachment::Attachment;
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest};
 use hammer_shared::health::HealthResponse;
@@ -13,7 +16,8 @@ use hammer_shared::layout::{
 };
 use hammer_shared::pagination::Page;
 use hammer_shared::record::{
-    CreateRecordRequest, DeleteRecordQuery, Record, RecordListQuery, UpdateRecordRequest,
+    CreateRecordRequest, DeleteRecordQuery, LookupItem, LookupQuery, Record, RecordListQuery,
+    UpdateRecordRequest,
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
@@ -23,11 +27,13 @@ use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use hammer_shared::user::{
     CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
 };
-use tauri::State;
+use tauri::ipc::Channel;
+use tauri::{State, WebviewWindow};
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 
 use crate::error::ClientError;
 use crate::settings::normalize_server_url;
-use crate::state::AppState;
+use crate::state::{AppState, UploadProgress};
 
 /// 呼叫伺服器的 `GET /api/v1/health`。
 ///
@@ -403,4 +409,113 @@ pub async fn delete_layout(
     state
         .delete_layout(&key, id, &DeleteViewLayoutQuery { version })
         .await
+}
+
+/// 關聯欄位的選擇器：依標題搜尋 `key` 的未刪除資料（需要 `record.read`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn lookup_records(
+    state: State<'_, AppState>,
+    key: String,
+    query: LookupQuery,
+) -> Result<Vec<LookupItem>, ClientError> {
+    state.lookup_records(&key, &query).await
+}
+
+/// 開啟選擇檔案的對話框並上傳（需要 `record.write`）。使用者取消時回傳 `null`。
+///
+/// 選好檔案後先送一次進度（已送出 0），之後每送出一段送一次。超過伺服器的大小上限時回傳
+/// `413 PAYLOAD_TOO_LARGE`。上傳後附件尚未綁定，要把 id 寫入資料的 `file` 欄位並存檔。
+#[tauri::command]
+#[specta::specta]
+pub async fn upload_attachment(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    on_progress: Channel<UploadProgress>,
+) -> Result<Option<Attachment>, ClientError> {
+    let dialog = window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("選擇要上傳的檔案");
+    let Some(path) = run_dialog(dialog, FileDialogBuilder::blocking_pick_file).await? else {
+        return Ok(None);
+    };
+    let attachment = state
+        .upload_attachment(&path, move |progress| {
+            // 前端已離開頁面時送不出去，不影響上傳
+            let _ = on_progress.send(progress);
+        })
+        .await?;
+    Ok(Some(attachment))
+}
+
+/// 開啟另存新檔的對話框（預設檔名 `file_name`），下載附件並存到選擇的位置（需要 `record.read`）。
+///
+/// 存檔成功回傳實際存檔的檔名（使用者可能在對話框改名；只回傳檔名，不含路徑）；使用者取消時回傳
+/// `None`。
+#[tauri::command]
+#[specta::specta]
+pub async fn download_attachment(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    id: Id,
+    file_name: String,
+) -> Result<Option<String>, ClientError> {
+    let dialog = window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("儲存附件")
+        .set_file_name(&file_name);
+    let Some(dest) = run_dialog(dialog, FileDialogBuilder::blocking_save_file).await? else {
+        return Ok(None);
+    };
+    state.download_attachment(id, &dest).await?;
+    Ok(Some(saved_file_name(&dest, file_name)))
+}
+
+/// 存檔路徑的檔名；路徑沒有檔名部分時（不應發生）改用預設檔名。
+fn saved_file_name(dest: &Path, fallback: String) -> String {
+    dest.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or(fallback)
+}
+
+/// 在背景執行緒開啟檔案對話框（blocking 版本不可在主執行緒或 async 執行緒上等待），回傳選擇的路徑。
+async fn run_dialog(
+    dialog: FileDialogBuilder<tauri::Wry>,
+    open: fn(FileDialogBuilder<tauri::Wry>) -> Option<FilePath>,
+) -> Result<Option<PathBuf>, ClientError> {
+    let picked = tauri::async_runtime::spawn_blocking(move || open(dialog))
+        .await
+        .map_err(|err| ClientError::storage(format!("無法開啟檔案對話框：{err}")))?;
+    picked
+        .map(|path| {
+            path.into_path()
+                .map_err(|err| ClientError::storage(format!("無法使用選擇的檔案位置：{err}")))
+        })
+        .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_file_name_uses_chosen_name() {
+        let dest = Path::new("/tmp/附件/維修報告_下載.txt");
+        assert_eq!(
+            saved_file_name(dest, "維修報告.txt".into()),
+            "維修報告_下載.txt"
+        );
+    }
+
+    #[test]
+    fn saved_file_name_falls_back_without_file_name() {
+        assert_eq!(
+            saved_file_name(Path::new("/"), "維修報告.txt".into()),
+            "維修報告.txt"
+        );
+    }
 }

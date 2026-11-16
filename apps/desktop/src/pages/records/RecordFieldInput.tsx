@@ -1,7 +1,10 @@
 import { Checkbox, DatePicker, Input, Select } from 'antd';
 import type { Dayjs } from 'dayjs';
 
-import type { FieldDefinition } from '../../bindings';
+import type { Attachment } from '../../api/attachments';
+import type { FieldDefinition, RelationRef } from '../../bindings';
+import { FileInput } from './FileInput';
+import { RelationSelect } from './RelationSelect';
 
 /**
  * 依欄位型態的輸入元件，放在 antd `Form.Item` 內（`value`、`onChange` 由 Form 注入）。
@@ -17,6 +20,8 @@ import type { FieldDefinition } from '../../bindings';
  * | `boolean` | 勾選框 |
  * | `select` | 下拉單選 |
  * | `multi_select` | 下拉多選 |
+ * | `relation` | 可搜尋的下拉選單（{@link RelationSelect}） |
+ * | `file` | 上傳、下載、移除（{@link FileInput}） |
  */
 export function RecordFieldInput({
   field,
@@ -24,12 +29,18 @@ export function RecordFieldInput({
   value,
   onChange,
   id,
+  relation,
+  attachment,
 }: {
   field: FieldDefinition;
   disabled?: boolean;
   value?: unknown;
   onChange?: (value: unknown) => void;
   id?: string;
+  /** 資料目前的關聯（`relation` 欄位顯示標題用）。 */
+  relation?: RelationRef;
+  /** 資料目前的附件（`file` 欄位顯示檔名用）。 */
+  attachment?: Attachment;
 }) {
   const common = { id, disabled, 'aria-label': field.label };
   const text = typeof value === 'string' ? value : '';
@@ -116,6 +127,25 @@ export function RecordFieldInput({
           value={Array.isArray(value) ? value : []}
           onChange={(v: string[]) => onChange?.(v)}
           options={options}
+        />
+      );
+    case 'relation':
+      return (
+        <RelationSelect
+          {...common}
+          field={field}
+          initial={relation}
+          value={text || undefined}
+          onChange={(v) => onChange?.(v)}
+        />
+      );
+    case 'file':
+      return (
+        <FileInput
+          {...common}
+          initial={attachment}
+          value={text || undefined}
+          onChange={(v) => onChange?.(v)}
         />
       );
     default:

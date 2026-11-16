@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DataType } from '../bindings';
-import { CUSTOM_FIELD, SYSTEM_FIELD, fieldDef } from '../test/schemaFixtures';
+import { CUSTOM_FIELD, REPAIR, SYSTEM_FIELD, fieldDef } from '../test/schemaFixtures';
 import {
   SUPPORTED_DATA_TYPES,
   canChangeType,
   canDeactivate,
+  hasDefaultValue,
   isPropEditable,
   isPropVisible,
+  isRelationTarget,
   typeSettings,
 } from './fieldSettings';
 import type { FieldProp } from './fieldSettings';
@@ -40,7 +42,7 @@ describe('typeSettings', () => {
       boolean: [],
       select: ['options'],
       multi_select: ['options'],
-      relation: [],
+      relation: ['relation_entity'],
       file: [],
       formula: [],
     };
@@ -109,5 +111,21 @@ describe('field actions', () => {
     expect(canChangeType(inactive)).toBe(false);
     expect(canDeactivate(inactive)).toBe(false);
     expect(canChangeType(fieldDef({ data_type: 'formula' }))).toBe(false);
+  });
+});
+
+describe('relation and file settings', () => {
+  it('relation_and_file_have_no_default_value', () => {
+    expect(hasDefaultValue('text')).toBe(true);
+    expect(hasDefaultValue('relation')).toBe(false);
+    expect(hasDefaultValue('file')).toBe(false);
+  });
+
+  it('relation_target_must_be_active_custom_master_or_document', () => {
+    expect(isRelationTarget(REPAIR)).toBe(true);
+    expect(isRelationTarget({ ...REPAIR, kind: 'document' })).toBe(true);
+    expect(isRelationTarget({ ...REPAIR, kind: 'detail' })).toBe(false);
+    expect(isRelationTarget({ ...REPAIR, is_active: false })).toBe(false);
+    expect(isRelationTarget({ ...REPAIR, storage: 'table' })).toBe(false);
   });
 });

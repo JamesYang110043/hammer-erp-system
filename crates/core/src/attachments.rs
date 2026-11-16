@@ -6,6 +6,7 @@
 //! - 綁定（新增、修改資料時，在 [`crate::records`] 的 transaction 內）：
 //!   [`prepare_file_changes`] 檢查並鎖定附件 → 寫入資料 → [`apply_file_changes`] 綁定新附件、
 //!   把被換掉的舊附件標記為刪除
+//! - 資料回應：[`attach_files`] 填入 [`Record::attachments`]（檔名、大小等，供列表與表單顯示）
 //! - 清理：[`cleanup_unbound`] 刪除未綁定超過 [`UNBOUND_RETENTION_HOURS`] 小時的附件（資料列與檔案）
 //!
 //! # 磁碟
@@ -25,7 +26,7 @@
 //! | 欄位值被換掉或清空 | `delete` | `before`：原本綁定的位置 |
 //! | 清理未綁定的附件 | `delete` | `before`：檔名等資訊；操作者為 `null` |
 //!
-//! 純邏輯（[`changed_files`]、[`check_file_targets`]、[`format_size`]）有單元測試；存取資料庫與磁碟的
+//! 純邏輯（[`changed_files`]、[`check_file_targets`]、[`file_values`]、[`format_size`]）有單元測試；存取資料庫與磁碟的
 //! 部分由 `crates/server/tests/attachments_api.rs` 的整合測試涵蓋。
 
 use std::collections::{HashMap, HashSet};
@@ -34,10 +35,11 @@ use std::time::SystemTime;
 
 use hammer_db::DbError;
 use hammer_db::attachment::{self as db, AttachmentRow, NewAttachment};
-use hammer_db::sqlx::{PgPool, PgTransaction};
+use hammer_db::sqlx::{PgConnection, PgPool, PgTransaction};
 use hammer_shared::attachment::{
     Attachment, UNBOUND_RETENTION_HOURS, normalize_mime_type, sanitize_file_name,
 };
+use hammer_shared::record::Record;
 use hammer_shared::schema::{DataType, FieldDefinition};
 use hammer_shared::{Id, audit as action, new_id, permission};
 use serde_json::{Map, Value, json};
@@ -598,6 +600,58 @@ async fn remove_old_temp_files(dir: &Path, cutoff: SystemTime) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// 資料回應
+// ---------------------------------------------------------------------------
+
+/// `data` 中每個有值的 `file` 欄位（含已停用的欄位），依 `fields` 的順序。值不是 UUID 的略過
+/// （讀取時不因資料庫內容不一致而失敗）。
+pub fn file_values(fields: &[FieldDefinition], data: &Map<String, Value>) -> Vec<FileValue> {
+    fields
+        .iter()
+        .filter(|f| f.data_type == DataType::File)
+        .filter_map(|f| {
+            let id = Id::try_parse(data.get(&f.field_key)?.as_str()?).ok()?;
+            Some(FileValue {
+                field_key: f.field_key.clone(),
+                id,
+            })
+        })
+        .collect()
+}
+
+/// 依 `fields`（資料所屬資料類別的欄位定義）填入每筆資料的 [`Record::attachments`]。
+///
+/// 一次查詢所有資料的附件；找不到（已標記刪除）的附件不列出。
+pub async fn attach_files(
+    conn: &mut PgConnection,
+    fields: &[FieldDefinition],
+    records: &mut [Record],
+) -> Result<(), CoreError> {
+    let per_record: Vec<Vec<FileValue>> = records
+        .iter()
+        .map(|r| file_values(fields, &r.data))
+        .collect();
+    let mut ids: Vec<Id> = per_record.iter().flatten().map(|v| v.id).collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    ids.sort();
+    ids.dedup();
+    let found: HashMap<Id, Attachment> = db::find_attachments_by_ids(&mut *conn, &ids)
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.id, attachment_from_row(row)?)))
+        .collect::<Result<_, CoreError>>()?;
+    for (record, values) in records.iter_mut().zip(per_record) {
+        record.attachments = values
+            .into_iter()
+            .filter_map(|v| Some((v.field_key, found.get(&v.id)?.clone())))
+            .collect();
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // 共用
 // ---------------------------------------------------------------------------
 
@@ -697,6 +751,40 @@ mod tests {
 
     fn obj(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn file_values_lists_file_fields_with_values() {
+        let (a, b) = (new_id(), new_id());
+        let mut inactive = field("old", DataType::File);
+        inactive.is_active = false;
+        let fields = [
+            field("name", DataType::Text),
+            field("photo", DataType::File),
+            field("empty", DataType::File),
+            field("broken", DataType::File),
+            inactive,
+        ];
+        let data = obj(json!({
+            "name": a.to_string(),
+            "photo": a.to_string(),
+            "broken": "not-a-uuid",
+            "old": b.to_string(),
+        }));
+        assert_eq!(
+            file_values(&fields, &data),
+            [
+                FileValue {
+                    field_key: "photo".into(),
+                    id: a,
+                },
+                FileValue {
+                    field_key: "old".into(),
+                    id: b,
+                },
+            ]
+        );
+        assert!(file_values(&fields, &Map::new()).is_empty());
     }
 
     fn id(n: u128) -> Id {

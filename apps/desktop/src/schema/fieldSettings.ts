@@ -1,4 +1,4 @@
-import type { DataType, FieldDefinition } from '../bindings';
+import type { DataType, EntityDefinition, FieldDefinition } from '../bindings';
 
 /** 資料型態的顯示名稱（docs/architecture.md §7.3）。 */
 export const DATA_TYPE_LABELS: Record<DataType, string> = {
@@ -18,9 +18,9 @@ export const DATA_TYPE_LABELS: Record<DataType, string> = {
 };
 
 /**
- * 目前可以建立、可以轉換成的型態。
+ * 可以轉換成的型態（「變更型態」的目標）。
  *
- * `relation`、`file`（M2b）與 `formula`（M2c）尚未支援，與 `DataType::is_value_supported` 相同。
+ * `relation`、`file` 不能由其他型態轉換而來（docs/architecture.md §7.4）；`formula`（M2c）尚未支援。
  */
 export const SUPPORTED_DATA_TYPES: readonly DataType[] = [
   'text',
@@ -34,6 +34,17 @@ export const SUPPORTED_DATA_TYPES: readonly DataType[] = [
   'select',
   'multi_select',
 ];
+
+/**
+ * 可以建立欄位、在表單輸入、在列表篩選的型態：`formula`（M2c）以外的型態，
+ * 與 `DataType::is_value_supported` 相同。
+ */
+export const VALUE_DATA_TYPES: readonly DataType[] = [...SUPPORTED_DATA_TYPES, 'relation', 'file'];
+
+/** 可以設定預設值的型態：`relation`、`file` 不可設定（§7.3）。 */
+export function hasDefaultValue(dataType: DataType): boolean {
+  return dataType !== 'relation' && dataType !== 'file' && dataType !== 'formula';
+}
 
 /**
  * 小數位數上限，與 `hammer_core::schema::rules::MAX_DECIMAL_PLACES` 相同。
@@ -52,7 +63,9 @@ export type TypeSetting =
   /** 字元數上限：`text`、`long_text` */
   | 'max_length'
   /** 格式規則（正規表示式）：`text` */
-  | 'pattern';
+  | 'pattern'
+  /** 關聯的資料類別：`relation`（建立後不可修改） */
+  | 'relation_entity';
 
 /** 資料型態使用哪些設定（與 `hammer_core::schema::rules::validate_field_config` 的規則相同）。 */
 export function typeSettings(dataType: DataType): TypeSetting[] {
@@ -69,6 +82,8 @@ export function typeSettings(dataType: DataType): TypeSetting[] {
     case 'select':
     case 'multi_select':
       return ['options'];
+    case 'relation':
+      return ['relation_entity'];
     default:
       return [];
   }
@@ -142,4 +157,16 @@ export function canChangeType(field: FieldDefinition): boolean {
 /** 欄位可以停用（自訂、啟用中）。系統欄位不可停用（§7.2）。 */
 export function canDeactivate(field: FieldDefinition): boolean {
   return !field.is_system && field.is_active;
+}
+
+/**
+ * 關聯欄位可以指向的資料類別：自訂、有效、主檔或單據（不含明細子表），與伺服器
+ * `hammer_core::schema::rules::validate_relation_target` 相同；以伺服器檢查為準。
+ */
+export function isRelationTarget(entity: EntityDefinition): boolean {
+  return (
+    entity.storage === 'custom_records' &&
+    entity.is_active &&
+    (entity.kind === 'master' || entity.kind === 'document')
+  );
 }

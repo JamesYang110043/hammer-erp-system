@@ -55,7 +55,7 @@ use std::collections::BTreeMap;
 use time::OffsetDateTime;
 
 use crate::CoreError;
-use crate::attachments::{FileChanges, apply_file_changes, prepare_file_changes};
+use crate::attachments::{FileChanges, apply_file_changes, attach_files, prepare_file_changes};
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
 use crate::numbering::{NumberingPattern, numbering_date};
@@ -111,6 +111,7 @@ pub async fn list_records(
         .map(|row| record_from_row(row, &titles))
         .collect::<Result<Vec<_>, _>>()?;
     attach_relations(&mut conn, &fields, &mut items).await?;
+    attach_files(&mut conn, &fields, &mut items).await?;
     let total = u32::try_from(total).unwrap_or(u32::MAX);
     Ok(Page::new(items, total, page))
 }
@@ -696,8 +697,8 @@ fn renderer<'a>(entity: &EntityDefinition, fields: &'a [FieldDefinition]) -> Tit
     TitleRenderer::new(entity.title_template.as_deref(), fields)
 }
 
-/// 資料列轉成 API 回應，`title` 由 `titles` 產生；`relations` 為空，由
-/// [`attach_relations`] 填入。`data` 不是 JSON 物件時回傳 [`CoreError::Internal`]。
+/// 資料列轉成 API 回應，`title` 由 `titles` 產生；`relations`、`attachments` 為空，由
+/// [`attach_relations`]、[`attach_files`] 填入。`data` 不是 JSON 物件時回傳 [`CoreError::Internal`]。
 pub fn record_from_row(row: RecordRow, titles: &TitleRenderer<'_>) -> Result<Record, CoreError> {
     let Value::Object(data) = row.data else {
         return Err(CoreError::Internal(
@@ -710,6 +711,7 @@ pub fn record_from_row(row: RecordRow, titles: &TitleRenderer<'_>) -> Result<Rec
         record_no: row.record_no,
         data,
         relations: Default::default(),
+        attachments: Default::default(),
         lines: None,
         created_at: row.created_at,
         created_by: row.created_by,
@@ -846,7 +848,7 @@ async fn fetch_record(
     Ok(record)
 }
 
-/// 填入一筆資料的 [`Record::relations`]。
+/// 填入一筆資料的 [`Record::relations`] 與 [`Record::attachments`]。
 async fn with_relations(
     conn: &mut PgConnection,
     fields: &[FieldDefinition],
@@ -854,6 +856,7 @@ async fn with_relations(
 ) -> Result<Record, CoreError> {
     let mut records = [record];
     attach_relations(conn, fields, &mut records).await?;
+    attach_files(conn, fields, &mut records).await?;
     let [record] = records;
     Ok(record)
 }
@@ -1239,6 +1242,7 @@ async fn fetch_lines(
             .map(|r| record_from_row(r.clone().into_record_row(), &titles))
             .collect::<Result<Vec<_>, _>>()?;
         attach_relations(conn, &detail.fields, &mut lines).await?;
+        attach_files(conn, &detail.fields, &mut lines).await?;
         out.insert(detail.entity.key.clone(), lines);
     }
     Ok(out)

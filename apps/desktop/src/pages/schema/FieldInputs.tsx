@@ -1,9 +1,10 @@
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, DatePicker, Form, Input, InputNumber, Select, Space } from 'antd';
 
+import { useEntities } from '../../api/schema';
 import type { DataType } from '../../bindings';
 import type { OptionFormValue } from '../../schema/fieldForm';
-import { MAX_DECIMAL_PLACES, typeSettings } from '../../schema/fieldSettings';
+import { MAX_DECIMAL_PLACES, isRelationTarget, typeSettings } from '../../schema/fieldSettings';
 
 /** 選項標籤可用的顏色（Ant Design Tag 的預設顏色）。 */
 const OPTION_COLORS = [
@@ -25,13 +26,19 @@ const OPTION_COLORS = [
 export function TypeSettingsFields({
   dataType,
   disabled = false,
+  relationLocked = false,
 }: {
   dataType: DataType;
   disabled?: boolean;
+  /** 關聯的資料類別不可修改（編輯既有欄位）。 */
+  relationLocked?: boolean;
 }) {
   const settings = typeSettings(dataType);
   return (
     <>
+      {settings.includes('relation_entity') && (
+        <RelationTargetField disabled={disabled || relationLocked} />
+      )}
       {settings.includes('decimal_places') && (
         <Form.Item
           label="小數位數"
@@ -67,6 +74,30 @@ export function TypeSettingsFields({
         </Form.Item>
       )}
     </>
+  );
+}
+
+/** 關聯的資料類別（`relation_entity_id`）。建立後不可修改。 */
+function RelationTargetField({ disabled }: { disabled: boolean }) {
+  const entities = useEntities();
+  return (
+    <Form.Item
+      label="關聯的資料類別"
+      name="relation_entity_id"
+      rules={[{ required: true, message: '請選擇關聯的資料類別' }]}
+      extra={disabled ? undefined : '建立後不可修改'}
+    >
+      <Select
+        disabled={disabled}
+        loading={entities.isLoading}
+        placeholder="選擇資料類別"
+        showSearch
+        optionFilterProp="label"
+        options={(entities.data ?? [])
+          .filter(isRelationTarget)
+          .map((e) => ({ value: e.id, label: e.label }))}
+      />
+    </Form.Item>
   );
 }
 

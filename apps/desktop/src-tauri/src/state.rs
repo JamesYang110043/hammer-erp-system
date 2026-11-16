@@ -1,9 +1,10 @@
 //! Tauri 管理的全域狀態。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{PoisonError, RwLock};
 
 use hammer_shared::Id;
+use hammer_shared::attachment::Attachment;
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
 use hammer_shared::layout::{
@@ -12,7 +13,8 @@ use hammer_shared::layout::{
 };
 use hammer_shared::pagination::Page;
 use hammer_shared::record::{
-    CreateRecordRequest, DeleteRecordQuery, Record, RecordListQuery, UpdateRecordRequest,
+    CreateRecordRequest, DeleteRecordQuery, LookupItem, LookupQuery, Record, RecordListQuery,
+    UpdateRecordRequest,
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
@@ -23,10 +25,26 @@ use hammer_shared::user::{
     CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
 };
 
-use crate::api_client::ApiClient;
+use serde::Serialize;
+use specta::Type;
+
+use crate::api_client::{ApiClient, UploadFile, progress_body};
 use crate::error::ClientError;
 use crate::settings::Settings;
 use crate::token_store::TokenStore;
+
+/// 上傳附件的進度（[`AppState::upload_attachment`]），送給前端顯示。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub struct UploadProgress {
+    /// 檔名（不含路徑）。
+    pub file_name: String,
+    /// 已送出的位元組數。
+    #[specta(type = f64)]
+    pub sent_bytes: u64,
+    /// 檔案大小。
+    #[specta(type = f64)]
+    pub total_bytes: u64,
+}
 
 pub struct AppState {
     pub client: ApiClient,
@@ -363,6 +381,64 @@ impl AppState {
             client.delete_layout(url, token, key, id, query).await
         })
         .await
+    }
+
+    /// 關聯欄位的選擇器搜尋。
+    pub async fn lookup_records(
+        &self,
+        key: &str,
+        query: &LookupQuery,
+    ) -> Result<Vec<LookupItem>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.lookup_records(url, token, key, query).await
+        })
+        .await
+    }
+
+    /// 上傳本機檔案 `path`。開始時與每送出一段內容呼叫一次 `on_progress`。
+    ///
+    /// 檔案無法讀取（不存在、是資料夾、沒有權限）→ [`ClientError::Storage`]，不送出請求。
+    pub async fn upload_attachment(
+        &self,
+        path: &Path,
+        on_progress: impl Fn(UploadProgress) + Send + Sync + 'static,
+    ) -> Result<Attachment, ClientError> {
+        let read_error = |err: std::io::Error| ClientError::storage(format!("無法讀取檔案：{err}"));
+        let file = std::fs::File::open(path).map_err(read_error)?;
+        let metadata = file.metadata().map_err(read_error)?;
+        if !metadata.is_file() {
+            return Err(ClientError::storage("無法讀取檔案：請選擇檔案，不是資料夾"));
+        }
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let total_bytes = metadata.len();
+        let progress = move |sent_bytes| UploadProgress {
+            file_name: file_name.clone(),
+            sent_bytes,
+            total_bytes,
+        };
+        on_progress(progress(0));
+        let upload = UploadFile {
+            file_name: progress(0).file_name,
+            mime_type: mime_guess::from_path(path).first_raw().map(str::to_owned),
+            size_bytes: total_bytes,
+            body: progress_body(file, move |sent| on_progress(progress(sent))),
+        };
+        self.with_token(async |client, url, token| {
+            client.upload_attachment(url, token, upload).await
+        })
+        .await
+    }
+
+    /// 下載附件並寫入 `dest`（已存在時覆蓋）。
+    pub async fn download_attachment(&self, id: Id, dest: &Path) -> Result<(), ClientError> {
+        let content = self
+            .with_token(async |client, url, token| client.download_attachment(url, token, id).await)
+            .await?;
+        std::fs::write(dest, content)
+            .map_err(|err| ClientError::storage(format!("無法儲存檔案：{err}")))
     }
 
     /// 以目前的 token 呼叫需要登入的 API。

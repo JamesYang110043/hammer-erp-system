@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { commands } from '../bindings';
+import { LOOKUP_DEFAULT_LIMIT, commands } from '../bindings';
 import type {
   CreateRecordRequest_Deserialize as CreateRecordRequest,
   CreateViewLayoutRequest_Deserialize as CreateViewLayoutRequest,
@@ -43,6 +43,23 @@ export function useRecord(entityKey: string, id: string | undefined) {
     // 表單開啟期間不自動重新取得；有衝突時由使用者決定是否重新載入
     staleTime: Infinity,
     refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * 關聯欄位的選擇器搜尋：`entityKey` 中標題符合 `q` 的未刪除資料（每個詞都要出現、不分大小寫），
+ * 由新到舊，最多 {@link LOOKUP_DEFAULT_LIMIT} 筆。`q` 為空字串時回傳最新的資料。
+ *
+ * `enabled` 為 `false` 時不查詢（例如下拉選單還沒打開）。
+ */
+export function useLookupRecords(entityKey: string | undefined, q: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['lookup', entityKey ?? '', q] as const,
+    queryFn: () =>
+      unwrap(commands.lookupRecords(entityKey!, { q: q || null, limit: LOOKUP_DEFAULT_LIMIT })),
+    enabled: enabled && entityKey !== undefined,
+    // 輸入下一個字時保留上一次的結果，避免選單閃爍
+    placeholderData: keepPreviousData,
   });
 }
 
