@@ -4,8 +4,13 @@
 //! - 計算：[`evaluate`] 依呼叫端提供的 [`Environment`] 算出 [`Value`]；[`to_storage`] 依
 //!   `formula_result_type` 轉成 §7.3 的 JSON 存值；[`compute`] 兩者合一。
 //!
-//! 相依分析與型別檢查尚未實作。本 crate 只依賴 `hammer-shared`（§4），不讀取資料庫：
-//! 伺服器（`crates/core`）與桌面端各自實作 [`Environment`]。
+//! - 相依分析：[`dependencies`] 取出公式引用的欄位（`formula_deps`，[`deps_to_json`]）；
+//!   [`calculation_order`] 檢查循環引用並回傳計算順序。
+//! - 型別檢查：[`check_formula`] 依呼叫端提供的欄位定義（[`TypeSchema`]）推斷結果型態，
+//!   檢查引用規則與 `formula_result_type`。
+//!
+//! 本 crate 只依賴 `hammer-shared`（§4），不讀取資料庫：伺服器（`crates/core`）與桌面端各自實作
+//! [`Environment`]、提供 [`TypeSchema`]。
 //!
 //! # 語法
 //!
@@ -95,24 +100,46 @@
 //! 除以零、型態不符、溢位、欄位不存在、存值格式錯誤時，[`evaluate`] 回傳 [`EvalError`]
 //! （訊息為繁體中文），公式的結果視為空值；計算不會 panic。[`compute`] 回傳的 [`Computed`]
 //! 同時帶有存值（失敗時為 `null`）與錯誤原因。
+//!
+//! # 定義公式時的檢查
+//!
+//! 儲存公式欄位時依序執行：
+//!
+//! 1. [`parse`]：語法
+//! 2. [`check_formula`]：型態與引用規則，錯誤以 [`TypeError`] 回傳（含字元位移）
+//!    - 型態規則與上面「計算」一節相同；另外 `IF` 的兩個分支、`COALESCE` 的所有參數型態必須相同
+//!    - `ROUND` 的小數位數是常數時，必須是 0 到 [`MAX_ROUND_DIGITS`] 的整數
+//!    - 明細子表的公式不能引用主表欄位，也不能使用子表彙總
+//!    - 子表彙總只能用於明細子表的欄位；`SUM`、`AVG`、`MIN`、`MAX` 只能用於數字欄位
+//! 3. [`dependencies`]：存入 `formula_deps`
+//! 4. [`calculation_order`]：與同一個資料類別（含明細子表）其他公式欄位一起檢查循環引用
+//!    （[`CycleError`] 帶循環路徑）；存檔時依回傳的順序計算，明細的公式先於主表
 
 mod ast;
+mod deps;
 mod env;
 mod error;
 mod eval;
+mod graph;
 mod lexer;
 mod parser;
 mod storage;
+mod typecheck;
 mod value;
 
 pub use ast::{AggregateFunc, Arity, BinaryOp, Expr, ExprKind, Function, Span, UnaryOp};
+pub use deps::{Dependency, dependencies, deps_from_json, deps_to_json};
 pub use env::{DetailColumn, Environment, FieldData, json_to_value};
 pub use error::{EvalError, ParseError, ParseErrorKind};
 pub use eval::{MAX_ROUND_DIGITS, evaluate};
+pub use graph::{CycleError, FieldRef, FormulaField, calculation_order};
 pub use parser::{MAX_DEPTH, MAX_FORMULA_LEN, parse};
 pub use storage::{Computed, compute, to_storage};
+pub use typecheck::{Scope, TypeError, TypeErrorKind, TypeSchema, check_formula, infer_type};
 pub use value::{Value, ValueKind};
 
+#[cfg(test)]
+mod analysis_tests;
 #[cfg(test)]
 mod eval_tests;
 #[cfg(test)]
