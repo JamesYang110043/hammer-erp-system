@@ -1,7 +1,16 @@
-import { Checkbox, Space, Tag, Typography } from 'antd';
+import { ExclamationCircleOutlined } from '@ant-design/icons';
+import { Checkbox, Space, Tag, Tooltip, Typography } from 'antd';
 
 import type { FieldDefinition, Record as DataRecord } from '../../bindings';
-import { DELETED_SUFFIX, findOption, formatFieldText, relationLabel } from '../../records/display';
+import {
+  DELETED_SUFFIX,
+  FORMULA_PENDING_TEXT,
+  findOption,
+  formatFieldText,
+  formulaErrorLabel,
+  relationLabel,
+  valueField,
+} from '../../records/display';
 import { AttachmentLink } from './AttachmentLink';
 import { MISSING_ATTACHMENT_TEXT } from './FileInput';
 
@@ -17,6 +26,7 @@ function OptionTag({ field, value }: { field: FieldDefinition; value: string }) 
  * - 單選、多選：選項顏色標籤
  * - 關聯：關聯資料的標題（`record.relations`），已刪除時加上「（已刪除）」
  * - 附件：檔名（`record.attachments`），點擊下載
+ * - 公式：依結果型態顯示；`record.formula_errors` 有該欄位時加上錯誤圖示（見 {@link FormulaValue}）
  * - 其他：見 {@link formatFieldText}（金額千分位、日期時間為台北時間）
  */
 export function FieldValue({
@@ -29,6 +39,11 @@ export function FieldValue({
   /** 值所屬的資料（關聯、附件的顯示資訊）。 */
   record?: DataRecord;
 }) {
+  if (field.data_type === 'formula') {
+    return (
+      <FormulaValue field={field} value={value} error={record?.formula_errors?.[field.field_key]} />
+    );
+  }
   if (value === null || value === undefined || value === '') {
     if (field.data_type === 'boolean') {
       return <Checkbox checked={false} disabled aria-label={field.label} />;
@@ -69,4 +84,36 @@ export function FieldValue({
     default:
       return <>{formatFieldText(field, value)}</>;
   }
+}
+
+/**
+ * 公式欄位的值（唯讀）：依 `formula_result_type` 格式化。
+ *
+ * - `error`：計算錯誤的原因，顯示錯誤圖示，滑鼠移上去顯示原因（值為空值）
+ * - `pending`：值要存檔後才會更新，加上「存檔後更新」標示
+ */
+export function FormulaValue({
+  field,
+  value,
+  error,
+  pending = false,
+}: {
+  field: FieldDefinition;
+  value: unknown;
+  error?: string | null;
+  pending?: boolean;
+}) {
+  return (
+    <Space size={4}>
+      <FieldValue field={valueField(field)} value={value} />
+      {error && (
+        <Tooltip title={error}>
+          <Typography.Text type="danger">
+            <ExclamationCircleOutlined aria-label={formulaErrorLabel(error)} />
+          </Typography.Text>
+        </Tooltip>
+      )}
+      {pending && <Tag>{FORMULA_PENDING_TEXT}</Tag>}
+    </Space>
+  );
 }

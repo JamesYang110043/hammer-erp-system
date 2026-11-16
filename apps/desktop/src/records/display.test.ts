@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { fieldDef } from '../test/schemaFixtures';
-import { formatDecimal, formatFieldText, groupThousands, relationLabel } from './display';
+import {
+  formatDecimal,
+  formatFieldText,
+  groupThousands,
+  isNumericType,
+  relationLabel,
+  valueField,
+} from './display';
 
 describe('groupThousands', () => {
   it.each([
@@ -54,5 +61,28 @@ describe('relationLabel', () => {
     expect(relationLabel({ title: '冷氣 A', deleted: false })).toBe('冷氣 A');
     expect(relationLabel({ title: '冷氣 A', deleted: true })).toBe('冷氣 A（已刪除）');
     expect(relationLabel({ title: '', deleted: true })).toBe('（已刪除）');
+  });
+});
+
+describe('公式欄位', () => {
+  const money = fieldDef({
+    data_type: 'formula',
+    formula_result_type: 'money',
+    decimal_places: 2,
+  });
+
+  it('formats_by_result_type', () => {
+    expect(formatFieldText(money, '1234.5')).toBe('1,234.50');
+    expect(
+      formatFieldText(fieldDef({ data_type: 'formula', formula_result_type: 'boolean' }), true),
+    ).toBe('是');
+    expect(isNumericType(money)).toBe(true);
+  });
+
+  it('value_field_replaces_type_only_for_formula', () => {
+    expect(valueField(money).data_type).toBe('money');
+    expect(valueField(fieldDef({ data_type: 'formula' })).data_type).toBe('text');
+    const text = fieldDef();
+    expect(valueField(text)).toBe(text);
   });
 });
