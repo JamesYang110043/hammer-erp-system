@@ -52,12 +52,24 @@ export const commands = {
 	deleteUser: (id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_user", { id, version })),
 	/**  查詢操作紀錄（需要 `audit.read`）。 */
 	listAuditLogs: (query: AuditLogQuery_Deserialize) => typedError<Page<AuditLogEntry_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_audit_logs", { query })),
-	/**  資料類別列表（有效的資料類別）。 */
+	/**  資料類別列表（啟用中的資料類別，選單用）。 */
 	listEntities: () => typedError<EntityDefinition_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_entities")),
+	/**  資料類別列表，含已停用的資料類別（管理畫面用，需要 `schema.manage`）。 */
+	listAllEntities: () => typedError<EntityDefinition_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_all_entities")),
 	/**  資料類別與其所有欄位定義（含已停用），欄位依排序。 */
 	getEntity: (key: string) => typedError<EntityDetail_Serialize, ClientError_Serialize>(__TAURI_INVOKE("get_entity", { key })),
-	/**  新增自訂資料類別（需要 `schema.manage`）。M2a 只能建立主檔。 */
+	/**  新增自訂資料類別（需要 `schema.manage`）：主檔、單據或明細子表。 */
 	createEntity: (req: CreateEntityRequest_Deserialize) => typedError<EntityDetail_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_entity", { req })),
+	/**  修改資料類別，含停用與重新啟用（需要 `schema.manage`）。`req.version` 不符時回傳 `409 CONFLICT`。 */
+	updateEntity: (key: string, req: UpdateEntityRequest_Deserialize) => typedError<EntityDetail_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_entity", { key, req })),
+	/**  調整資料類別的選單排序（需要 `schema.manage`）。任一筆版本不符時整批不寫入。 */
+	reorderEntities: (req: ReorderEntitiesRequest) => typedError<EntityDefinition_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("reorder_entities", { req })),
+	/**
+	 *  刪除自訂資料類別（軟刪除，需要 `schema.manage`）；明細子表一起刪除。
+	 * 
+	 *  被其他資料類別的關聯欄位引用時回傳 `422 VALIDATION`，`details.fields` 列出這些欄位。
+	 */
+	deleteEntity: (key: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_entity", { key, version })),
 	/**  新增欄位（需要 `schema.manage`）。 */
 	createField: (key: string, req: CreateFieldRequest_Deserialize) => typedError<FieldDefinition_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_field", { key, req })),
 	/**  修改欄位（需要 `schema.manage`）。`req.version` 不符時回傳 `409 CONFLICT`。 */
@@ -868,6 +880,15 @@ export type EntityKind =
 /**  明細子表。 */
 "detail";
 
+/**  [`ReorderEntitiesRequest`] 的一個資料類別。 */
+export type EntityOrderItem = {
+	key: string,
+	/**  讀取時取得的版本號。 */
+	version: number,
+	/**  新的選單排序。 */
+	sort_order: number,
+};
+
 /**  資料類別的儲存方式。對應 `entity_definitions.storage`。 */
 export type EntityStorage = 
 /**  系統資料表。 */
@@ -1347,6 +1368,19 @@ export type RelationRef = {
 	title: string,
 	/**  目標資料已刪除（或找不到）。 */
 	deleted: boolean,
+};
+
+/**
+ *  一次調整多個資料類別的選單排序（`sort_order`）。
+ * 
+ *  只需列出要調整的資料類別（不必列出全部），每個代碼最多出現一次；系統資料類別也可以調整。
+ *  只有排序改變的資料類別會更新（遞增 `version`）與留紀錄。
+ * 
+ *  錯誤：代碼不存在（含已刪除）或重複 → `422 VALIDATION`，`details.field` 為 `entities`；
+ *  任一個的 `version` 不符 → `409 CONFLICT`，整批不寫入。
+ */
+export type ReorderEntitiesRequest = {
+	entities: EntityOrderItem[],
 };
 
 /**

@@ -56,8 +56,12 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::delete_user,
             commands::list_audit_logs,
             commands::list_entities,
+            commands::list_all_entities,
             commands::get_entity,
             commands::create_entity,
+            commands::update_entity,
+            commands::reorder_entities,
+            commands::delete_entity,
             commands::create_field,
             commands::update_field,
             commands::deactivate_field,
@@ -117,6 +121,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::schema::EntityDetail>()
         .typ::<hammer_shared::schema::ReorderFieldsRequest>()
         .typ::<hammer_shared::schema::FieldOrderItem>()
+        .typ::<hammer_shared::schema::ReorderEntitiesRequest>()
+        .typ::<hammer_shared::schema::EntityOrderItem>()
         // 自訂資料類別的資料
         .typ::<hammer_shared::record::Record>()
         .typ::<hammer_shared::record::FilterOp>()

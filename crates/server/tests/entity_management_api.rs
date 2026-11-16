@@ -375,6 +375,65 @@ async fn update_deactivate_and_reactivate(pool: PgPool) {
     create_record(&pool, &token, "repair_order", json!({ "data": {} })).await;
 }
 
+/// `include_inactive=true` 列出已停用的資料類別（管理畫面用），不列出已刪除的；
+/// 沒有 `schema.manage` 時回傳 403。
+#[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
+async fn list_entities_including_inactive(pool: PgPool) {
+    let token = admin(&pool).await;
+    let active = create_master(&pool, &token, "active_one").await;
+    let inactive = create_master(&pool, &token, "inactive_one").await;
+    let deleted = create_master(&pool, &token, "deleted_one").await;
+    let (status, body) =
+        patch_entity(&pool, &token, &inactive, json!({ "is_active": false })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = delete_entity(&pool, &token, "deleted_one", deleted.version).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let keys = |body: &Value| -> Vec<String> {
+        body.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["key"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    for uri in [
+        "/api/v1/entities",
+        "/api/v1/entities?include_inactive=false",
+    ] {
+        let (status, body) = call(&pool, Method::GET, uri, &token, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(keys(&body), [active.key.as_str()], "{uri}");
+    }
+    let (status, body) = call(
+        &pool,
+        Method::GET,
+        "/api/v1/entities?include_inactive=true",
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let all: Vec<EntityDefinition> = serde_json::from_value(body).unwrap();
+    let listed: Vec<(&str, bool)> = all.iter().map(|e| (e.key.as_str(), e.is_active)).collect();
+    assert_eq!(listed, [("active_one", true), ("inactive_one", false)]);
+
+    for (name, role) in [("editor", role::EDITOR), ("viewer", role::VIEWER)] {
+        let other = token_for(&pool, name, role).await;
+        let (status, body) = call(&pool, Method::GET, "/api/v1/entities", &other, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = call(
+            &pool,
+            Method::GET,
+            "/api/v1/entities?include_inactive=true",
+            &other,
+            None,
+        )
+        .await;
+        let err = assert_error(status, &body, ErrorCode::Forbidden);
+        assert_eq!(err.details, Some(json!({ "permission": "schema.manage" })));
+    }
+}
+
 /// 系統資料類別不可停用、不可刪除，但可以調整排序。
 #[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
 async fn system_entity_cannot_be_deactivated_or_deleted(pool: PgPool) {

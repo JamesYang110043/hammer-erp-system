@@ -1,6 +1,6 @@
 //! 客製化模組的資料類別與欄位定義存取（docs/architecture.md §7、§8.5）。
 //!
-//! - `entity_definitions`：[`list_active_entities`]、[`find_entity_by_key`]、[`find_entity_by_id`]、
+//! - `entity_definitions`：[`list_entities`]、[`find_entity_by_key`]、[`find_entity_by_id`]、
 //!   [`find_entity_by_key_for_update`]、[`find_entity_by_id_for_share`]、[`list_detail_entities`]、[`list_detail_entities_for_share`]、
 //!   [`list_entities_by_keys_for_update`]、[`list_detail_entities_for_update`]、
 //!   [`insert_entity`]、[`update_entity`]、[`update_entity_sort_order`]、[`soft_delete_entity`]、
@@ -51,9 +51,11 @@ pub struct EntityRow {
     pub version: i32,
 }
 
-/// 列出有效（啟用、未刪除）的資料類別，依 `sort_order`、`id` 排序。
-pub async fn list_active_entities<'e>(
+/// 列出未刪除的資料類別，依 `sort_order`、`id` 排序。
+/// `include_inactive` 為 `false` 時只列出啟用中的資料類別。
+pub async fn list_entities<'e>(
     executor: impl PgExecutor<'e>,
+    include_inactive: bool,
 ) -> Result<Vec<EntityRow>, DbError> {
     let rows = sqlx::query_as!(
         EntityRow,
@@ -62,9 +64,10 @@ pub async fn list_active_entities<'e>(
                numbering_pattern, title_template, sort_order, is_active,
                created_at, updated_at, version
         FROM entity_definitions
-        WHERE is_active AND deleted_at IS NULL
+        WHERE ($1 OR is_active) AND deleted_at IS NULL
         ORDER BY sort_order, id
         "#,
+        include_inactive,
     )
     .fetch_all(executor)
     .await?;

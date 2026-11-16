@@ -66,3 +66,24 @@ export function duplicateValues(
 export function formatValue(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
+
+/** 引用資料類別的關聯欄位（刪除被拒絕時 `422 VALIDATION` 的 `details.fields`）。 */
+export interface ReferencingField {
+  entity_key: string;
+  entity_label: string;
+  field_key: string;
+  field_label: string;
+}
+
+/**
+ * 刪除資料類別被拒絕時，引用它的關聯欄位（`hammer_shared::schema::DeleteEntityQuery`）：
+ * `details` 為 `{ field: "relation_entity_id", fields: [{ entity_key, entity_label, field_key, field_label }] }`。
+ * 不是這種錯誤時回傳 `undefined`。
+ */
+export function referencingFields(err: unknown): ReferencingField[] | undefined {
+  const details = validationDetails(err);
+  if (details?.field !== 'relation_entity_id' || !Array.isArray(details.fields)) {
+    return undefined;
+  }
+  return details.fields as ReferencingField[];
+}

@@ -1,12 +1,13 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { App } from '../../App';
 import { CONFLICT_MESSAGE } from '../../api/errors';
 import type { FieldDefinition } from '../../bindings';
 import { KEY_MESSAGES } from '../../schema/keyRules';
 import { ADMIN, startupCommands } from '../../test/fixtures';
+import { dragDownOneRow } from '../../test/dnd';
 import { commandError, mockCommands } from '../../test/ipc';
 import type { CommandHandler } from '../../test/ipc';
 import { renderWithProviders } from '../../test/render';
@@ -63,39 +64,6 @@ async function chooseOption(
 
 function validationError(details: unknown, message = '驗證失敗') {
   return commandError({ kind: 'api', code: 'VALIDATION', message, details });
-}
-
-/**
- * jsdom 沒有版面，元素尺寸都是 0，dnd-kit 無法判斷「下一列」在哪裡。
- * 依表格列在 DOM 中的順序給每一列（與其中的元素）不同的位置，每列高 40px。
- */
-function layoutTableRows() {
-  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
-    const row = this.closest('tr[data-row-key]');
-    const rows = row ? [...document.querySelectorAll('tr[data-row-key]')] : [];
-    const top = row ? rows.indexOf(row) * 40 : 0;
-    const height = row ? 40 : 0;
-    return {
-      x: 0,
-      y: top,
-      top,
-      left: 0,
-      right: 800,
-      bottom: top + height,
-      width: 800,
-      height,
-      toJSON: () => ({}),
-    } as DOMRect;
-  });
-}
-
-/** 以鍵盤拖曳：空白鍵拿起、方向鍵往下移一列、空白鍵放下（dnd-kit 的鍵盤操作）。 */
-async function dragDownOneRow(user: ReturnType<typeof userEvent.setup>, label: string) {
-  layoutTableRows();
-  screen.getByRole('button', { name: `拖曳調整「${label}」的排序` }).focus();
-  await user.keyboard(' ');
-  await user.keyboard('{ArrowDown}');
-  await user.keyboard(' ');
 }
 
 describe('欄位定義頁', () => {
@@ -528,5 +496,78 @@ describe('欄位定義頁', () => {
     await rowOf('record_no');
     await dragDownOneRow(user, '單號');
     expect(await screen.findByText(CONFLICT_MESSAGE)).toBeInTheDocument();
+  });
+});
+
+describe('明細子表', () => {
+  const LINES = {
+    ...REPAIR,
+    id: 'entity-repair-lines',
+    key: 'repair_lines',
+    label: '維修明細',
+    kind: 'detail' as const,
+    parent_entity_id: REPAIR.id,
+    is_active: false,
+  };
+
+  it('lists_and_creates_detail_entities', async () => {
+    const created = { ...LINES, id: 'entity-parts', key: 'parts', label: '更換零件' };
+    let all = [REPAIR, LINES];
+    const invoke = renderFieldsPage({
+      list_all_entities: () => all,
+      create_entity: () => {
+        all = [...all, created];
+        return { entity: created, fields: [] };
+      },
+    });
+    const user = userEvent.setup();
+    const card = within(
+      (
+        await screen.findByText(
+          'repair_lines',
+          { selector: 'td code' },
+          { timeout: PAGE_LOAD_TIMEOUT },
+        )
+      ).closest('.ant-card')! as HTMLElement,
+    );
+    expect(card.getByText('已停用')).toBeInTheDocument();
+    expect(card.getByRole('button', { name: '啟用' })).toBeInTheDocument();
+
+    await user.click(card.getByRole('button', { name: /新增明細子表/ }));
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByText('新增明細子表：維修單')).toBeInTheDocument();
+    // 明細子表不可設定單號規則
+    expect(dialog.queryByLabelText('單號規則')).not.toBeInTheDocument();
+    await user.type(dialog.getByLabelText('代碼'), 'parts');
+    await user.type(dialog.getByLabelText('名稱'), '更換零件');
+    await user.click(dialog.getByRole('button', { name: /建\s*立/ }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('create_entity', {
+        req: {
+          key: 'parts',
+          label: '更換零件',
+          icon: null,
+          kind: 'detail',
+          parent_entity_id: REPAIR.id,
+          numbering_pattern: null,
+          title_template: null,
+          sort_order: 1,
+        },
+      }),
+    );
+    await waitFor(() => expect(window.location.hash).toBe('#/schema/parts'));
+  });
+
+  it('detail_page_returns_to_parent_without_detail_section', async () => {
+    renderFieldsPage({
+      list_all_entities: () => [REPAIR, LINES],
+      get_entity: () => ({ entity: LINES, fields: [CUSTOM_FIELD] }),
+    });
+    const user = userEvent.setup();
+    await rowOf('qty');
+    expect(screen.queryByText('新增明細子表')).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: '回到「維修單」' }));
+    await waitFor(() => expect(window.location.hash).toBe('#/schema/repair'));
   });
 });

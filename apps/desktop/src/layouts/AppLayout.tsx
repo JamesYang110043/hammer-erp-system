@@ -22,7 +22,7 @@ import {
   ENTITIES_PATH,
   ENTITY_MENU_AFTER,
   MODULES,
-  menuEntities,
+  menuEntityGroups,
 } from '../modules';
 import { entityIcon } from '../pages/schema/entityIcons';
 
@@ -44,11 +44,17 @@ export function AppLayout() {
   // 資料類別選單需要 `record.read`；新增或修改資料類別後（invalidate `entities`）自動更新
   const canReadRecords = can(PERMISSIONS.RECORD_READ);
   const entities = useEntities({ enabled: canReadRecords });
+  // 依種類分組（主檔、單據），組內依選單排序
   const entityItems: MenuItem[] = canReadRecords
-    ? menuEntities(entities.data ?? []).map((e) => ({
-        key: `${ENTITIES_PATH}/${e.key}`,
-        icon: entityIcon(e.icon),
-        label: e.label,
+    ? menuEntityGroups(entities.data ?? []).map((g) => ({
+        type: 'group',
+        key: `${ENTITIES_PATH}-${g.kind}`,
+        label: g.label,
+        children: g.entities.map((e) => ({
+          key: `${ENTITIES_PATH}/${e.key}`,
+          icon: entityIcon(e.icon),
+          label: e.label,
+        })),
       }))
     : [];
 

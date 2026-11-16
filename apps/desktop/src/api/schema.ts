@@ -8,6 +8,8 @@ import type {
   EntityDefinition,
   EntityDetail,
   FieldDefinition,
+  ReorderEntitiesRequest,
+  UpdateEntityRequest,
   UpdateFieldRequest,
 } from '../bindings';
 import { auditLogsKey } from './auditLogs';
@@ -16,12 +18,22 @@ import { unwrap } from './client';
 /** 資料類別與欄位定義（寫入需要 `schema.manage`，伺服器檢查）。 */
 export const entitiesKey = ['entities'] as const;
 const entityKey = (key: string) => [...entitiesKey, key] as const;
+/** 含已停用的資料類別列表。代碼只有小寫英文、數字與底線，不會與 {@link entityKey} 衝突。 */
+const allEntitiesKey = [...entitiesKey, { includeInactive: true }] as const;
 
 export function useEntities({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: entitiesKey,
     queryFn: () => unwrap(commands.listEntities()),
     enabled,
+  });
+}
+
+/** 所有資料類別（含已停用），依選單排序。管理畫面用，需要 `schema.manage`。 */
+export function useAllEntities() {
+  return useQuery({
+    queryKey: allEntitiesKey,
+    queryFn: () => unwrap(commands.listAllEntities()),
   });
 }
 
@@ -69,6 +81,25 @@ function useSchemaMutation<TVars, TData>(mutationFn: (vars: TVars) => Promise<TD
 
 export function useCreateEntity() {
   return useSchemaMutation((req: CreateEntityRequest) => unwrap(commands.createEntity(req)));
+}
+
+/** 修改資料類別（含停用、重新啟用）。 */
+export function useUpdateEntity() {
+  return useSchemaMutation(({ key, req }: { key: string; req: UpdateEntityRequest }) =>
+    unwrap(commands.updateEntity(key, req)),
+  );
+}
+
+/** 調整資料類別的選單排序（只需列出要調整的資料類別）。 */
+export function useReorderEntities() {
+  return useSchemaMutation((req: ReorderEntitiesRequest) => unwrap(commands.reorderEntities(req)));
+}
+
+/** 刪除資料類別（軟刪除）；明細子表一起刪除。 */
+export function useDeleteEntity() {
+  return useSchemaMutation((entity: EntityDefinition) =>
+    unwrap(commands.deleteEntity(entity.key, entity.version)),
+  );
 }
 
 export function useCreateField(key: string) {

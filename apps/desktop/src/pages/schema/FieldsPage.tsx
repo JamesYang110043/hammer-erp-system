@@ -1,82 +1,29 @@
-import { ArrowLeftOutlined, HolderOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { ArrowLeftOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { DragEndEvent } from '@dnd-kit/core';
-import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
-import {
-  SortableContext,
-  arrayMove,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { arrayMove } from '@dnd-kit/sortable';
 import { Alert, App, Button, Card, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
-import { createContext, useContext, useMemo, useState } from 'react';
-import type { CSSProperties, HTMLAttributes } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
 import { errorMessage } from '../../api/client';
 import { mutationErrorMessage } from '../../api/errors';
-import { useDeactivateField, useEntity, useReorderFields, useUpdateField } from '../../api/schema';
+import {
+  useAllEntities,
+  useDeactivateField,
+  useEntity,
+  useReorderFields,
+  useUpdateField,
+} from '../../api/schema';
 import type { FieldDefinition } from '../../bindings';
 import { toReactivateRequest } from '../../schema/fieldForm';
 import { DATA_TYPE_LABELS, canChangeType, canDeactivate } from '../../schema/fieldSettings';
 import { duplicateValues } from '../../schema/errorDetails';
 import { ChangeTypeModal } from './ChangeTypeModal';
+import { DetailEntitiesCard } from './DetailEntitiesCard';
 import { FieldFormModal } from './FieldFormModal';
 import type { FieldFormTarget } from './FieldFormModal';
-
-/** 拖曳把手需要的 listeners（由 {@link SortableRow} 提供給把手欄位）。 */
-const DragHandleContext = createContext<{
-  setActivatorNodeRef?: (el: HTMLElement | null) => void;
-  listeners?: ReturnType<typeof useSortable>['listeners'];
-  attributes?: ReturnType<typeof useSortable>['attributes'];
-}>({});
-
-function DragHandle({ label }: { label: string }) {
-  const { setActivatorNodeRef, listeners, attributes } = useContext(DragHandleContext);
-  return (
-    <Button
-      type="text"
-      size="small"
-      icon={<HolderOutlined />}
-      style={{ cursor: 'move' }}
-      ref={setActivatorNodeRef}
-      {...attributes}
-      {...listeners}
-      aria-label={`拖曳調整「${label}」的排序`}
-    />
-  );
-}
-
-/** 可拖曳的表格列（antd Table 的 `components.body.row`）。 */
-function SortableRow(props: HTMLAttributes<HTMLTableRowElement> & { 'data-row-key': string }) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    setActivatorNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: props['data-row-key'] });
-  const style: CSSProperties = {
-    ...props.style,
-    transform: CSS.Translate.toString(transform),
-    transition,
-    ...(isDragging ? { position: 'relative', zIndex: 10 } : {}),
-  };
-  const context = useMemo(
-    () => ({ setActivatorNodeRef, listeners, attributes }),
-    [setActivatorNodeRef, listeners, attributes],
-  );
-  return (
-    <DragHandleContext.Provider value={context}>
-      <tr {...props} ref={setNodeRef} style={style} />
-    </DragHandleContext.Provider>
-  );
-}
+import { DragHandle, SortableRow, SortableTableContext } from './sortableRows';
 
 /** 欄位的屬性標籤。 */
 function FieldTags({ field }: { field: FieldDefinition }) {
@@ -93,7 +40,11 @@ function FieldTags({ field }: { field: FieldDefinition }) {
   );
 }
 
-/** 欄位定義頁（需要 `schema.manage`）：欄位列表、拖曳排序、新增、編輯、停用、變更型態。 */
+/**
+ * 欄位定義頁（需要 `schema.manage`）：欄位列表、拖曳排序、新增、編輯、停用、變更型態。
+ *
+ * 自訂的主檔與單據另外顯示明細子表（{@link DetailEntitiesCard}）；明細子表的「返回」回到所屬的主表。
+ */
 export function FieldsPage() {
   const { key = '' } = useParams();
   const navigate = useNavigate();
@@ -104,13 +55,15 @@ export function FieldsPage() {
   const updateField = useUpdateField(key);
   const [formTarget, setFormTarget] = useState<FieldFormTarget>();
   const [changingType, setChangingType] = useState<FieldDefinition>();
+  const allEntities = useAllEntities();
+  const current = entity.data?.entity;
+  const parent =
+    current?.kind === 'detail'
+      ? allEntities.data?.find((e) => e.id === current.parent_entity_id)
+      : undefined;
+  const hasDetails = current?.storage === 'custom_records' && current.kind !== 'detail';
 
   const fields = useMemo(() => entity.data?.fields ?? [], [entity.data]);
-  const sensors = useSensors(
-    // 移動超過 4px 才算拖曳，避免點擊把手就觸發
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
 
   const showError = (err: unknown) => message.error(mutationErrorMessage(err));
 
@@ -208,51 +161,51 @@ export function FieldsPage() {
   const nextSortOrder = fields.reduce((max, f) => Math.max(max, f.sort_order + 1), 0);
 
   return (
-    <Card
-      title={
-        <Space>
-          <Button
-            type="text"
-            icon={<ArrowLeftOutlined />}
-            aria-label="回到資料類別列表"
-            onClick={() => navigate('/schema')}
+    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Card
+        title={
+          <Space>
+            <Button
+              type="text"
+              icon={<ArrowLeftOutlined />}
+              aria-label={parent ? `回到「${parent.label}」` : '回到資料類別列表'}
+              onClick={() => navigate(parent ? `/schema/${parent.key}` : '/schema')}
+            />
+            {entity.data ? `欄位定義：${entity.data.entity.label}` : '欄位定義'}
+          </Space>
+        }
+        extra={
+          <Space>
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => entity.refetch()}
+              loading={entity.isFetching}
+            >
+              重新整理
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setFormTarget('new')}
+              disabled={!entity.data}
+            >
+              新增欄位
+            </Button>
+          </Space>
+        }
+      >
+        {entity.isError && (
+          <Alert
+            showIcon
+            type="error"
+            message={errorMessage(entity.error)}
+            style={{ marginBottom: 16 }}
           />
-          {entity.data ? `欄位定義：${entity.data.entity.label}` : '欄位定義'}
-        </Space>
-      }
-      extra={
-        <Space>
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => entity.refetch()}
-            loading={entity.isFetching}
-          >
-            重新整理
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setFormTarget('new')}
-            disabled={!entity.data}
-          >
-            新增欄位
-          </Button>
-        </Space>
-      }
-    >
-      {entity.isError && (
-        <Alert
-          showIcon
-          type="error"
-          message={errorMessage(entity.error)}
-          style={{ marginBottom: 16 }}
-        />
-      )}
-      <Typography.Paragraph type="secondary">
-        拖曳左側把手調整欄位順序；停用的欄位資料會保留。
-      </Typography.Paragraph>
-      <DndContext sensors={sensors} modifiers={[restrictToVerticalAxis]} onDragEnd={onDragEnd}>
-        <SortableContext items={fields.map((f) => f.id)} strategy={verticalListSortingStrategy}>
+        )}
+        <Typography.Paragraph type="secondary">
+          拖曳左側把手調整欄位順序；停用的欄位資料會保留。
+        </Typography.Paragraph>
+        <SortableTableContext ids={fields.map((f) => f.id)} onDragEnd={onDragEnd}>
           <Table<FieldDefinition>
             rowKey="id"
             size="small"
@@ -262,19 +215,20 @@ export function FieldsPage() {
             loading={entity.isPending || reorder.isPending}
             pagination={false}
           />
-        </SortableContext>
-      </DndContext>
-      <FieldFormModal
-        entityKey={key}
-        target={formTarget}
-        nextSortOrder={nextSortOrder}
-        onClose={() => setFormTarget(undefined)}
-      />
-      <ChangeTypeModal
-        entityKey={key}
-        field={changingType}
-        onClose={() => setChangingType(undefined)}
-      />
-    </Card>
+        </SortableTableContext>
+        <FieldFormModal
+          entityKey={key}
+          target={formTarget}
+          nextSortOrder={nextSortOrder}
+          onClose={() => setFormTarget(undefined)}
+        />
+        <ChangeTypeModal
+          entityKey={key}
+          field={changingType}
+          onClose={() => setChangingType(undefined)}
+        />
+      </Card>
+      {hasDetails && current && <DetailEntitiesCard parent={current} />}
+    </Space>
   );
 }

@@ -25,7 +25,8 @@ use hammer_shared::record::{
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
-    EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
+    DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
+    ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
     validate_key,
 };
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
@@ -284,16 +285,18 @@ impl ApiClient {
         authed(read_json(send(builder).await?).await)
     }
 
-    /// `GET /api/v1/entities`。
+    /// `GET /api/v1/entities?include_inactive=…`。
     pub async fn list_entities(
         &self,
         server_url: &str,
         token: &str,
+        query: &ListEntitiesQuery,
     ) -> Result<Vec<EntityDefinition>, ClientError> {
         let builder = self
             .http
             .get(endpoint(server_url, "/entities"))
-            .bearer_auth(token);
+            .bearer_auth(token)
+            .query(query);
         authed(read_json(send(builder).await?).await)
     }
 
@@ -324,6 +327,53 @@ impl ApiClient {
             .bearer_auth(token)
             .json(req);
         authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PATCH /api/v1/entities/{key}`。
+    pub async fn update_entity(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        req: &UpdateEntityRequest,
+    ) -> Result<EntityDetail, ClientError> {
+        let builder = self
+            .http
+            .patch(entity_endpoint(server_url, key, None, "")?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PUT /api/v1/entities/order`。
+    pub async fn reorder_entities(
+        &self,
+        server_url: &str,
+        token: &str,
+        req: &ReorderEntitiesRequest,
+    ) -> Result<Vec<EntityDefinition>, ClientError> {
+        let builder = self
+            .http
+            .put(endpoint(server_url, "/entities/order"))
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `DELETE /api/v1/entities/{key}?version=N`。
+    pub async fn delete_entity(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        query: &DeleteEntityQuery,
+    ) -> Result<(), ClientError> {
+        let builder = self
+            .http
+            .delete(entity_endpoint(server_url, key, None, "")?)
+            .bearer_auth(token)
+            .query(query);
+        authed(read_empty(send(builder).await?).await)
     }
 
     /// `POST /api/v1/entities/{key}/fields`。
@@ -1467,7 +1517,11 @@ mod tests {
         let client = ApiClient::new().unwrap();
 
         assert_eq!(
-            client.list_entities(&url, "tok").await.unwrap()[0].key,
+            client
+                .list_entities(&url, "tok", &ListEntitiesQuery::default())
+                .await
+                .unwrap()[0]
+                .key,
             "repair"
         );
         let detail = client.get_entity(&url, "tok", "repair").await.unwrap();
@@ -1584,6 +1638,122 @@ mod tests {
         // 不合法的代碼不送出請求
         assert!(matches!(
             client.get_entity(&url, "tok", "../users").await,
+            Err(ClientError::InvalidInput { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn entity_management_endpoints() {
+        use axum::extract::{Path, RawQuery};
+        use axum::routing::put;
+
+        let url = serve(
+            Router::new()
+                .route(
+                    "/entities",
+                    get(|RawQuery(query): RawQuery| async move {
+                        let mut e = entity_json();
+                        if query.as_deref() == Some("include_inactive=true") {
+                            e["is_active"] = json!(false);
+                        } else {
+                            assert_eq!(query.as_deref(), Some("include_inactive=false"));
+                        }
+                        axum::Json(json!([e]))
+                    }),
+                )
+                .route(
+                    "/entities/order",
+                    put(
+                        |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(
+                                body,
+                                json!({ "entities": [{ "key": "repair", "version": 1, "sort_order": 3 }] })
+                            );
+                            let mut e = entity_json();
+                            e["sort_order"] = json!(3);
+                            axum::Json(json!([e]))
+                        },
+                    ),
+                )
+                .route(
+                    "/entities/{key}",
+                    axum::routing::patch(
+                        |Path(key): Path<String>,
+                         axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(key, "repair");
+                            assert_eq!(body["numbering_pattern"], "RO{yyyyMM}-{0000}");
+                            assert_eq!(body["is_active"], false);
+                            let mut e = entity_json();
+                            e["version"] = json!(2);
+                            axum::Json(json!({ "entity": e, "fields": [] }))
+                        },
+                    )
+                    .delete(
+                        |Path(key): Path<String>, RawQuery(query): RawQuery| async move {
+                            assert_eq!(key, "repair");
+                            assert_eq!(query.as_deref(), Some("version=2"));
+                            AxumStatus::NO_CONTENT
+                        },
+                    ),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+
+        let active = client
+            .list_entities(&url, "tok", &ListEntitiesQuery::default())
+            .await
+            .unwrap();
+        assert!(active[0].is_active);
+        let all = client
+            .list_entities(
+                &url,
+                "tok",
+                &ListEntitiesQuery {
+                    include_inactive: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!all[0].is_active);
+
+        let update: UpdateEntityRequest = serde_json::from_value(json!({
+            "version": 1, "label": "維修單", "icon": null,
+            "numbering_pattern": "RO{yyyyMM}-{0000}", "title_template": null,
+            "sort_order": 0, "is_active": false,
+        }))
+        .unwrap();
+        let updated = client
+            .update_entity(&url, "tok", "repair", &update)
+            .await
+            .unwrap();
+        assert_eq!(updated.entity.version, 2);
+
+        let reordered = client
+            .reorder_entities(
+                &url,
+                "tok",
+                &ReorderEntitiesRequest {
+                    entities: vec![hammer_shared::schema::EntityOrderItem {
+                        key: "repair".into(),
+                        version: 1,
+                        sort_order: 3,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(reordered[0].sort_order, 3);
+
+        client
+            .delete_entity(&url, "tok", "repair", &DeleteEntityQuery { version: 2 })
+            .await
+            .unwrap();
+        // 不合法的代碼不送出請求
+        assert!(matches!(
+            client
+                .delete_entity(&url, "tok", "../x", &DeleteEntityQuery { version: 1 })
+                .await,
             Err(ClientError::InvalidInput { .. })
         ));
     }
