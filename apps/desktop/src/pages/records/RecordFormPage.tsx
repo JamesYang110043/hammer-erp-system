@@ -1,11 +1,11 @@
 import { ArrowLeftOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Empty, Form, Modal, Space, Tag } from 'antd';
+import { Alert, App, Button, Card, Empty, Form, Input, Modal, Space, Tag } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
 import { apiErrorCode, errorMessage } from '../../api/client';
 import { useCreateRecord, useRecord, useUpdateRecord } from '../../api/records';
-import { useEntity } from '../../api/schema';
+import { useEntities, useEntity, useEntityDetails } from '../../api/schema';
 import { usePermission } from '../../auth/permission';
 import { PERMISSIONS } from '../../bindings';
 import type { EntityDefinition, FieldDefinition, Record as DataRecord } from '../../bindings';
@@ -21,11 +21,44 @@ import {
   validateFieldValue,
 } from '../../records/form';
 import type { RecordFormValues } from '../../records/form';
+import {
+  LINES_FORM_KEY,
+  buildCreateLines,
+  buildUpdateLines,
+  detailEntitiesOf,
+  initialLinesValues,
+  lineErrorPath,
+  lineErrorText,
+  linesBaseline,
+  linesChanged,
+  recordLineErrors,
+  showsRecordNo,
+} from '../../records/lines';
+import type { DetailTable, LineFormValues } from '../../records/lines';
 import { entityIcon } from '../schema/entityIcons';
+import { LinesTable } from './LinesTable';
+import type { LineRefs } from './LinesTable';
 import { RecordFieldInput } from './RecordFieldInput';
 
 /** 樂觀鎖定衝突（409）的提示（docs/architecture.md §9.4）。 */
 export const RECORD_CONFLICT_MESSAGE = '資料已被其他人修改';
+
+/** 新增資料時單號欄位的提示（單號由伺服器在存檔時產生）。 */
+export const RECORD_NO_PENDING = '存檔後產生';
+
+type FormValues = RecordFormValues & { [LINES_FORM_KEY]?: Record<string, LineFormValues[]> };
+
+/** 明細列目前的關聯與附件，鍵為明細 id。 */
+function lineRefs(record?: DataRecord): LineRefs {
+  const refs: LineRefs = { relations: {}, attachments: {} };
+  for (const lines of Object.values(record?.lines ?? {})) {
+    for (const line of lines) {
+      refs.relations[line.id] = line.relations ?? {};
+      refs.attachments[line.id] = line.attachments ?? {};
+    }
+  }
+  return refs;
+}
 
 /**
  * 新增或編輯一筆資料的表單。`record` 為 `undefined` 時是新增。
@@ -35,26 +68,37 @@ export const RECORD_CONFLICT_MESSAGE = '資料已被其他人修改';
 function RecordForm({
   entity,
   fields,
+  details,
   record,
   onReload,
 }: {
   entity: EntityDefinition;
   fields: FieldDefinition[];
+  /** 明細子表（欄位已依表單規則篩選）。 */
+  details: DetailTable[];
   record?: DataRecord;
   onReload: () => void;
 }) {
   const entityKey = entity.key;
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const [form] = Form.useForm<RecordFormValues>();
+  const [form] = Form.useForm<FormValues>();
   const canWrite = usePermission(PERMISSIONS.RECORD_WRITE);
   const createRecord = useCreateRecord(entityKey);
   const updateRecord = useUpdateRecord(entityKey);
   const saving = createRecord.isPending || updateRecord.isPending;
 
   const visible = useMemo(() => formFields(fields), [fields]);
-  const initialValues = useMemo(() => initialFormValues(visible, record?.data), [visible, record]);
+  const initialValues = useMemo<FormValues>(
+    () => ({
+      ...initialFormValues(visible, record?.data),
+      [LINES_FORM_KEY]: initialLinesValues(details, record),
+    }),
+    [visible, details, record],
+  );
   const baseline = useMemo(() => baselineData(visible, record?.data), [visible, record]);
+  const lineBaseline = useMemo(() => linesBaseline(details, record), [details, record]);
+  const refs = useMemo(() => lineRefs(record), [record]);
 
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -80,37 +124,59 @@ function RecordForm({
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
-  const onValuesChange = () =>
-    markDirty(changedFieldKeys(visible, form.getFieldsValue(true), baseline).length > 0);
+  const onValuesChange = () => {
+    const values = form.getFieldsValue(true) as FormValues;
+    markDirty(
+      changedFieldKeys(visible, values, baseline).length > 0 ||
+        linesChanged(details, values[LINES_FORM_KEY], lineBaseline),
+    );
+  };
 
   const onSaveError = (err: unknown) => {
     if (apiErrorCode(err) === 'CONFLICT') {
       setConflict(true);
       return;
     }
-    const fieldErrors = recordFieldErrors(err);
-    if (fieldErrors && fieldErrors.length > 0) {
+    const fieldErrors = recordFieldErrors(err) ?? [];
+    const lineErrors = recordLineErrors(err) ?? [];
+    if (fieldErrors.length > 0 || lineErrors.length > 0) {
       const shown = new Set(visible.map((f) => f.field_key));
-      form.setFields(
-        fieldErrors
-          .filter((e) => shown.has(e.field_key))
-          .map((e) => ({ name: e.field_key, errors: [e.message] })),
+      const lines = (form.getFieldValue(LINES_FORM_KEY) ?? {}) as Record<string, LineFormValues[]>;
+      const rowCounts = Object.fromEntries(
+        Object.entries(lines).map(([key, rows]) => [key, rows.length]),
       );
-      const others = fieldErrors.filter((e) => !shown.has(e.field_key));
-      message.error(
-        others.length > 0
-          ? others.map((e) => `${e.field_key}：${e.message}`).join('；')
-          : '資料有誤，請檢查標示的欄位',
-      );
+      const cells: { name: (string | number)[]; errors: string[] }[] = [];
+      const others: string[] = [];
+      for (const e of fieldErrors) {
+        if (shown.has(e.field_key)) {
+          cells.push({ name: [e.field_key], errors: [e.message] });
+        } else {
+          others.push(`${e.field_key}：${e.message}`);
+        }
+      }
+      for (const e of lineErrors) {
+        const path = lineErrorPath(e, details, rowCounts);
+        if (path) {
+          cells.push({ name: path, errors: [e.message] });
+        } else {
+          others.push(lineErrorText(e, details));
+        }
+      }
+      form.setFields(cells);
+      message.error(others.length > 0 ? others.join('；') : '資料有誤，請檢查標示的欄位');
       return;
     }
     message.error(errorMessage(err));
   };
 
-  const onFinish = (values: RecordFormValues) => {
+  const onFinish = () => {
+    // 包含 Form.List 內的明細列（onFinish 的參數只有註冊過的欄位，明細的 __id 不在其中）
+    const values = form.getFieldsValue(true) as FormValues;
+    const lineValues = values[LINES_FORM_KEY];
     if (!record) {
+      const lines = buildCreateLines(details, lineValues);
       createRecord.mutate(
-        { data: buildCreateData(visible, values) },
+        { data: buildCreateData(visible, values), ...(lines ? { lines } : {}) },
         {
           onSuccess: (saved) => {
             markDirty(false);
@@ -123,12 +189,13 @@ function RecordForm({
       return;
     }
     const data = buildUpdateData(visible, values, baseline);
-    if (Object.keys(data).length === 0) {
+    const lines = buildUpdateLines(details, lineValues, lineBaseline);
+    if (Object.keys(data).length === 0 && !lines) {
       message.info('沒有需要儲存的修改');
       return;
     }
     updateRecord.mutate(
-      { id: record.id, req: { version: record.version, data } },
+      { id: record.id, req: { version: record.version, data, ...(lines ? { lines } : {}) } },
       {
         onSuccess: () => {
           markDirty(false);
@@ -170,42 +237,64 @@ function RecordForm({
           }
         />
       )}
-      {visible.length === 0 ? (
+      {visible.length === 0 && details.length === 0 ? (
         <Empty description="此資料類別沒有可以輸入的欄位" />
       ) : (
-        <Form<RecordFormValues>
+        <Form<FormValues>
           form={form}
           layout="vertical"
-          style={{ maxWidth: 720 }}
           initialValues={initialValues}
           disabled={!canWrite}
           onValuesChange={onValuesChange}
           onFinish={onFinish}
         >
-          {visible.map((field) => (
-            <Form.Item
-              key={field.field_key}
-              name={field.field_key}
-              label={field.label}
-              extra={field.help_text ?? undefined}
-              required={field.is_required && !field.is_readonly}
-              rules={[
-                {
-                  validator: (_, value: unknown) => {
-                    const error = validateFieldValue(field, value);
-                    return error ? Promise.reject(new Error(error)) : Promise.resolve();
+          <div style={{ maxWidth: 720 }}>
+            {showsRecordNo(entity, record) && (
+              <Form.Item label="單號">
+                <Input
+                  aria-label="單號"
+                  readOnly
+                  disabled
+                  style={{ maxWidth: 320 }}
+                  value={record?.record_no ?? ''}
+                  placeholder={RECORD_NO_PENDING}
+                />
+              </Form.Item>
+            )}
+            {visible.map((field) => (
+              <Form.Item
+                key={field.field_key}
+                name={field.field_key}
+                label={field.label}
+                extra={field.help_text ?? undefined}
+                required={field.is_required && !field.is_readonly}
+                rules={[
+                  {
+                    validator: (_, value: unknown) => {
+                      const error = validateFieldValue(field, value);
+                      return error ? Promise.reject(new Error(error)) : Promise.resolve();
+                    },
                   },
-                },
-              ]}
-            >
-              {/* 傳 false 會蓋過 Form 的 disabled（唯讀者），只在唯讀欄位時指定 */}
-              <RecordFieldInput
-                field={field}
-                disabled={field.is_readonly || undefined}
-                relation={record?.relations?.[field.field_key]}
-                attachment={record?.attachments?.[field.field_key]}
-              />
-            </Form.Item>
+                ]}
+              >
+                {/* 傳 false 會蓋過 Form 的 disabled（唯讀者），只在唯讀欄位時指定 */}
+                <RecordFieldInput
+                  field={field}
+                  disabled={field.is_readonly || undefined}
+                  relation={record?.relations?.[field.field_key]}
+                  attachment={record?.attachments?.[field.field_key]}
+                />
+              </Form.Item>
+            ))}
+          </div>
+          {details.map((table) => (
+            <LinesTable
+              key={table.entity.key}
+              table={table}
+              canWrite={canWrite}
+              refs={refs}
+              onRowsChange={onValuesChange}
+            />
           ))}
           {canWrite && (
             <Form.Item>
@@ -246,9 +335,22 @@ function RecordForm({
 export function RecordFormPage() {
   const { key = '', id } = useParams();
   const entity = useEntity(key);
+  const entities = useEntities();
   const record = useRecord(key, id);
+  const detailEntities = useMemo(
+    () =>
+      entity.data && entities.data
+        ? detailEntitiesOf(entities.data, entity.data.entity)
+        : undefined,
+    [entity.data, entities.data],
+  );
+  const detailDefs = useEntityDetails(detailEntities);
+  const details = useMemo<DetailTable[] | undefined>(
+    () => detailDefs.data?.map((d) => ({ entity: d.entity, fields: formFields(d.fields) })),
+    [detailDefs.data],
+  );
 
-  const error = entity.error ?? record.error;
+  const error = entity.error ?? entities.error ?? detailDefs.error ?? record.error;
   if (error) {
     return (
       <Card title="資料">
@@ -256,7 +358,7 @@ export function RecordFormPage() {
       </Card>
     );
   }
-  if (!entity.data || (id !== undefined && !record.data)) {
+  if (!entity.data || !details || (id !== undefined && !record.data)) {
     return <Card title="資料" loading />;
   }
   const detail = entity.data;
@@ -273,6 +375,7 @@ export function RecordFormPage() {
       key={`${key}:${id ?? 'new'}:${record.dataUpdatedAt}`}
       entity={detail.entity}
       fields={detail.fields}
+      details={details}
       record={record.data}
       onReload={() => void record.refetch()}
     />

@@ -33,6 +33,7 @@ import type {
 import { generatedConfig, resolveColumns } from '../../records/columns';
 import type { LayoutColumn, LayoutConfig } from '../../records/columns';
 import { isNumericType } from '../../records/display';
+import { RECORD_NO, showsRecordNo } from '../../records/lines';
 import { GENERATED_LAYOUT_ID, canEditLayout, sameConfig } from '../../records/layouts';
 import type { ViewLayout } from '../../records/layouts';
 import {
@@ -151,6 +152,17 @@ function RecordList({
       ),
     }),
   );
+  // 單號不是欄位，不在版面的顯示欄位中；有單號規則時固定顯示在第一欄，可以排序
+  if (showsRecordNo(entity)) {
+    columns.unshift({
+      key: RECORD_NO,
+      title: '單號',
+      dataIndex: RECORD_NO,
+      sorter: true,
+      sortOrder: columnSortOrder(config.sort, RECORD_NO),
+      render: (value: string | null) => value ?? '',
+    });
+  }
   if (canWrite) {
     columns.push({
       title: '操作',
