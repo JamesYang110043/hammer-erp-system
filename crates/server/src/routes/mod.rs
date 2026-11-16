@@ -136,6 +136,7 @@ fn protected_routes() -> Router<AppState> {
             "/entities/{key}/fields/{field_key}/change-type",
             post(entities::change_field_type),
         )
+        .route("/entities/{key}/recalculate", post(entities::recalculate))
         .route(
             "/entities/{key}/records",
             get(records::list).post(records::create),

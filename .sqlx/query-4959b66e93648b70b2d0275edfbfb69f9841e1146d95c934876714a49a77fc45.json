@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE custom_records AS r\n        SET data = u.data, formula_errors = NULLIF(u.formula_errors, 'null'::jsonb),\n            updated_by = $4, version = r.version + 1\n        FROM UNNEST($1::uuid[], $2::jsonb[], $3::jsonb[]) AS u(id, data, formula_errors)\n        WHERE r.id = u.id AND r.deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "JsonbArray",
+        "JsonbArray",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4959b66e93648b70b2d0275edfbfb69f9841e1146d95c934876714a49a77fc45"
+}

@@ -123,6 +123,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::schema::FieldOrderItem>()
         .typ::<hammer_shared::schema::ReorderEntitiesRequest>()
         .typ::<hammer_shared::schema::EntityOrderItem>()
+        .typ::<hammer_shared::schema::RecalculateResult>()
         // 自訂資料類別的資料
         .typ::<hammer_shared::record::Record>()
         .typ::<hammer_shared::record::FilterOp>()

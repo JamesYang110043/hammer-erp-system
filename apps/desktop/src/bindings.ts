@@ -131,7 +131,7 @@ export const commands = {
 };
 
 /* Constants */
-export const AUDIT_ACTIONS = ["create","update","delete","post","void","login","login_failed","logout","password_change","export"] as const;
+export const AUDIT_ACTIONS = ["create","update","delete","post","void","login","login_failed","logout","password_change","export","recalculate"] as const;
 
 export const CLIENT_VERSION = "0.1.0" as const;
 
@@ -1275,6 +1275,22 @@ export type Page<T> = {
 	page: number,
 	/**  實際使用的每頁筆數（已套用預設值與上限）。 */
 	page_size: number,
+};
+
+/**
+ *  `POST /api/v1/entities/{key}/recalculate` 的回應：重新計算資料類別所有未刪除資料的公式欄位
+ *  （docs/architecture.md §7.6「重新計算」）。
+ * 
+ *  只能對主表（`master` / `document`）執行，明細隨主表一起重算；明細子表、系統資料類別、
+ *  不存在或已停用的資料類別 → `404 NOT_FOUND`。需要 `schema.manage`。
+ */
+export type RecalculateResult = {
+	/**  處理的主表資料筆數（未刪除）。 */
+	processed: number,
+	/**  值有變動（主表或明細的公式值、計算錯誤）而寫入的主表資料筆數；這些資料的 `version` + 1。 */
+	changed: number,
+	/**  重算後主表或明細有公式計算錯誤（`formula_errors` 不為空）的主表資料筆數。 */
+	with_errors: number,
 };
 
 /**  一筆自訂資料類別的資料。 */

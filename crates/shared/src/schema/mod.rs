@@ -9,6 +9,7 @@
 //!   [`UpdateFieldRequest`]、[`DeactivateFieldRequest`]、[`ReorderFieldsRequest`]、
 //!   [`ChangeFieldTypeRequest`]、[`ReorderEntitiesRequest`]、[`DeleteEntityQuery`]、
 //!   [`ListEntitiesQuery`]
+//! - API 回應：[`RecalculateResult`]（重新計算公式）
 //!
 //! # 端點
 //!
@@ -27,6 +28,7 @@
 //! | `POST /api/v1/entities/{key}/fields/{field_key}/deactivate` | [`DeactivateFieldRequest`] | `200` [`FieldDefinition`] |
 //! | `PUT /api/v1/entities/{key}/fields/order` | [`ReorderFieldsRequest`] | `200` [`FieldDefinition`]`[]` |
 //! | `POST /api/v1/entities/{key}/fields/{field_key}/change-type` | [`ChangeFieldTypeRequest`] | `200` [`FieldDefinition`] |
+//! | `POST /api/v1/entities/{key}/recalculate` | | `200` [`RecalculateResult`] |
 //!
 //! 錯誤：輸入不合法 → `422 VALIDATION`，`details.field` 為 request 的欄位名稱；
 //! `version` 不符 → `409 CONFLICT`；資料類別或欄位不存在 → `404 NOT_FOUND`。
@@ -460,6 +462,21 @@ pub struct EntityOrderItem {
     pub version: i32,
     /// 新的選單排序。
     pub sort_order: i32,
+}
+
+/// `POST /api/v1/entities/{key}/recalculate` 的回應：重新計算資料類別所有未刪除資料的公式欄位
+/// （docs/architecture.md §7.6「重新計算」）。
+///
+/// 只能對主表（`master` / `document`）執行，明細隨主表一起重算；明細子表、系統資料類別、
+/// 不存在或已停用的資料類別 → `404 NOT_FOUND`。需要 `schema.manage`。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct RecalculateResult {
+    /// 處理的主表資料筆數（未刪除）。
+    pub processed: u32,
+    /// 值有變動（主表或明細的公式值、計算錯誤）而寫入的主表資料筆數；這些資料的 `version` + 1。
+    pub changed: u32,
+    /// 重算後主表或明細有公式計算錯誤（`formula_errors` 不為空）的主表資料筆數。
+    pub with_errors: u32,
 }
 
 /// 刪除自訂資料類別（軟刪除）的 query string：`?version=N`。

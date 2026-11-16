@@ -6,11 +6,12 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use hammer_core::schema;
+use hammer_core::{recalculate, schema};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
-    ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
+    RecalculateResult, ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest,
+    UpdateFieldRequest,
 };
 use time::OffsetDateTime;
 
@@ -267,4 +268,23 @@ pub async fn reorder_fields(
     )
     .await?;
     Ok(Json(fields))
+}
+
+/// `POST /api/v1/entities/{key}/recalculate`：重新計算資料類別所有資料的公式欄位。
+pub async fn recalculate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    Path(key): Path<String>,
+) -> Result<Json<RecalculateResult>, AppError> {
+    let info = request_client_info(&headers);
+    let result = recalculate::recalculate_records(
+        &state.pool,
+        &auth,
+        &key,
+        info.as_deref(),
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(Json(result))
 }
