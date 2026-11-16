@@ -1,6 +1,7 @@
 //! 資料類別與欄位定義的管理（docs/architecture.md §6.1、§7.1、§7.2、§8.5、§9.4）。
 //!
-//! - 查詢（需要登入，不需特定權限）：[`list_entities`]、[`get_entity`]
+//! - 查詢（需要登入，不需特定權限；列出已停用的資料類別需要 `schema.manage`）：
+//!   [`list_entities`]、[`get_entity`]
 //! - 寫入（需要 `schema.manage`）：[`create_entity`]、[`update_entity`]、[`reorder_entities`]、
 //!   [`delete_entity`]、[`create_field`]、[`update_field`]、[`deactivate_field`]、[`reorder_fields`]、
 //!   [`change_field_type`]
@@ -28,7 +29,7 @@ use hammer_db::sqlx::{PgPool, PgTransaction};
 use hammer_db::{DbError, ensure_version_matched};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DataType, EntityDefinition,
-    EntityDetail, EntityKind, EntityStorage, FieldDefinition, FieldStorage,
+    EntityDetail, EntityKind, EntityStorage, FieldDefinition, FieldStorage, ListEntitiesQuery,
     MAX_CONVERSION_FAILURES, MAX_DUPLICATE_VALUES, ReorderEntitiesRequest, ReorderFieldsRequest,
     UpdateEntityRequest, UpdateFieldRequest,
 };
@@ -275,12 +276,19 @@ impl FieldJson {
 // 查詢
 // ---------------------------------------------------------------------------
 
-/// 列出有效（啟用、未刪除）的資料類別，依 `sort_order` 排序。需要登入。
+/// 列出未刪除的資料類別，依 `sort_order` 排序。需要登入。
+///
+/// 預設只列出啟用中的資料類別；`query.include_inactive` 為 `true` 時含已停用的
+/// （管理畫面用，需要 `schema.manage`）。
 pub async fn list_entities(
     pool: &PgPool,
-    _ctx: &AuthContext,
+    ctx: &AuthContext,
+    query: &ListEntitiesQuery,
 ) -> Result<Vec<EntityDefinition>, CoreError> {
-    db::list_active_entities(pool)
+    if query.include_inactive {
+        ctx.require(permission::SCHEMA_MANAGE)?;
+    }
+    db::list_entities(pool, query.include_inactive)
         .await?
         .into_iter()
         .map(entity_from_row)
@@ -505,7 +513,7 @@ pub async fn reorder_entities(
         )
         .await?;
     }
-    let entities = db::list_active_entities(&mut *tx)
+    let entities = db::list_entities(&mut *tx, false)
         .await?
         .into_iter()
         .map(entity_from_row)

@@ -7,7 +7,8 @@
 //! - API 回應：[`EntityDetail`]（資料類別與欄位定義）
 //! - API 請求：[`CreateEntityRequest`]、[`UpdateEntityRequest`]、[`CreateFieldRequest`]、
 //!   [`UpdateFieldRequest`]、[`DeactivateFieldRequest`]、[`ReorderFieldsRequest`]、
-//!   [`ChangeFieldTypeRequest`]、[`ReorderEntitiesRequest`]、[`DeleteEntityQuery`]
+//!   [`ChangeFieldTypeRequest`]、[`ReorderEntitiesRequest`]、[`DeleteEntityQuery`]、
+//!   [`ListEntitiesQuery`]
 //!
 //! # 端點
 //!
@@ -15,7 +16,7 @@
 //!
 //! | 端點 | request | 成功回應 |
 //! |---|---|---|
-//! | `GET /api/v1/entities` | | `200` [`EntityDefinition`]`[]`（有效的資料類別） |
+//! | `GET /api/v1/entities` | [`ListEntitiesQuery`] | `200` [`EntityDefinition`]`[]`（未刪除的資料類別，依選單排序） |
 //! | `GET /api/v1/entities/{key}` | | `200` [`EntityDetail`] |
 //! | `POST /api/v1/entities` | [`CreateEntityRequest`] | `201` [`EntityDetail`] |
 //! | `PATCH /api/v1/entities/{key}` | [`UpdateEntityRequest`] | `200` [`EntityDetail`] |
@@ -426,6 +427,16 @@ pub struct UpdateEntityRequest {
     pub sort_order: i32,
     /// 停用後不出現在選單，資料 API 回傳 `404`；改回 `true` 即重新啟用。系統資料類別不可停用。
     pub is_active: bool,
+}
+
+/// 資料類別列表的 query string：`?include_inactive=true`。
+///
+/// 預設只列出啟用中的資料類別（選單用）；`include_inactive = true` 時含已停用的資料類別
+/// （管理畫面用，需要 `schema.manage`，否則 `403 FORBIDDEN`）。已刪除的資料類別一律不列出。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ListEntitiesQuery {
+    #[serde(default)]
+    pub include_inactive: bool,
 }
 
 /// 一次調整多個資料類別的選單排序（`sort_order`）。

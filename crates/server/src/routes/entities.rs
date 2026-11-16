@@ -9,20 +9,23 @@ use axum::http::{HeaderMap, StatusCode};
 use hammer_core::schema;
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
-    DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ReorderEntitiesRequest,
-    ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
+    DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
+    ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
 };
 use time::OffsetDateTime;
 
 use super::auth::request_client_info;
 use crate::{AppError, AppState, AuthUser};
 
-/// `GET /api/v1/entities`
+/// `GET /api/v1/entities?include_inactive=true`
 pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
+    Query(query): Query<ListEntitiesQuery>,
 ) -> Result<Json<Vec<EntityDefinition>>, AppError> {
-    Ok(Json(schema::list_entities(&state.pool, &auth).await?))
+    Ok(Json(
+        schema::list_entities(&state.pool, &auth, &query).await?,
+    ))
 }
 
 /// `GET /api/v1/entities/{key}`

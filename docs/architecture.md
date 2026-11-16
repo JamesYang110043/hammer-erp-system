@@ -525,6 +525,7 @@ products ───────────────────────�
 **資料類別管理**（邏輯在 `hammer_core::schema`，型別與端點在 `hammer_shared::schema`；寫入都需要 `schema.manage`，每個有變動的資料類別寫入一筆 `schema_change_logs` 與 `audit_logs`）：
 
 - `kind`：`master`（主檔）、`document`（單據）、`detail`（明細子表）。`document` 的行為與 `master` 相同（可設定單號規則、可有明細子表、可作為關聯目標），差別只在選單分組顯示。
+- 列表（`GET /api/v1/entities`）：預設只列出啟用中的資料類別（選單用，需要登入）；`?include_inactive=true` 含已停用的（管理畫面用，需要 `schema.manage`）。已刪除的一律不列出。
 - 修改（`PATCH /api/v1/entities/{key}`）：名稱、圖示、單號規則、標題範本、選單排序、是否啟用。停用後不出現在選單，資料 API 回傳 `404`；改回啟用即恢復。系統資料類別不可停用。
 - 選單排序：`PUT /api/v1/entities/order` 一次調整多筆 `sort_order`，只需列出要調整的資料類別；任一筆版本不符整批不寫入。`order` 也是合法的代碼，同一路徑的 GET / PATCH / DELETE 轉給該資料類別。
 - 刪除（`DELETE /api/v1/entities/{key}?version=N`，軟刪除）：

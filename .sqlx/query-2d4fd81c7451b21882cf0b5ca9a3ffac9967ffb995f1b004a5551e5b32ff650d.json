@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,\n               numbering_pattern, title_template, sort_order, is_active,\n               created_at, updated_at, version\n        FROM entity_definitions\n        WHERE is_active AND deleted_at IS NULL\n        ORDER BY sort_order, id\n        ",
+  "query": "\n        SELECT id, key, label, icon, kind, is_system, storage, table_name, parent_entity_id,\n               numbering_pattern, title_template, sort_order, is_active,\n               created_at, updated_at, version\n        FROM entity_definitions\n        WHERE ($1 OR is_active) AND deleted_at IS NULL\n        ORDER BY sort_order, id\n        ",
   "describe": {
     "columns": [
       {
@@ -181,7 +181,9 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Bool"
+      ]
     },
     "nullable": [
       false,
@@ -202,5 +204,5 @@
       false
     ]
   },
-  "hash": "904982281bed78cbb33c88e8cb18f3fa82b23aca020eebee73177f43e6ea97a0"
+  "hash": "2d4fd81c7451b21882cf0b5ca9a3ffac9967ffb995f1b004a5551e5b32ff650d"
 }
