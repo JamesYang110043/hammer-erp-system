@@ -96,6 +96,12 @@ export const commands = {
 	 *  只檢查語法；引用的欄位、型態與循環引用由伺服器在儲存時檢查（`docs/architecture.md` §7.6）。
 	 */
 	checkFormulaSyntax: (formula: string) => __TAURI_INVOKE<FormulaSyntaxError | null>("check_formula_syntax", { formula }),
+	/**
+	 *  表單中公式欄位的即時預覽（`hammer_formula::record`，與伺服器存檔時的計算相同，不需連線）。
+	 * 
+	 *  `TODAY()` 為電腦目前時間在 Asia/Taipei 的日期。存檔時以伺服器計算的結果為準（§7.6）。
+	 */
+	previewFormulas: (req: FormulaPreviewRequest_Deserialize) => __TAURI_INVOKE<FormulaPreview_Serialize>("preview_formulas", { req }),
 	/**  資料列表（需要 `record.read`）。分頁、排序與篩選見 [`RecordListQuery`]。 */
 	listRecords: (key: string, query: RecordListQuery_Deserialize) => typedError<Page<Record_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_records", { key, query })),
 	/**  取得一筆資料（需要 `record.read`）。 */
@@ -828,6 +834,23 @@ export type DeleteViewLayoutQuery = {
 	version: number,
 };
 
+/**  一個明細子表的欄位定義。 */
+export type DetailSchema = DetailSchema_Serialize | DetailSchema_Deserialize;
+
+/**  一個明細子表的欄位定義。 */
+export type DetailSchema_Deserialize = {
+	/**  明細子表代碼。 */
+	key: string,
+	fields: FieldDefinition_Deserialize[],
+};
+
+/**  一個明細子表的欄位定義。 */
+export type DetailSchema_Serialize = {
+	/**  明細子表代碼。 */
+	key: string,
+	fields: FieldDefinition_Serialize[],
+};
+
 /**
  *  資料類別定義（API 回應）。
  * 
@@ -1122,6 +1145,72 @@ export type FieldStorage =
  */
 export type FilterOp = "eq" | "contains" | "gt" | "gte" | "lt" | "lte" | "empty" | "any";
 
+/**  公式預覽的結果。 */
+export type FormulaPreview = FormulaPreview_Serialize | FormulaPreview_Deserialize;
+
+/**  公式預覽的輸入：欄位定義與本筆資料的快照（JSON 存值，§7.3）。 */
+export type FormulaPreviewRequest = FormulaPreviewRequest_Serialize | FormulaPreviewRequest_Deserialize;
+
+/**  公式預覽的輸入：欄位定義與本筆資料的快照（JSON 存值，§7.3）。 */
+export type FormulaPreviewRequest_Deserialize = {
+	/**  主表的欄位定義（可含已停用的欄位，計算時略過）。 */
+	fields: FieldDefinition_Deserialize[],
+	/**  有效的明細子表與其欄位定義。 */
+	details?: DetailSchema_Deserialize[],
+	/**  主表的資料，鍵為 `field_key`。 */
+	data: { [key in string]: unknown },
+	/**  明細，鍵為明細子表代碼，依順序。 */
+	lines?: { [key in string]: { [key in string]: unknown }[] },
+	/**
+	 *  關聯引用所指資料的快照。沒有列出的資料類別讀不到目標欄位，引用它的公式為錯誤；
+	 *  表單不提供（關聯引用的欄位顯示上一次存檔的值，見 [`FormulaPreview::relation_dependent`]）。
+	 */
+	targets?: TargetSnapshot_Deserialize[],
+};
+
+/**  公式預覽的輸入：欄位定義與本筆資料的快照（JSON 存值，§7.3）。 */
+export type FormulaPreviewRequest_Serialize = {
+	/**  主表的欄位定義（可含已停用的欄位，計算時略過）。 */
+	fields: FieldDefinition_Serialize[],
+	/**  有效的明細子表與其欄位定義。 */
+	details: DetailSchema_Serialize[],
+	/**  主表的資料，鍵為 `field_key`。 */
+	data: { [key in string]: unknown },
+	/**  明細，鍵為明細子表代碼，依順序。 */
+	lines: { [key in string]: { [key in string]: unknown }[] },
+	/**
+	 *  關聯引用所指資料的快照。沒有列出的資料類別讀不到目標欄位，引用它的公式為錯誤；
+	 *  表單不提供（關聯引用的欄位顯示上一次存檔的值，見 [`FormulaPreview::relation_dependent`]）。
+	 */
+	targets: TargetSnapshot_Serialize[],
+};
+
+/**  公式預覽的結果。 */
+export type FormulaPreview_Deserialize = {
+	/**  主表的公式欄位。 */
+	master: RowPreview,
+	/**  明細的公式欄位，鍵為明細子表代碼，順序與輸入相同。 */
+	lines: { [key in string]: RowPreview[] },
+	/**
+	 *  直接或間接使用關聯引用的公式欄位。預覽沒有關聯資料的最新值，表單顯示上一次存檔的值，
+	 *  並標示存檔後更新。
+	 */
+	relation_dependent: PreviewField_Deserialize[],
+};
+
+/**  公式預覽的結果。 */
+export type FormulaPreview_Serialize = {
+	/**  主表的公式欄位。 */
+	master: RowPreview,
+	/**  明細的公式欄位，鍵為明細子表代碼，順序與輸入相同。 */
+	lines: { [key in string]: RowPreview[] },
+	/**
+	 *  直接或間接使用關聯引用的公式欄位。預覽沒有關聯資料的最新值，表單顯示上一次存檔的值，
+	 *  並標示存檔後更新。
+	 */
+	relation_dependent: PreviewField_Serialize[],
+};
+
 /**  公式的語法錯誤。 */
 export type FormulaSyntaxError = {
 	/**  錯誤訊息（繁體中文，不含位置）。 */
@@ -1297,6 +1386,23 @@ export type Page<T> = {
 	page: number,
 	/**  實際使用的每頁筆數（已套用預設值與上限）。 */
 	page_size: number,
+};
+
+/**  預覽中的一個公式欄位。 */
+export type PreviewField = PreviewField_Serialize | PreviewField_Deserialize;
+
+/**  預覽中的一個公式欄位。 */
+export type PreviewField_Deserialize = {
+	/**  明細子表代碼；主表的欄位為 `null`。 */
+	detail?: string | null,
+	field_key: string,
+};
+
+/**  預覽中的一個公式欄位。 */
+export type PreviewField_Serialize = {
+	/**  明細子表代碼；主表的欄位為 `null`。 */
+	detail: string | null,
+	field_key: string,
 };
 
 /**
@@ -1505,6 +1611,14 @@ export type Role = {
 	permissions: string[],
 };
 
+/**  一列資料（主表或一列明細）的預覽。 */
+export type RowPreview = {
+	/**  有效公式欄位的計算結果（JSON 存值，§7.3），沒有值或計算失敗時為 `null`。 */
+	values: { [key in string]: unknown },
+	/**  計算失敗的欄位 → 錯誤原因（繁體中文）。 */
+	errors: { [key in string]: string },
+};
+
 /**  `select`、`multi_select` 的選項。對應 `field_definitions.options` JSONB 陣列的元素。 */
 export type SelectOption = SelectOption_Serialize | SelectOption_Deserialize;
 
@@ -1532,6 +1646,29 @@ export type SelectOption_Serialize = {
 export type SetupStatus = {
 	/**  資料庫還沒有任何帳號，需要先建立管理者。 */
 	needs_setup: boolean,
+};
+
+/**  關聯目標的一筆資料。 */
+export type TargetRecord = {
+	id: string,
+	data: { [key in string]: unknown },
+};
+
+/**  關聯目標資料類別的快照。 */
+export type TargetSnapshot = TargetSnapshot_Serialize | TargetSnapshot_Deserialize;
+
+/**  關聯目標資料類別的快照。 */
+export type TargetSnapshot_Deserialize = {
+	entity_id: string,
+	fields: FieldDefinition_Deserialize[],
+	records?: TargetRecord[],
+};
+
+/**  關聯目標資料類別的快照。 */
+export type TargetSnapshot_Serialize = {
+	entity_id: string,
+	fields: FieldDefinition_Serialize[],
+	records: TargetRecord[],
 };
 
 /**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage`、`parent_entity_id` 不可修改。 */

@@ -539,4 +539,97 @@ mod tests {
             Err(CoreError::Internal(_))
         ));
     }
+
+    /// 與桌面端預覽（`apps/desktop/src-tauri/src/formula.rs`）共用的測試資料：伺服器的計算結果必須
+    /// 等於 `expected`（§3.3「存檔時以伺服器計算為準」，預覽要與它一致）。
+    #[test]
+    fn shared_preview_case_matches_expected() {
+        let case: Value =
+            serde_json::from_str(include_str!("../../formula/testdata/record_preview.json"))
+                .unwrap();
+        let defs =
+            |v: &Value| -> Vec<FieldDefinition> { serde_json::from_value(v.clone()).unwrap() };
+        let master_fields = defs(&case["fields"]);
+        let details: Vec<(String, Vec<FieldDefinition>)> = case["details"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| (d["key"].as_str().unwrap().to_owned(), defs(&d["fields"])))
+            .collect();
+        let detail_refs: Vec<(&str, &[FieldDefinition])> = details
+            .iter()
+            .map(|(k, f)| (k.as_str(), f.as_slice()))
+            .collect();
+        let formulas = Formulas::new(&master_fields, &detail_refs);
+        let mut targets = Targets::default();
+        for t in case["targets"].as_array().unwrap() {
+            let entity: Id = serde_json::from_value(t["entity_id"].clone()).unwrap();
+            targets.insert_entity(entity, &defs(&t["fields"]));
+            for r in t["records"].as_array().unwrap() {
+                let id: Id = serde_json::from_value(r["id"].clone()).unwrap();
+                targets.insert_record(entity, id, r["data"].as_object().unwrap().clone());
+            }
+        }
+        let today: Date = Date::parse(
+            case["today"].as_str().unwrap(),
+            time::macros::format_description!("[year]-[month]-[day]"),
+        )
+        .unwrap();
+
+        let master_data = case["data"].clone();
+        let line_inputs: Vec<(&str, Value)> = case["lines"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .flat_map(|(k, rows)| {
+                rows.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(move |r| (k.as_str(), r.clone()))
+            })
+            .collect();
+        let master = stored(None, &master_data, None);
+        let lines: Vec<Stored<'_>> = line_inputs
+            .iter()
+            .map(|(k, data)| stored(Some(k), data, None))
+            .collect();
+        let outcome = recalculate_one(&formulas, &master, &lines, &targets, today).unwrap();
+
+        // 沒有寫入的資料（沒有變動）維持原值
+        let result_of = |s: &Stored<'_>| -> (Value, Option<Value>) {
+            outcome.writes.iter().find(|w| w.id == s.id).map_or_else(
+                || (s.data.clone(), s.formula_errors.cloned()),
+                |w| (w.data.clone(), w.formula_errors.clone()),
+            )
+        };
+        let preview_of = |fields: &[FieldDefinition], s: &Stored<'_>| -> Value {
+            let (data, errors) = result_of(s);
+            let values: Map<String, Value> = fields
+                .iter()
+                .filter(|f| f.is_active && f.data_type == DataType::Formula)
+                .map(|f| {
+                    (
+                        f.field_key.clone(),
+                        data.get(&f.field_key).cloned().unwrap_or(Value::Null),
+                    )
+                })
+                .collect();
+            json!({ "values": values, "errors": errors.unwrap_or_else(|| json!({})) })
+        };
+
+        let expected = &case["expected"];
+        assert_eq!(preview_of(&master_fields, &master), expected["master"]);
+        let mut by_detail: BTreeMap<&str, Vec<Value>> = BTreeMap::new();
+        for line in &lines {
+            let key = line.detail.unwrap();
+            let fields = &details.iter().find(|(k, _)| k == key).unwrap().1;
+            by_detail
+                .entry(key)
+                .or_default()
+                .push(preview_of(fields, line));
+        }
+        assert_eq!(json!(by_detail), expected["lines"]);
+        // 停用的公式欄位保留原值
+        assert_eq!(result_of(&master).0["old"], json!(5));
+    }
 }
