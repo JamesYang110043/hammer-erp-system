@@ -1105,6 +1105,8 @@ export type FieldStorage =
  *  | `gt`、`gte`、`lt`、`lte` | 大於、大於等於、小於、小於等於 | `integer`、`decimal`、`money`、`date`、`datetime` |
  *  | `empty` | 值為 `true`：沒有值；`false`：有值 | 全部 |
  *  | `any` | 包含任一選項；可重複帶多個 | `multi_select` |
+ * 
+ *  `formula` 欄位依它的 `formula_result_type` 套用上表。
  */
 export type FilterOp = "eq" | "contains" | "gt" | "gte" | "lt" | "lte" | "empty" | "any";
 
@@ -1353,6 +1355,11 @@ export type Record_Deserialize = {
 	 */
 	attachments?: { [key in string]: Attachment_Deserialize },
 	/**
+	 *  公式欄位的計算錯誤，鍵為 `field_key`、值為錯誤原因（繁體中文）；只包含計算失敗的公式欄位
+	 *  （見模組說明「公式欄位」），沒有錯誤時為空物件。
+	 */
+	formula_errors?: { [key in string]: string },
+	/**
 	 *  明細，鍵為明細子表的代碼（見模組說明「明細子表」）。單筆查詢與新增、修改的回應包含主表所有
 	 *  有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
 	 */
@@ -1386,6 +1393,11 @@ export type Record_Serialize = {
 	 *  （見模組說明「附件欄位」）。
 	 */
 	attachments: { [key in string]: Attachment_Serialize },
+	/**
+	 *  公式欄位的計算錯誤，鍵為 `field_key`、值為錯誤原因（繁體中文）；只包含計算失敗的公式欄位
+	 *  （見模組說明「公式欄位」），沒有錯誤時為空物件。
+	 */
+	formula_errors: { [key in string]: string },
 	/**
 	 *  明細，鍵為明細子表的代碼（見模組說明「明細子表」）。單筆查詢與新增、修改的回應包含主表所有
 	 *  有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。

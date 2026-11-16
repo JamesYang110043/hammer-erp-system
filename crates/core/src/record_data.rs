@@ -31,7 +31,8 @@
 //! - 不可重複（`is_unique`）：由資料庫唯一索引處理（§7.5）
 //! - `relation` 所指的資料是否存在：需要查詢資料庫，在 [`crate::relations::check_relations`]
 //! - `file` 的附件是否存在、是否已被使用：在 [`crate::attachments::prepare_file_changes`]
-//! - `formula`（M2c）：寫入時回傳「目前不支援此欄位型態」；更新時沒有帶到則保留既有的值
+//! - `formula`：值由伺服器在存檔時計算（[`crate::formulas`]）。`input` 帶了公式欄位的值時一律忽略
+//!   （不回傳錯誤，含已停用的公式欄位）；新增時不設定值，更新時保留既有的值，之後由計算結果取代
 
 use hammer_shared::decimal::Decimal;
 use hammer_shared::schema::{
@@ -95,6 +96,10 @@ pub fn normalize_record_data(
 
     for field in &json_fields {
         let key = field.field_key.as_str();
+        // 公式欄位的值由伺服器計算：request 帶到的值忽略，既有的值保留到計算時取代
+        if field.data_type == DataType::Formula {
+            continue;
+        }
         let value = match (input.get(key), mode) {
             (Some(provided), _) => {
                 if !field.is_active {
@@ -480,21 +485,33 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_types_cannot_be_written() {
-        let f = field("att", DataType::Formula);
+    fn formula_values_are_ignored_on_create() {
+        let f = field("total", DataType::Formula);
+        let mut inactive = field("old", DataType::Formula);
+        inactive.is_active = false;
+        let n = field("n", DataType::Integer);
         assert_eq!(
-            single_error(&[f], json!({ "att": "x" })),
-            "目前不支援此欄位型態"
+            create(
+                &[f, inactive, n],
+                json!({ "total": "999", "old": 1, "n": 1 })
+            )
+            .unwrap(),
+            json!({ "n": 1 })
         );
     }
 
     #[test]
-    fn unsupported_types_preserved_on_update() {
-        let f = field("att", DataType::Formula);
+    fn formula_values_preserved_on_update() {
+        let f = field("total", DataType::Formula);
         let n = field("n", DataType::Integer);
         assert_eq!(
-            update(&[f, n], json!({ "att": "abc" }), json!({ "n": 1 })).unwrap(),
-            json!({ "att": "abc", "n": 1 })
+            update(
+                &[f, n],
+                json!({ "total": "10.00", "n": 1 }),
+                json!({ "total": "abc", "n": 2 })
+            )
+            .unwrap(),
+            json!({ "total": "10.00", "n": 2 })
         );
     }
 

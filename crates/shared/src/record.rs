@@ -56,6 +56,23 @@
 //!   `{ "<field_key>": { "id", "file_name", "mime_type", "size_bytes", "sha256", "created_at" } }`
 //!   （[`Attachment`]），供顯示檔名、大小；找不到附件（已標記刪除）時不列出
 //!
+//! # 公式欄位（`formula`）
+//!
+//! 公式欄位的值由伺服器在存檔時計算（architecture.md §7.6），存值格式依欄位的
+//! `formula_result_type`。
+//!
+//! - 新增與修改（含主表與明細一起存檔）時，在同一個 transaction 內計算所有有效的公式欄位：先算每一列
+//!   明細的公式，再算主表的公式（主表的子表彙總使用明細公式的結果）；修改時所有公式都重算，包含
+//!   request 沒有帶到的明細子表
+//! - request 的 `data` 帶了公式欄位的值時一律忽略（不回傳錯誤）
+//! - 關聯引用讀取目標資料目前的值（目標已刪除時仍讀取）；目標之後被修改時，引用它的資料**不會**
+//!   自動更新，要等該筆資料再次存檔
+//! - `TODAY()` 為存檔時 Asia/Taipei 的日期
+//! - 計算失敗（除以零、型態不符等）時存檔仍成功：該欄位在 `data` 中沒有值，
+//!   [`Record::formula_errors`] 記錄原因 `{ "<field_key>": "除以零" }`
+//! - 篩選與排序依 `formula_result_type` 支援對應的運算子（見 [`FilterOp`]）
+//! - 公式欄位的值變動記在操作紀錄的 diff
+//!
 //! # 明細子表（`lines`）
 //!
 //! 明細子表是 `kind = detail` 的資料類別（例如維修單的「更換零件」），屬於一個主表
@@ -143,6 +160,10 @@ pub struct Record {
     /// （見模組說明「附件欄位」）。
     #[serde(default)]
     pub attachments: BTreeMap<String, Attachment>,
+    /// 公式欄位的計算錯誤，鍵為 `field_key`、值為錯誤原因（繁體中文）；只包含計算失敗的公式欄位
+    /// （見模組說明「公式欄位」），沒有錯誤時為空物件。
+    #[serde(default)]
+    pub formula_errors: BTreeMap<String, String>,
     /// 明細，鍵為明細子表的代碼（見模組說明「明細子表」）。單筆查詢與新增、修改的回應包含主表所有
     /// 有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -322,6 +343,8 @@ pub struct DeleteRecordQuery {
 /// | `gt`、`gte`、`lt`、`lte` | 大於、大於等於、小於、小於等於 | `integer`、`decimal`、`money`、`date`、`datetime` |
 /// | `empty` | 值為 `true`：沒有值；`false`：有值 | 全部 |
 /// | `any` | 包含任一選項；可重複帶多個 | `multi_select` |
+///
+/// `formula` 欄位依它的 `formula_result_type` 套用上表。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterOp {
@@ -733,6 +756,7 @@ mod tests {
             title: "SO202611-0001".into(),
             data: json!({ "qty": 1 }).as_object().unwrap().clone(),
             relations: BTreeMap::new(),
+            formula_errors: BTreeMap::new(),
             attachments: BTreeMap::new(),
             lines: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
@@ -807,6 +831,7 @@ mod tests {
             title: "濾網".into(),
             data: json!({ "part": "濾網" }).as_object().unwrap().clone(),
             relations: BTreeMap::new(),
+            formula_errors: BTreeMap::new(),
             attachments: BTreeMap::new(),
             lines: None,
             created_at: OffsetDateTime::UNIX_EPOCH,

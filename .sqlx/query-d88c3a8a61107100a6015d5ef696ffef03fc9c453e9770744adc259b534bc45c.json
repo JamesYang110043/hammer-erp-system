@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,\n               version\n        FROM custom_records\n        WHERE entity_id = $1 AND deleted_at IS NULL AND ($2::uuid IS NULL OR id < $2)\n        ORDER BY id DESC\n        LIMIT $3\n        ",
+  "query": "\n        SELECT id, entity_id, record_no, data, formula_errors, created_at, created_by,\n               updated_at, updated_by, version\n        FROM custom_records\n        WHERE id = $1 AND entity_id = $2 AND deleted_at IS NULL\n        FOR UPDATE\n        ",
   "describe": {
     "columns": [
       {
@@ -49,6 +49,17 @@
       },
       {
         "ordinal": 4,
+        "name": "formula_errors",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "formula_errors"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "updated_by",
         "type_info": "Uuid",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "version",
         "type_info": "Int4",
         "origin": {
@@ -106,8 +117,7 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid",
-        "Int8"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -115,6 +125,7 @@
       false,
       true,
       false,
+      true,
       false,
       true,
       false,
@@ -122,5 +133,5 @@
       false
     ]
   },
-  "hash": "9a9b54a27d2930d09e2854d4542484e5de291bb58a072b19688c13142af26acf"
+  "hash": "d88c3a8a61107100a6015d5ef696ffef03fc9c453e9770744adc259b534bc45c"
 }

@@ -4,6 +4,7 @@
 //! - [`audit`]：操作紀錄的 diff 與寫入
 //! - [`audit_logs`]：操作紀錄查詢（分頁、篩選）
 //! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定、目前使用者與權限檢查
+//! - [`formulas`]：存檔時計算公式欄位
 //! - [`layouts`]：列表版面（`view_layouts`）
 //! - [`numbering`]：單號規則的解析與產生
 //! - [`record_data`]：依欄位定義驗證並正規化資料的 `data`
@@ -23,6 +24,7 @@ pub mod audit;
 pub mod audit_logs;
 pub mod auth;
 mod error;
+pub mod formulas;
 pub mod layouts;
 pub mod numbering;
 pub mod record_data;
