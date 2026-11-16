@@ -1,10 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { commands } from '../bindings';
 import type {
   ChangeFieldTypeRequest,
   CreateEntityRequest,
   CreateFieldRequest,
+  EntityDefinition,
   EntityDetail,
   FieldDefinition,
   UpdateFieldRequest,
@@ -29,6 +30,27 @@ export function useEntity(key: string) {
   return useQuery({
     queryKey: entityKey(key),
     queryFn: () => unwrap(commands.getEntity(key)),
+  });
+}
+
+/**
+ * 多個資料類別與其欄位（例如主表的所有明細子表），快取與 {@link useEntity} 共用。
+ *
+ * 回傳的 `data` 與 `entities` 順序相同；還有資料類別沒載入完時為 `undefined`。
+ */
+export function useEntityDetails(entities: readonly EntityDefinition[] | undefined) {
+  return useQueries({
+    queries: (entities ?? []).map((e) => ({
+      queryKey: entityKey(e.key),
+      queryFn: () => unwrap(commands.getEntity(e.key)),
+    })),
+    combine: (results) => ({
+      data:
+        entities && results.every((r) => r.data !== undefined)
+          ? results.map((r) => r.data!)
+          : undefined,
+      error: results.find((r) => r.error)?.error ?? null,
+    }),
   });
 }
 
