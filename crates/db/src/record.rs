@@ -541,6 +541,92 @@ pub async fn update_records_data<'e>(
 }
 
 // ---------------------------------------------------------------------------
+// 重新計算公式
+// ---------------------------------------------------------------------------
+
+/// 重新計算的一批主表資料：資料類別 `entity_id` 未刪除的資料，依 `id` 由小到大，`after` 有值時只取
+/// id 大於它的資料，並鎖定這些列（`FOR UPDATE`）。必須在 transaction 內呼叫。
+pub async fn list_records_after_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_id: Uuid,
+    after: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<RecordRow>, DbError> {
+    let rows = sqlx::query_as!(
+        RecordRow,
+        r#"
+        SELECT id, entity_id, record_no, data, formula_errors, created_at, created_by,
+               updated_at, updated_by, version
+        FROM custom_records
+        WHERE entity_id = $1 AND parent_record_id IS NULL AND deleted_at IS NULL
+          AND ($2::uuid IS NULL OR id > $2)
+        ORDER BY id
+        LIMIT $3
+        FOR UPDATE
+        "#,
+        entity_id,
+        after,
+        limit,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 多筆主表資料的所有未刪除明細（不分明細子表），依主表、明細子表、`sort_order`、`id` 排序，
+/// 並鎖定這些列（`FOR UPDATE`）。必須在 transaction 內呼叫。
+pub async fn list_lines_of_parents_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    parent_record_ids: &[Uuid],
+) -> Result<Vec<LineRow>, DbError> {
+    let rows = sqlx::query_as!(
+        LineRow,
+        r#"
+        SELECT id, entity_id, parent_record_id AS "parent_record_id!", sort_order, data,
+               formula_errors, created_at, created_by, updated_at, updated_by, version
+        FROM custom_records
+        WHERE parent_record_id = ANY($1) AND deleted_at IS NULL
+        ORDER BY parent_record_id, entity_id, sort_order, id
+        FOR UPDATE
+        "#,
+        parent_record_ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 一次取代多筆未刪除資料（主表或明細）的 `data` 與 `formula_errors`，並遞增 `version`。不檢查版本，
+/// 呼叫前必須已鎖定這些列。回傳影響的筆數。
+///
+/// `ids`、`data`、`formula_errors` 依序對應，長度必須相同；`formula_errors` 為 JSON `null` 時寫入
+/// 資料庫 `NULL`（沒有錯誤）。
+pub async fn update_formula_values<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+    data: &[Value],
+    formula_errors: &[Value],
+    updated_by: Uuid,
+) -> Result<u64, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE custom_records AS r
+        SET data = u.data, formula_errors = NULLIF(u.formula_errors, 'null'::jsonb),
+            updated_by = $4, version = r.version + 1
+        FROM UNNEST($1::uuid[], $2::jsonb[], $3::jsonb[]) AS u(id, data, formula_errors)
+        WHERE r.id = u.id AND r.deleted_at IS NULL
+        "#,
+        ids,
+        data,
+        formula_errors,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+// ---------------------------------------------------------------------------
 // 列表
 // ---------------------------------------------------------------------------
 

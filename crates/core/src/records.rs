@@ -708,7 +708,7 @@ async fn load_entity(
 /// 同 [`load_entity`]，寫入資料時使用：以 `FOR SHARE` 鎖定資料類別，等待進行中的欄位定義變更
 /// （例如變更欄位型態，[`crate::schema::change_field_type`]）完成後才讀取欄位定義，
 /// 避免依舊的定義寫入資料。
-async fn load_entity_for_write(
+pub(crate) async fn load_entity_for_write(
     tx: &mut PgTransaction<'_>,
     key: &str,
 ) -> Result<(EntityDefinition, Vec<FieldDefinition>), CoreError> {
@@ -920,9 +920,9 @@ async fn commit(tx: PgTransaction<'_>) -> Result<(), CoreError> {
 // ---------------------------------------------------------------------------
 
 /// 主表的一個明細子表與其所有欄位定義（含已停用）。
-struct Detail {
-    entity: EntityDefinition,
-    fields: Vec<FieldDefinition>,
+pub(crate) struct Detail {
+    pub(crate) entity: EntityDefinition,
+    pub(crate) fields: Vec<FieldDefinition>,
 }
 
 /// 載入明細子表的欄位定義。
@@ -944,7 +944,7 @@ async fn load_details(
 }
 
 /// 寫入時載入主表的明細子表（含已停用），以 `FOR SHARE` 鎖定（同 [`load_entity_for_write`]）。
-async fn load_details_for_write(
+pub(crate) async fn load_details_for_write(
     tx: &mut PgTransaction<'_>,
     master: &EntityDefinition,
 ) -> Result<Vec<Detail>, CoreError> {
@@ -1173,7 +1173,7 @@ async fn prepare_line(
 }
 
 /// 主表與有效明細子表的公式欄位（[`Formulas`]）。
-fn formulas_of(master_fields: &[FieldDefinition], details: &[Detail]) -> Formulas {
+pub(crate) fn formulas_of(master_fields: &[FieldDefinition], details: &[Detail]) -> Formulas {
     let details: Vec<(&str, &[FieldDefinition])> = details
         .iter()
         .filter(|d| d.entity.is_active)

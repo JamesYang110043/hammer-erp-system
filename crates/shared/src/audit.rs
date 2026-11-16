@@ -42,6 +42,8 @@ pub const LOGOUT: &str = "logout";
 pub const PASSWORD_CHANGE: &str = "password_change";
 /// 匯出 Excel、列印。
 pub const EXPORT: &str = "export";
+/// 重新計算資料類別所有資料的公式（整批一筆，`record_id` 為空）。
+pub const RECALCULATE: &str = "recalculate";
 
 /// 所有動作代碼。
 pub const ALL: &[&str] = &[
@@ -55,6 +57,7 @@ pub const ALL: &[&str] = &[
     LOGOUT,
     PASSWORD_CHANGE,
     EXPORT,
+    RECALCULATE,
 ];
 
 /// 是否為已定義的動作代碼。
@@ -140,7 +143,8 @@ mod tests {
     fn codes_are_unique() {
         let set: HashSet<_> = ALL.iter().collect();
         assert_eq!(set.len(), ALL.len());
-        assert_eq!(ALL.len(), 10);
+        assert_eq!(ALL.len(), 11);
+        assert!(is_valid(RECALCULATE));
     }
 
     #[test]

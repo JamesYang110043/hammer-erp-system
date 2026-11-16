@@ -305,7 +305,7 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 | 錯誤 | 除以零、型態不符時，結果為空值，並在欄位顯示錯誤提示，不中斷存檔 |
 | 計算時機 | 存檔時由伺服器計算並寫入資料庫（可排序、篩選、用於報表）；桌面端用同一個 crate 即時預覽 |
 | 相依性 | 儲存公式時建立相依圖並檢查循環引用，有循環就拒絕儲存；計算順序依拓撲排序 |
-| 重新計算 | 修改公式後，管理者可對該資料類別的全部資料執行「重新計算」 |
+| 重新計算 | 修改公式後（或關聯資料修改後），管理者可對該資料類別的全部資料執行「重新計算」（見下方「重新計算」） |
 | 限制 | 公式只能讀資料，不能寫入其他欄位；系統欄位（例如單據金額、稅額）不能用公式覆蓋 |
 
 **明細子表的公式**：只能引用同一筆明細的欄位與關聯引用；不能引用主表欄位，也不能使用子表彙總。主表的公式以子表彙總讀取明細（包含明細的公式欄位）。因此循環只可能發生在同一張表內，計算時明細的公式先於主表。
@@ -330,12 +330,22 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 - 修改時所有公式都重算（不只有變動的欄位）。資料類別有公式時，request 沒帶到的明細子表也一起重算（視為列出所有既有明細且不修改欄位），主表的彙總因此使用全部明細；明細的值有變動時一併寫入。重算後主表與明細都沒有變動時不寫入、`version` 不變。
 - request 的 `data`（主表與明細）帶了公式欄位的值時一律忽略，不回傳錯誤（含已停用的公式欄位）。已停用的公式欄位不計算，既有的值保留。
 - 公式引用的欄位依目前的欄位定義，只能讀取有效的欄位；`formula` 欄位以 `formula_result_type` 讀取。
-- 關聯引用讀取目標資料**目前**的值，目標已軟刪除時仍讀取其資料；關聯欄位沒有值時為空值。目標資料之後被修改，引用它的公式**不會**自動更新，要等該筆資料再次存檔（或之後的「重新計算」功能）。
+- 關聯引用讀取目標資料**目前**的值，目標已軟刪除時仍讀取其資料；關聯欄位沒有值時為空值。目標資料之後被修改，引用它的公式**不會**自動更新，要等該筆資料再次存檔或執行「重新計算」。
 - `TODAY()` 為存檔時間在 Asia/Taipei 的日期（D13）。
 - 結果依 `formula_result_type` 轉成 §7.3 的存值寫入 `data`；空值與空字串不寫入（與一般欄位相同，沒有值的欄位不出現在 `data`）。
 - 計算失敗（除以零、型態不符、溢位、引用的欄位不存在等）時不中斷存檔：該欄位沒有值，錯誤原因寫入 `custom_records.formula_errors`（`{ "<field_key>": "除數不可為零" }`），回應帶 `formula_errors`（§10）。資料庫中的公式無法解析或有循環引用（資料不一致）時，相關欄位同樣記錄錯誤。
 - 操作紀錄的 diff 包含公式欄位值的變動（公式的值存在 `data`）；`formula_errors` 不記錄。
-- 不做：重新計算 API、被引用資料變動時自動重算。
+- 不做：被引用資料變動時自動重算。
+
+**重新計算**（`hammer_core::recalculate`，`POST /api/v1/entities/{key}/recalculate`，§10）：
+
+- 需要 `schema.manage`。只能對主表（`master` / `document`）執行，明細隨主表一起重算；明細子表、系統資料類別、不存在或已停用的資料類別回傳 `404`。
+- 處理該資料類別所有**未刪除**的主表資料與其未刪除的明細（只有有效的明細子表）。計算方式與「存檔時計算」相同（先明細、再主表；`TODAY()` 為執行時間在 Asia/Taipei 的日期）。
+- 同步執行，依 `id` 由小到大每 500 筆主表資料一個 transaction（鎖定該批主表與明細，並以 `FOR SHARE` 鎖定資料類別）；每批重新讀取欄位定義。
+- 主表或任一列明細的值（含 `formula_errors`）有變動時寫入：主表的 `version` + 1，有變動的明細也 + 1；都沒有變動的資料不寫入、`version` 不變。
+- 回傳處理的主表筆數、有變動的主表筆數、重算後主表或明細有公式錯誤的主表筆數。
+- 操作紀錄不逐筆寫：整批完成時在最後一批的 transaction 內寫一筆 `audit_logs`（動作 `recalculate`、`entity_key` 為資料類別代碼、`record_id` 為空、`after_data` 為 `{ "processed", "changed", "with_errors" }`）。中途失敗時已完成的批次不還原、也不寫操作紀錄；再執行一次即可（沒有變動的資料不會寫入）。
+- 不做：背景作業與進度回報、只重算部分資料。
 
 ---
 
@@ -445,7 +455,7 @@ products ───────────────────────�
 | id | UUID PK | |
 | occurred_at | TIMESTAMPTZ | |
 | user_id | UUID FK → users | |
-| action | TEXT | `create` / `update` / `delete` / `post` / `void` / `login` / `login_failed` / `logout` / `password_change` / `export`（常數在 `hammer_shared::audit`） |
+| action | TEXT | `create` / `update` / `delete` / `post` / `void` / `login` / `login_failed` / `logout` / `password_change` / `export` / `recalculate`（常數在 `hammer_shared::audit`；`recalculate` 為重新計算公式，整批一筆、`record_id` 為空） |
 | entity_key | TEXT | 資料類別代碼 |
 | record_id | UUID | |
 | before_data / after_data | JSONB | 變更前與變更後（只記錄有變動的欄位） |
@@ -1082,6 +1092,7 @@ GROUP BY product_id;
 - 客戶端在 `X-Client-Version` 標頭帶上版本號。版本低於伺服器要求時回傳 `426`，介面提示更新。
 - 系統資料類別有各自的端點（例如 `/api/v1/shipments/{id}/post`）。
 - 自訂資料類別共用通用端點：`/api/v1/entities/{entity_key}/records`。
+- 重新計算公式：`POST /api/v1/entities/{entity_key}/recalculate`（需要 `schema.manage`，無 request body），回應 `{ "processed": 120, "changed": 37, "with_errors": 2 }`（型別 `hammer_shared::schema::RecalculateResult`；規則見 §7.6「重新計算」）。
 - 錯誤格式統一：
   ```json
   { "code": "STOCK_INSUFFICIENT", "message": "商品 A001 庫存不足，尚缺 5", "details": { … } }

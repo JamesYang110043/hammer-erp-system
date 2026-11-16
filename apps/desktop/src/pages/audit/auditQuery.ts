@@ -18,6 +18,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   logout: '登出',
   password_change: '變更密碼',
   export: '匯出',
+  recalculate: '重新計算',
 };
 
 /** 資料類別代碼的顯示名稱；沒有列出的直接顯示代碼。 */

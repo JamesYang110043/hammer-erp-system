@@ -10,6 +10,7 @@
 //! - [`record_data`]：依欄位定義驗證並正規化資料的 `data`
 //! - [`record_lines`]：明細子表的明細與主表一起存檔時的檢查（比對 id、不可重複、操作紀錄）
 //! - [`records`]：自訂資料類別的資料（通用資料 API）
+//! - [`recalculate`]：重新計算資料類別所有資料的公式欄位
 //! - [`relations`]：關聯欄位的檢查與回應中的關聯資訊
 //! - [`schema`]：資料類別與欄位定義的管理
 //! - [`setup`]：初次啟動建立第一個管理者
@@ -27,6 +28,7 @@ mod error;
 pub mod formulas;
 pub mod layouts;
 pub mod numbering;
+pub mod recalculate;
 pub mod record_data;
 pub mod record_lines;
 pub mod records;
