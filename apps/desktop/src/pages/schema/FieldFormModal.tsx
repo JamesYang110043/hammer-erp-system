@@ -1,7 +1,7 @@
 import { Alert, Form, Input, InputNumber, Modal, Select, Switch, Typography } from 'antd';
 import { useState } from 'react';
 
-import { useCreateField, useUpdateField } from '../../api/schema';
+import { useCreateField, useFormulaSyntax, useUpdateField } from '../../api/schema';
 import type { FieldDefinition } from '../../bindings';
 import { duplicateValues, formatValue } from '../../schema/errorDetails';
 import type { DuplicateValue } from '../../schema/errorDetails';
@@ -13,9 +13,10 @@ import {
 } from '../../schema/fieldForm';
 import type { FieldFormValues } from '../../schema/fieldForm';
 import {
+  CREATABLE_DATA_TYPES,
   DATA_TYPE_LABELS,
-  VALUE_DATA_TYPES,
   hasDefaultValue,
+  isPropApplicable,
   isPropEditable,
   isPropVisible,
 } from '../../schema/fieldSettings';
@@ -23,6 +24,7 @@ import type { FieldProp } from '../../schema/fieldSettings';
 import { keyRule } from '../../schema/keyRules';
 import { applyFormError } from '../users/formErrors';
 import { DefaultValueInput, TypeSettingsFields } from './FieldInputs';
+import { FormulaSettings } from './FormulaSettings';
 
 /** `'new'` 代表新增欄位；`undefined` 代表關閉。 */
 export type FieldFormTarget = FieldDefinition | 'new' | undefined;
@@ -41,6 +43,8 @@ const SWITCHES: { prop: FieldProp & keyof FieldFormValues; label: string; extra?
  * - 依資料型態顯示對應的設定（{@link TypeSettingsFields}）
  * - 編輯時欄位代碼與資料型態不可修改（型態另有「變更型態」）
  * - 系統欄位只顯示可以修改的屬性（docs/architecture.md §7.2）
+ * - 公式欄位顯示公式設定（{@link FormulaSettings}），不顯示不可重複、預設值、必填（§7.3）；
+ *   公式有語法錯誤時停用儲存
  */
 export function FieldFormModal({
   entityKey,
@@ -64,9 +68,14 @@ export function FieldFormModal({
   const dataType = Form.useWatch('data_type', form) ?? field?.data_type ?? 'text';
   const options = Form.useWatch('options', form) ?? [];
   const decimalPlaces = Form.useWatch('decimal_places', form);
+  const resultType = Form.useWatch('formula_result_type', form) ?? field?.formula_result_type;
+  const formula = Form.useWatch('formula', form);
+  const isFormula = dataType === 'formula';
+  const syntax = useFormulaSyntax(isFormula ? formula : undefined);
   const pending = createField.isPending || updateField.isPending;
 
-  const visible = (prop: FieldProp) => isPropVisible(field, prop);
+  const visible = (prop: FieldProp) =>
+    isPropVisible(field, prop) && isPropApplicable(dataType, prop);
   const editable = (prop: FieldProp) => isPropEditable(field, prop);
 
   const close = () => {
@@ -97,9 +106,9 @@ export function FieldFormModal({
   };
 
   const typeOptions = (
-    field && !VALUE_DATA_TYPES.includes(field.data_type)
-      ? [...VALUE_DATA_TYPES, field.data_type]
-      : VALUE_DATA_TYPES
+    field && !CREATABLE_DATA_TYPES.includes(field.data_type)
+      ? [...CREATABLE_DATA_TYPES, field.data_type]
+      : CREATABLE_DATA_TYPES
   ).map((t) => ({ value: t, label: DATA_TYPE_LABELS[t] }));
 
   return (
@@ -109,7 +118,7 @@ export function FieldFormModal({
       onCancel={close}
       onOk={() => form.submit()}
       okText="儲存"
-      okButtonProps={{ loading: pending }}
+      okButtonProps={{ loading: pending, disabled: isFormula && syntax.error !== undefined }}
       destroyOnHidden
       width={640}
     >
@@ -164,9 +173,19 @@ export function FieldFormModal({
             <Select options={typeOptions} disabled={!editable('data_type')} virtual={false} />
           </Form.Item>
 
+          {visible('type_settings') && isFormula && (
+            <FormulaSettings
+              form={form}
+              entityKey={entityKey}
+              selfKey={field?.field_key}
+              syntaxError={syntax.error}
+              disabled={!editable('type_settings')}
+            />
+          )}
           {visible('type_settings') && (
             <TypeSettingsFields
               dataType={dataType}
+              resultType={resultType}
               disabled={!editable('type_settings')}
               relationLocked={field !== undefined}
             />

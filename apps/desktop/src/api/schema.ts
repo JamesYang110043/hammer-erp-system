@@ -1,4 +1,10 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 
 import { commands } from '../bindings';
 import type {
@@ -12,8 +18,10 @@ import type {
   UpdateEntityRequest,
   UpdateFieldRequest,
 } from '../bindings';
+import { useDebouncedValue } from '../utils/useDebouncedValue';
 import { auditLogsKey } from './auditLogs';
 import { unwrap } from './client';
+import { recordsKey } from './records';
 
 /** 資料類別與欄位定義（寫入需要 `schema.manage`，伺服器檢查）。 */
 export const entitiesKey = ['entities'] as const;
@@ -163,4 +171,43 @@ export function useReorderFields(key: string) {
         queryClient.invalidateQueries({ queryKey: auditLogsKey }),
       ]),
   });
+}
+
+/**
+ * 重新計算資料類別所有資料的公式欄位（需要 `schema.manage`，伺服器檢查）。
+ * 完成後重新取得該資料類別的資料列表與操作紀錄。
+ */
+export function useRecalculateEntity() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string) => unwrap(commands.recalculateEntity(key)),
+    onSuccess: (_result, key) =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: recordsKey(key) }),
+        queryClient.invalidateQueries({ queryKey: auditLogsKey }),
+      ]),
+  });
+}
+
+/** 輸入停止多久後檢查公式語法（毫秒）。 */
+export const FORMULA_CHECK_DELAY_MS = 300;
+
+/**
+ * 即時檢查公式語法（Tauri command，使用 `crates/formula`，不需連線）。
+ *
+ * 輸入停止 {@link FORMULA_CHECK_DELAY_MS} 毫秒後檢查。回傳 `formula` 的檢查結果：
+ * `error` 只在檢查的是目前的公式時才有值（避免顯示舊公式的錯誤位置）；空白或 `undefined` 不檢查。
+ */
+export function useFormulaSyntax(formula: string | null | undefined) {
+  const text = formula ?? '';
+  const debounced = useDebouncedValue(text, FORMULA_CHECK_DELAY_MS);
+  const query = useQuery({
+    queryKey: ['formulaSyntax', debounced],
+    queryFn: () => commands.checkFormulaSyntax(debounced),
+    enabled: debounced.trim() !== '',
+    staleTime: Infinity,
+    placeholderData: keepPreviousData,
+  });
+  const current = debounced === text && text.trim() !== '' && !query.isPlaceholderData;
+  return { error: current ? (query.data ?? undefined) : undefined };
 }

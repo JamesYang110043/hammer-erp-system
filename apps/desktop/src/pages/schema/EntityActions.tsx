@@ -1,7 +1,7 @@
 import { App, Button, List, Popconfirm, Space, Typography } from 'antd';
 
 import { mutationErrorMessage } from '../../api/errors';
-import { useDeleteEntity, useUpdateEntity } from '../../api/schema';
+import { useDeleteEntity, useRecalculateEntity, useUpdateEntity } from '../../api/schema';
 import type { EntityDefinition } from '../../bindings';
 import { toUpdateEntityRequest } from '../../schema/entities';
 import { referencingFields } from '../../schema/errorDetails';
@@ -10,10 +10,18 @@ import type { ReferencingField } from '../../schema/errorDetails';
 /** 刪除被拒絕時的說明：列出引用它的關聯欄位。 */
 export function ReferencingFieldsList({ fields }: { fields: ReferencingField[] }) {
   return (
+    <FieldRefList
+      intro={`以下 ${fields.length} 個關聯欄位還指向這個資料類別，請先停用或修改這些欄位：`}
+      fields={fields}
+    />
+  );
+}
+
+/** 列出欄位（資料類別名稱、代碼／欄位名稱、代碼），前面是說明 `intro`。 */
+export function FieldRefList({ intro, fields }: { intro: string; fields: ReferencingField[] }) {
+  return (
     <>
-      <Typography.Paragraph>
-        以下 {fields.length} 個關聯欄位還指向這個資料類別，請先停用或修改這些欄位：
-      </Typography.Paragraph>
+      <Typography.Paragraph>{intro}</Typography.Paragraph>
       <List
         size="small"
         bordered
@@ -39,6 +47,7 @@ export function ReferencingFieldsList({ fields }: { fields: ReferencingField[] }
  * 資料類別的操作：編輯、欄位設定、停用／啟用、刪除（需要 `schema.manage`，伺服器檢查）。
  *
  * 系統資料類別不可停用、不可刪除，不顯示這兩個按鈕。
+ * 「重新計算」只有啟用中的自訂主檔、單據才有（明細隨主表一起重算，docs/architecture.md §7.6）。
  */
 export function EntityActions({
   entity,
@@ -52,6 +61,28 @@ export function EntityActions({
   const { message, modal } = App.useApp();
   const updateEntity = useUpdateEntity();
   const deleteEntity = useDeleteEntity();
+  const recalculate = useRecalculateEntity();
+  const canRecalculate = !entity.is_system && entity.is_active && entity.kind !== 'detail';
+
+  const runRecalculate = () =>
+    recalculate.mutateAsync(entity.key).then(
+      (result) =>
+        void modal.success({
+          title: `「${entity.label}」重新計算完成`,
+          content: (
+            <>
+              <div>
+                處理 {result.processed} 筆，其中 {result.changed} 筆有變動。
+              </div>
+              {result.with_errors > 0 && (
+                <div>有 {result.with_errors} 筆資料的公式計算錯誤，請開啟資料查看錯誤原因。</div>
+              )}
+            </>
+          ),
+          okText: '知道了',
+        }),
+      (err: unknown) => void message.error(mutationErrorMessage(err)),
+    );
 
   const setActive = (isActive: boolean) =>
     updateEntity
@@ -93,6 +124,19 @@ export function EntityActions({
       <Button type="link" size="small" onClick={onOpenFields}>
         欄位設定
       </Button>
+      {canRecalculate && (
+        <Popconfirm
+          title={`確定要重新計算「${entity.label}」？`}
+          description="依目前的公式重新計算所有資料（含明細）的公式欄位，資料多時需要一些時間。"
+          okText="重新計算"
+          cancelText="取消"
+          onConfirm={runRecalculate}
+        >
+          <Button type="link" size="small" loading={recalculate.isPending}>
+            重新計算
+          </Button>
+        </Popconfirm>
+      )}
       {!entity.is_system &&
         (entity.is_active ? (
           <Popconfirm

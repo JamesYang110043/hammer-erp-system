@@ -571,3 +571,203 @@ describe('明細子表', () => {
     await waitFor(() => expect(window.location.hash).toBe('#/schema/repair'));
   });
 });
+
+describe('公式欄位', () => {
+  /** 模擬 `check_formula_syntax`：以 `*` 結尾視為不完整，其他都正確。 */
+  const checkSyntax: CommandHandler = ({ formula }) => {
+    const text = String(formula);
+    if (text.trimEnd().endsWith('*')) {
+      const end = Array.from(text).length;
+      return { message: '公式不完整', start: end, end };
+    }
+    return null;
+  };
+
+  /** 新增欄位對話框，選好「公式」型態。 */
+  async function openNewFormulaDialog() {
+    const opened = await openNewFieldDialog();
+    await chooseOption(opened.user, '資料型態', '公式');
+    return opened;
+  }
+
+  /** 輸入公式（`{` 在 user-event 是特殊字元，用貼上）。 */
+  async function enterFormula(
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: ReturnType<typeof within>,
+    text: string,
+  ) {
+    const input = dialog.getByLabelText('公式');
+    await user.clear(input);
+    await user.click(input);
+    await user.paste(text);
+  }
+
+  it('creates_formula_field_with_correct_payload', async () => {
+    const invoke = renderFieldsPage({
+      check_formula_syntax: checkSyntax,
+      create_field: () => fieldDef({ field_key: 'total', data_type: 'formula' }),
+    });
+    const { user, dialog } = await openNewFormulaDialog();
+
+    // 公式欄位不顯示不可重複、預設值、必填
+    expect(dialog.queryByLabelText('不可重複')).not.toBeInTheDocument();
+    expect(dialog.queryByLabelText('預設值')).not.toBeInTheDocument();
+    expect(dialog.queryByLabelText('必填')).not.toBeInTheDocument();
+    expect(dialog.getByLabelText('可搜尋')).toBeInTheDocument();
+
+    await user.type(dialog.getByLabelText('欄位代碼'), 'total');
+    await user.type(dialog.getByLabelText('顯示名稱'), '總價');
+    await enterFormula(user, dialog, ' {qty} * 1.05 ');
+    // 小數位數只在結果型態是小數、金額時出現
+    expect(dialog.queryByLabelText('小數位數')).not.toBeInTheDocument();
+    await chooseOption(user, '結果型態', '金額');
+    await user.type(dialog.getByLabelText('小數位數'), '2');
+    await user.click(dialog.getByRole('button', { name: /儲\s*存/ }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('create_field', {
+        key: 'repair',
+        req: expect.objectContaining({
+          field_key: 'total',
+          label: '總價',
+          data_type: 'formula',
+          formula: '{qty} * 1.05',
+          formula_result_type: 'money',
+          decimal_places: 2,
+          is_required: false,
+          is_unique: false,
+          default_value: null,
+          options: null,
+          validation: null,
+          relation_entity_id: null,
+        }),
+      }),
+    );
+  });
+
+  it('shows_syntax_error_and_disables_submit', async () => {
+    const invoke = renderFieldsPage({ check_formula_syntax: checkSyntax });
+    const { user, dialog } = await openNewFormulaDialog();
+    const save = dialog.getByRole('button', { name: /儲\s*存/ });
+
+    await enterFormula(user, dialog, '{qty} *');
+    const alert = await dialog.findByRole('alert');
+    expect(within(alert).getByText('第 8 個字元：公式不完整')).toBeInTheDocument();
+    // 錯誤位置在結尾：以標示顯示
+    expect(
+      within(alert).getByTestId('formula-error-position').querySelector('mark'),
+    ).not.toBeNull();
+    await waitFor(() => expect(save).toBeDisabled());
+    expect(invoke).toHaveBeenCalledWith('check_formula_syntax', { formula: '{qty} *' });
+
+    // 修正後恢復
+    await user.type(dialog.getByLabelText('公式'), ' 2');
+    await waitFor(() => expect(dialog.queryByRole('alert')).not.toBeInTheDocument());
+    expect(save).toBeEnabled();
+    expect(invoke).not.toHaveBeenCalledWith('create_field', expect.anything());
+  });
+
+  it('shows_server_cycle_error_under_formula', async () => {
+    const message = '公式有循環引用：a → b → a';
+    renderFieldsPage({
+      check_formula_syntax: checkSyntax,
+      create_field: () => validationError({ field: 'formula', cycle: ['a', 'b', 'a'] }, message),
+    });
+    const { user, dialog } = await openNewFormulaDialog();
+
+    await user.type(dialog.getByLabelText('欄位代碼'), 'a');
+    await user.type(dialog.getByLabelText('顯示名稱'), '甲');
+    await enterFormula(user, dialog, '{b} + 1');
+    await chooseOption(user, '結果型態', '整數');
+    await user.click(dialog.getByRole('button', { name: /儲\s*存/ }));
+
+    const error = await dialog.findByText(message);
+    // 顯示在公式輸入區的表單項目下方
+    expect(error.closest('.ant-form-item')).toContainElement(dialog.getByLabelText('公式'));
+  });
+
+  it('inserts_field_code_from_list', async () => {
+    const LINES = {
+      ...REPAIR,
+      id: 'entity-lines',
+      key: 'lines',
+      label: '明細',
+      kind: 'detail' as const,
+      parent_entity_id: REPAIR.id,
+    };
+    const amount = fieldDef({
+      id: 'f-amount',
+      entity_id: LINES.id,
+      field_key: 'amount',
+      label: '金額',
+      data_type: 'money',
+      decimal_places: 2,
+    });
+    renderFieldsPage({
+      check_formula_syntax: checkSyntax,
+      list_all_entities: () => [REPAIR, LINES],
+      get_entity: ({ key }) =>
+        key === 'lines' ? { entity: LINES, fields: [amount] } : entityDetail(),
+    });
+    const { user, dialog } = await openNewFormulaDialog();
+
+    // 清單顯示名稱，插入的是代碼
+    await chooseOption(user, '插入欄位', '數量');
+    expect(dialog.getByLabelText('公式')).toHaveValue('{qty}');
+
+    await user.type(dialog.getByLabelText('公式'), ' + ');
+    await chooseOption(user, '插入欄位', '金額（合計）');
+    expect(dialog.getByLabelText('公式')).toHaveValue('{qty} + SUM(lines.amount)');
+  });
+
+  it('lists_formulas_when_deactivating_referenced_field', async () => {
+    renderFieldsPage({
+      deactivate_field: () =>
+        validationError(
+          {
+            field: 'formula',
+            formulas: [
+              {
+                entity_key: 'repair',
+                entity_label: '維修單',
+                field_key: 'total',
+                field_label: '總價',
+              },
+            ],
+          },
+          '欄位被公式引用，無法停用',
+        ),
+    });
+    const user = userEvent.setup();
+    const row = await rowOf('qty');
+    await user.click(row.getByRole('button', { name: '停用' }));
+    const confirm = await screen.findByRole('tooltip');
+    await user.click(within(confirm).getByRole('button', { name: /停\s*用/ }));
+
+    const dialog = within(await screen.findByRole('dialog'));
+    // antd 的確認對話框標題也出現在 aria 標籤中
+    expect(dialog.getAllByText('無法停用「數量」').length).toBeGreaterThan(0);
+    expect(dialog.getByText(/以下 1 個公式欄位引用了這個欄位/)).toBeInTheDocument();
+    expect(dialog.getByText('總價')).toBeInTheDocument();
+    expect(dialog.getByText('total')).toBeInTheDocument();
+  });
+
+  it('shows_formula_result_type_in_list', async () => {
+    renderFieldsPage({
+      get_entity: () =>
+        entityDetail([
+          CUSTOM_FIELD,
+          fieldDef({
+            field_key: 'total',
+            label: '總價',
+            data_type: 'formula',
+            formula: '{qty} * 2',
+            formula_result_type: 'integer',
+            sort_order: 2,
+          }),
+        ]),
+    });
+    const row = await rowOf('total');
+    expect(row.getByText('公式（整數）')).toBeInTheDocument();
+  });
+});

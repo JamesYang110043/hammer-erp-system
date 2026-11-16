@@ -18,9 +18,10 @@ import {
 import type { FieldDefinition } from '../../bindings';
 import { toReactivateRequest } from '../../schema/fieldForm';
 import { DATA_TYPE_LABELS, canChangeType, canDeactivate } from '../../schema/fieldSettings';
-import { duplicateValues } from '../../schema/errorDetails';
+import { duplicateValues, formulaReferences } from '../../schema/errorDetails';
 import { ChangeTypeModal } from './ChangeTypeModal';
 import { DetailEntitiesCard } from './DetailEntitiesCard';
+import { FieldRefList } from './EntityActions';
 import { FieldFormModal } from './FieldFormModal';
 import type { FieldFormTarget } from './FieldFormModal';
 import { DragHandle, SortableRow, SortableTableContext } from './sortableRows';
@@ -48,7 +49,7 @@ function FieldTags({ field }: { field: FieldDefinition }) {
 export function FieldsPage() {
   const { key = '' } = useParams();
   const navigate = useNavigate();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const entity = useEntity(key);
   const reorder = useReorderFields(key);
   const deactivate = useDeactivateField(key);
@@ -114,7 +115,10 @@ export function FieldsPage() {
     {
       title: '資料型態',
       dataIndex: 'data_type',
-      render: (_, f) => DATA_TYPE_LABELS[f.data_type],
+      render: (_, f) =>
+        f.data_type === 'formula' && f.formula_result_type
+          ? `${DATA_TYPE_LABELS.formula}（${DATA_TYPE_LABELS[f.formula_result_type]}）`
+          : DATA_TYPE_LABELS[f.data_type],
     },
     { title: '屬性', key: 'flags', render: (_, f) => <FieldTags field={f} /> },
     {
@@ -138,9 +142,26 @@ export function FieldsPage() {
               okButtonProps={{ danger: true }}
               cancelText="取消"
               onConfirm={() =>
-                deactivate
-                  .mutateAsync(f)
-                  .then(() => void message.success(`已停用「${f.label}」，資料已保留`), showError)
+                deactivate.mutateAsync(f).then(
+                  () => void message.success(`已停用「${f.label}」，資料已保留`),
+                  (err: unknown) => {
+                    const formulas = formulaReferences(err);
+                    if (!formulas) {
+                      return showError(err);
+                    }
+                    modal.error({
+                      title: `無法停用「${f.label}」`,
+                      content: (
+                        <FieldRefList
+                          intro={`以下 ${formulas.length} 個公式欄位引用了這個欄位，請先修改或停用這些公式：`}
+                          fields={formulas}
+                        />
+                      ),
+                      okText: '知道了',
+                      width: 520,
+                    });
+                  },
+                )
               }
             >
               <Button type="link" size="small" danger>
