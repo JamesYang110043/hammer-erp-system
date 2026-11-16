@@ -13,8 +13,12 @@
 //! 欄位的「可搜尋」、「不可重複」與啟用狀態改變時，在同一個 transaction 內建立或移除動態索引
 //! （§7.5，[`index`]）。
 //!
+//! 公式欄位（§7.6）儲存時檢查語法、引用、型態與循環引用並寫入 `formula_deps`（[`formula`]）；
+//! 被有效公式引用的欄位不能停用，被引用的明細子表不能停用，被引用的資料類別不能刪除。
+//!
 //! 輸入檢查在 [`rules`]，型態轉換在 [`type_change`]，索引規劃在 [`index`]（純邏輯，有單元測試）。
 
+pub mod formula;
 pub mod index;
 pub mod rules;
 pub mod type_change;
@@ -121,7 +125,8 @@ impl ChangeAction {
     }
 }
 
-/// 刪除資料類別時，引用它的關聯欄位（[`CoreError::EntityReferenced`]）。
+/// 引用某個資料類別或欄位的欄位：刪除資料類別時引用它的關聯欄位（[`CoreError::EntityReferenced`]），
+/// 或停用欄位、停用明細子表、刪除資料類別時引用它的公式欄位（[`CoreError::FormulaReferenced`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationReference {
     pub entity_key: String,
@@ -252,7 +257,12 @@ impl FieldJson {
         })
     }
 
-    fn attrs<'a>(&'a self, def: &'a FieldDefinition) -> FieldAttributes<'a> {
+    /// `formula_deps` 為公式欄位的相依（[`formula::validate_formula`]）；其他型態為 `None`。
+    fn attrs<'a>(
+        &'a self,
+        def: &'a FieldDefinition,
+        formula_deps: Option<&'a Value>,
+    ) -> FieldAttributes<'a> {
         FieldAttributes {
             label: &def.label,
             is_required: def.is_required,
@@ -264,6 +274,9 @@ impl FieldJson {
             validation: self.validation.as_ref(),
             options: self.options.as_ref(),
             decimal_places: def.decimal_places,
+            formula: def.formula.as_deref(),
+            formula_result_type: def.formula_result_type.map(DataType::as_str),
+            formula_deps,
             ui_widget: def.ui_widget.as_deref(),
             column_width: def.column_width,
             help_text: def.help_text.as_deref(),
@@ -398,6 +411,7 @@ pub async fn create_entity(
 /// - 不存在或已刪除 → [`CoreError::NotFound`]
 /// - `version` 不符 → `Conflict`（§9.4）
 /// - 修改代碼、停用系統資料類別 → [`CoreError::InvalidField`]
+/// - 停用明細子表時，主表的有效公式欄位以子表彙總引用它 → [`CoreError::FormulaReferenced`]
 /// - 沒有任何變動時不寫入，回傳目前的資料（`version` 不變）
 pub async fn update_entity(
     pool: &PgPool,
@@ -414,6 +428,9 @@ pub async fn update_entity(
     ensure_version(current.version, req.version)?;
     let fields = load_fields(&mut tx, current.id).await?;
     let next = rules::plan_update_entity(&current, &fields, req)?;
+    if current.kind == EntityKind::Detail && current.is_active && !next.is_active {
+        ensure_entities_not_referenced_by_formulas(&mut tx, &[current.id]).await?;
+    }
 
     let before = snapshot(&current)?;
     let after = snapshot(&next)?;
@@ -532,7 +549,8 @@ pub async fn reorder_entities(
 ///    所以會等進行中的寫入完成；新增關聯欄位時也以 `FOR SHARE` 鎖定目標資料類別
 /// 2. 檢查 `version`；系統資料類別不可刪除（[`rules::validate_delete_entity`]）
 /// 3. 其他有效資料類別的有效 `relation` 欄位指向它（或它的明細子表）→
-///    [`CoreError::EntityReferenced`]，列出這些欄位
+///    [`CoreError::EntityReferenced`]，列出這些欄位；其他資料類別的有效公式欄位引用它（或它的
+///    明細子表）的欄位 → [`CoreError::FormulaReferenced`]
 /// 4. 移除它與明細子表所有欄位的動態索引（§7.5），軟刪除它與明細子表，各寫入一筆
 ///    `schema_change_logs`（`delete`）與 `audit_logs`
 ///
@@ -582,6 +600,7 @@ pub async fn delete_entity(
                 .collect(),
         ));
     }
+    ensure_entities_not_referenced_by_formulas(&mut tx, &targets).await?;
 
     for target in std::iter::once(&entity).chain(&details) {
         drop_entity_indexes(&mut tx, target).await?;
@@ -633,6 +652,9 @@ async fn drop_entity_indexes(
 /// `relation` 欄位的目標資料類別必須符合 [`rules::validate_relation_target`]（自訂、有效、
 /// `master` 或 `document`），否則 [`CoreError::InvalidField`]（`relation_entity_id`）。
 ///
+/// `formula` 欄位依 [`formula::validate_formula`] 檢查公式（不合法 → [`CoreError::InvalidFormula`]），
+/// 並寫入 `formula_deps`。
+///
 /// - 資料類別不存在或已刪除 → [`CoreError::NotFound`]
 /// - 欄位代碼與該資料類別的既有欄位（含已停用）重複 → [`CoreError::InvalidField`]（`field_key`）
 pub async fn create_field(
@@ -657,6 +679,11 @@ pub async fn create_field(
         };
         rules::validate_relation_target(target.as_ref())?;
     }
+    let deps = if def.data_type == DataType::Formula {
+        Some(formula::validate_formula(&mut tx, &entity, &def, true).await?)
+    } else {
+        None
+    };
     let json = FieldJson::of(&def)?;
     db::insert_field(
         &mut *tx,
@@ -666,7 +693,7 @@ pub async fn create_field(
             field_key: &def.field_key,
             data_type: def.data_type.as_str(),
             relation_entity_id: def.relation_entity_id,
-            attrs: json.attrs(&def),
+            attrs: json.attrs(&def, deps.as_ref()),
             created_by: ctx.user_id,
             created_at: now,
         },
@@ -704,7 +731,10 @@ pub async fn create_field(
 /// - 資料類別或欄位不存在 → [`CoreError::NotFound`]
 /// - `version` 不符 → `Conflict`（§9.4）
 /// - 修改代碼、型態，或違反系統欄位的限制（§7.2）→ [`CoreError::InvalidField`]
-/// - `is_active` 由 `true` 改為 `false` 時，變更紀錄的動作為 `deactivate`
+/// - `is_active` 由 `true` 改為 `false` 時，變更紀錄的動作為 `deactivate`；被有效的公式欄位引用時
+///   → [`CoreError::FormulaReferenced`]
+/// - `formula` 欄位的公式、結果型態改變或重新啟用時，重新檢查公式（[`formula::validate_formula`]）
+///   並更新 `formula_deps`；既有資料不會重新計算
 /// - 「可搜尋」、「不可重複」、啟用狀態改變時建立或移除索引（§7.5）；開啟「不可重複」
 ///   （或重新啟用不可重複的欄位）時，未刪除的資料已有重複的值 → [`CoreError::DuplicateValues`]
 /// - 沒有任何變動時不寫入，回傳目前的資料（`version` 不變）
@@ -742,6 +772,7 @@ pub async fn update_field(
 /// 停用欄位（`is_active = false`），資料保留（§7.2），並移除欄位的索引（§7.5）。
 ///
 /// - 系統欄位 → [`CoreError::InvalidField`]（`is_active`）
+/// - 被有效的公式欄位引用（本筆欄位、關聯引用、子表彙總）→ [`CoreError::FormulaReferenced`]
 /// - 已經停用時不寫入，回傳目前的資料
 /// - 其他錯誤同 [`update_field`]
 pub async fn deactivate_field(
@@ -984,13 +1015,25 @@ async fn write_field(
     if before == after {
         return Ok(current.clone());
     }
+    if current.is_active && !next.is_active {
+        ensure_field_not_referenced_by_formulas(tx, current).await?;
+    }
+    let deps = if next.data_type == DataType::Formula {
+        // 公式沒有變動時只重新產生相依；已停用的公式欄位只檢查語法，重新啟用時才完整檢查
+        let changed = next.formula != current.formula
+            || next.formula_result_type != current.formula_result_type
+            || !current.is_active;
+        Some(formula::validate_formula(tx, entity, next, changed && next.is_active).await?)
+    } else {
+        None
+    };
     let json = FieldJson::of(next)?;
     ensure_version_matched(
         db::update_field(
             &mut **tx,
             current.id,
             version,
-            &json.attrs(next),
+            &json.attrs(next, deps.as_ref()),
             next.is_active,
             ctx.user_id,
         )
@@ -1088,6 +1131,41 @@ async fn ensure_no_duplicates(
 // ---------------------------------------------------------------------------
 // 共用
 // ---------------------------------------------------------------------------
+
+/// 欄位被有效的公式欄位引用時 → [`CoreError::FormulaReferenced`]。
+async fn ensure_field_not_referenced_by_formulas(
+    tx: &mut PgTransaction<'_>,
+    field: &FieldDefinition,
+) -> Result<(), CoreError> {
+    let refs =
+        db::list_formula_field_references(&mut **tx, field.entity_id, &field.field_key).await?;
+    formula_references(refs)
+}
+
+/// 資料類別 `targets`（的欄位）被其他資料類別的有效公式欄位引用時 → [`CoreError::FormulaReferenced`]。
+async fn ensure_entities_not_referenced_by_formulas(
+    tx: &mut PgTransaction<'_>,
+    targets: &[Id],
+) -> Result<(), CoreError> {
+    let refs = db::list_formula_entity_references(&mut **tx, targets).await?;
+    formula_references(refs)
+}
+
+fn formula_references(refs: Vec<db::RelationReferenceRow>) -> Result<(), CoreError> {
+    if refs.is_empty() {
+        return Ok(());
+    }
+    Err(CoreError::FormulaReferenced(
+        refs.into_iter()
+            .map(|r| RelationReference {
+                entity_key: r.entity_key,
+                entity_label: r.entity_label,
+                field_key: r.field_key,
+                field_label: r.field_label,
+            })
+            .collect(),
+    ))
+}
 
 /// 寫入一筆 `schema_change_logs`（完整快照）與一筆 `audit_logs`（只有變動的屬性）。
 #[allow(clippy::too_many_arguments)]

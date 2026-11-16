@@ -133,9 +133,10 @@ impl DataType {
         Self::ALL.iter().copied().find(|t| t.as_str() == s)
     }
 
-    /// 目前是否支援此型態的值與建立此型態的欄位。
+    /// 使用者是否可以寫入此型態的值（資料 API、預設值、型態轉換）。
     ///
-    /// `formula` 尚未支援（M2c），API 不允許建立。
+    /// `formula` 的值由系統計算（§7.6），使用者不能寫入；欄位定義另見
+    /// [`CreateFieldRequest::formula`]。
     pub fn is_value_supported(self) -> bool {
         !matches!(self, Self::Formula)
     }
@@ -477,7 +478,7 @@ pub struct DeleteEntityQuery {
 
 /// 建立欄位的輸入。儲存方式固定為 `json`。
 ///
-/// 目前不允許 `file`、`formula`（見 [`DataType::is_value_supported`]）。
+/// `formula` 欄位見 [`CreateFieldRequest::formula`]。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct CreateFieldRequest {
     /// 欄位代碼，須符合 [`validate_key`]；建立後不可修改。
@@ -515,6 +516,20 @@ pub struct CreateFieldRequest {
     /// `relation_entity_id`。系統資料類別在 M3 支援。`relation` 欄位不可設定預設值。
     #[serde(default)]
     pub relation_entity_id: Option<Id>,
+    /// `formula` 必填：公式（語法見 architecture.md §7.6）；其他型態不可設定。
+    ///
+    /// 儲存時檢查語法、引用的欄位（本筆欄位、關聯引用、子表彙總都必須存在且有效）、型態與循環引用，
+    /// 不符合時回傳 `422 VALIDATION`，`details` 為 `{ "field": "formula", "span": { "start", "end" } }`
+    /// （錯誤在公式中的字元位置，從 0 開始、不含 `end`）或 `{ "field": "formula", "cycle": ["a", "b", "a"] }`
+    /// （循環路徑，明細欄位為 `明細子表代碼.欄位代碼`）。
+    ///
+    /// 公式欄位可以設定「可搜尋」，不可設定「不可重複」、預設值、必填。
+    #[serde(default)]
+    pub formula: Option<String>,
+    /// `formula` 必填：結果型態，只能是 `text`、`long_text`、`integer`、`decimal`、`money`、
+    /// `date`、`datetime`、`boolean`；`decimal`、`money` 須設定 `decimal_places`。其他型態不可設定。
+    #[serde(default)]
+    pub formula_result_type: Option<DataType>,
     #[serde(default)]
     pub ui_widget: Option<String>,
     #[serde(default)]
@@ -556,15 +571,27 @@ pub struct UpdateFieldRequest {
     /// 選填。關聯的資料類別建立後不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。
     #[serde(default)]
     pub relation_entity_id: Option<Id>,
+    /// `formula` 的公式，可以修改（規則同 [`CreateFieldRequest::formula`]）；其他型態省略或 `null`。
+    /// 修改後既有資料不會自動重新計算。
+    #[serde(default)]
+    pub formula: Option<String>,
+    /// `formula` 的結果型態，可以修改（規則同 [`CreateFieldRequest::formula_result_type`]）。
+    #[serde(default)]
+    pub formula_result_type: Option<DataType>,
     pub ui_widget: Option<String>,
     pub column_width: Option<i32>,
     pub help_text: Option<String>,
     pub sort_order: i32,
-    /// 停用欄位（§7.2），資料保留。系統欄位不可停用。
+    /// 停用欄位（§7.2），資料保留。系統欄位不可停用；被有效的公式欄位引用時不可停用
+    /// （見 [`DeactivateFieldRequest`]）。
     pub is_active: bool,
 }
 
 /// 停用欄位的輸入（§7.2）。資料保留；系統欄位不可停用。
+///
+/// 被有效的公式欄位引用（本筆欄位、關聯引用、子表彙總）時不可停用 → `422 VALIDATION`，`details` 為
+/// `{ "field": "formula", "formulas": [{ "entity_key", "entity_label", "field_key", "field_label" }] }`
+/// （依資料類別、欄位代碼排序）。停用明細子表、刪除資料類別時也做相同檢查。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct DeactivateFieldRequest {
     /// 讀取時取得的版本號；不符時回傳 `409 CONFLICT`。
@@ -589,7 +616,8 @@ pub struct DeactivateFieldRequest {
 ///
 /// 轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
 /// `relation` 只能轉成 `text` / `long_text`（轉換後清除 `relation_entity_id`），其他型態不能轉成
-/// `relation`；`file`、`formula` 不能轉換。
+/// `relation`；`file`、`formula` 與其他型態之間不能轉換（公式欄位的公式與結果型態以
+/// [`UpdateFieldRequest`] 修改）。
 ///
 /// 錯誤：
 /// - 有資料無法轉換 → `422 VALIDATION`，`details` 為

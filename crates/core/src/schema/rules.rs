@@ -53,10 +53,24 @@ pub mod field {
     pub const OPTIONS: &str = "options";
     pub const DECIMAL_PLACES: &str = "decimal_places";
     pub const RELATION_ENTITY_ID: &str = "relation_entity_id";
+    pub const FORMULA: &str = "formula";
+    pub const FORMULA_RESULT_TYPE: &str = "formula_result_type";
     pub const UI_WIDGET: &str = "ui_widget";
     pub const COLUMN_WIDTH: &str = "column_width";
     pub const FIELDS: &str = "fields";
 }
+
+/// 公式欄位可用的結果型態（§7.3）。
+pub const FORMULA_RESULT_TYPES: &[DataType] = &[
+    DataType::Text,
+    DataType::LongText,
+    DataType::Integer,
+    DataType::Decimal,
+    DataType::Money,
+    DataType::Date,
+    DataType::DateTime,
+    DataType::Boolean,
+];
 
 /// `decimal_places` 的上限。資料庫的數量、單價為 `NUMERIC(18,4)`、匯率為 6 位（§8.1）。
 pub const MAX_DECIMAL_PLACES: i16 = 6;
@@ -233,8 +247,8 @@ pub fn plan_create_field(
         options: req.options.clone(),
         decimal_places: req.decimal_places,
         relation_entity_id: req.relation_entity_id,
-        formula: None,
-        formula_result_type: None,
+        formula: req.formula.clone(),
+        formula_result_type: req.formula_result_type,
         ui_widget: req.ui_widget.clone(),
         column_width: req.column_width,
         help_text: req.help_text.clone(),
@@ -291,6 +305,8 @@ pub fn plan_update_field(
         validation: req.validation.clone(),
         options: req.options.clone(),
         decimal_places: req.decimal_places,
+        formula: req.formula.clone(),
+        formula_result_type: req.formula_result_type,
         ui_widget: req.ui_widget.clone(),
         column_width: req.column_width,
         help_text: req.help_text.clone(),
@@ -332,6 +348,11 @@ fn validate_system_field_update(
             next.decimal_places == current.decimal_places,
         ),
         (field::UI_WIDGET, next.ui_widget == current.ui_widget),
+        (field::FORMULA, next.formula == current.formula),
+        (
+            field::FORMULA_RESULT_TYPE,
+            next.formula_result_type == current.formula_result_type,
+        ),
     ];
     if let Some((name, _)) = locked.iter().find(|(_, same)| !same) {
         return Err(invalid(name, LOCKED));
@@ -348,11 +369,15 @@ fn validate_system_field_update(
 
 /// 檢查自訂欄位的設定與型態相符，回傳整理後的定義：
 ///
-/// - 型態目前支援（不允許 `formula`）；`file` 不可設定預設值
+/// - `formula`：`formula`、`formula_result_type` 必填（[`FORMULA_RESULT_TYPES`]），不可設定
+///   「不可重複」、必填、預設值；其他型態不可設定 `formula`、`formula_result_type`。公式的語法、
+///   引用與循環需要查詢其他欄位定義，另由 [`super::formula`] 檢查
+/// - `file` 不可設定預設值
 /// - `relation_entity_id`：`relation` 必填，其他型態不可設定（目標是否合法另由
 ///   [`validate_relation_target`] 檢查，需要查詢資料庫）；`relation` 不可設定預設值
 /// - 顯示名稱去除前後空白後不可為空；`ui_widget`、`help_text` 空白視為未設定
-/// - `decimal_places`：`decimal`、`money` 必填（0 到 [`MAX_DECIMAL_PLACES`]），其他型態不可設定
+/// - `decimal_places`：`decimal`、`money`（含結果型態為這兩者的 `formula`）必填（0 到
+///   [`MAX_DECIMAL_PLACES`]），其他型態不可設定
 /// - `options`：`select`、`multi_select` 必填且至少一個，`value` 不可空白或重複、`label` 不可空白；
 ///   其他型態不可設定
 /// - `validation`：`min`、`max` 只用於 `integer`、`decimal`、`money`，且 `min <= max`；
@@ -361,9 +386,7 @@ fn validate_system_field_update(
 /// - `column_width` 大於 0
 /// - `default_value` 依 [`normalize_field_value`] 驗證並正規化；`null` 或空值存成 `null`
 pub fn validate_field_config(mut def: FieldDefinition) -> Result<FieldDefinition, CoreError> {
-    if !def.data_type.is_value_supported() {
-        return Err(invalid(field::DATA_TYPE, "目前不支援此欄位型態"));
-    }
+    validate_formula_config(&mut def)?;
     def.label = validate_label(&def.label)?;
     def.ui_widget = optional_text(def.ui_widget.as_deref());
     def.help_text = optional_text(def.help_text.as_deref());
@@ -382,7 +405,12 @@ pub fn validate_field_config(mut def: FieldDefinition) -> Result<FieldDefinition
         }
         _ => {}
     }
-    match (t.uses_decimal_places(), def.decimal_places) {
+    // 公式欄位的小數位數依結果型態
+    let value_type = match (t, def.formula_result_type) {
+        (DataType::Formula, Some(result)) => result,
+        _ => t,
+    };
+    match (value_type.uses_decimal_places(), def.decimal_places) {
         (true, None) => return Err(invalid(field::DECIMAL_PLACES, "請設定小數位數")),
         (true, Some(p)) if !(0..=MAX_DECIMAL_PLACES).contains(&p) => {
             return Err(invalid(
@@ -456,11 +484,56 @@ pub fn validate_field_config(mut def: FieldDefinition) -> Result<FieldDefinition
     Ok(def)
 }
 
+/// `formula` 欄位的設定（不需要查詢資料庫的部分）。公式去除前後空白。
+fn validate_formula_config(def: &mut FieldDefinition) -> Result<(), CoreError> {
+    if def.data_type != DataType::Formula {
+        if def.formula.is_some() {
+            return Err(invalid(field::FORMULA, "此型態不使用公式"));
+        }
+        if def.formula_result_type.is_some() {
+            return Err(invalid(
+                field::FORMULA_RESULT_TYPE,
+                "此型態不使用公式的結果型態",
+            ));
+        }
+        return Ok(());
+    }
+    def.formula = optional_text(def.formula.as_deref());
+    if def.formula.is_none() {
+        return Err(invalid(field::FORMULA, "請輸入公式"));
+    }
+    match def.formula_result_type {
+        None => {
+            return Err(invalid(field::FORMULA_RESULT_TYPE, "請設定公式的結果型態"));
+        }
+        Some(t) if !FORMULA_RESULT_TYPES.contains(&t) => {
+            return Err(invalid(
+                field::FORMULA_RESULT_TYPE,
+                &format!("公式的結果型態不能是 {}", t.as_str()),
+            ));
+        }
+        Some(_) => {}
+    }
+    if def.is_unique {
+        return Err(invalid(field::IS_UNIQUE, "公式欄位不可設定為不可重複"));
+    }
+    if def.is_required {
+        return Err(invalid(
+            field::IS_REQUIRED,
+            "公式欄位由系統計算，不可設定為必填",
+        ));
+    }
+    if !matches!(def.default_value, None | Some(Value::Null)) {
+        return Err(invalid(field::DEFAULT_VALUE, "公式欄位不可設定預設值"));
+    }
+    Ok(())
+}
+
 /// 檢查變更資料型態的輸入，回傳新的欄位定義（`version` 等不變）與轉換的種類。
 ///
 /// - 系統欄位不可變更型態（§7.2）→ 錯誤（`data_type`）
 /// - 型態相同、不允許的轉換（[`type_change::classify`]：其他型態轉成 `relation`、`relation` 轉成
-///   文字以外的型態、`file`、`formula`）→ 錯誤（`data_type`）
+///   文字以外的型態、`file`、`formula` 與其他型態之間）→ 錯誤（`data_type`）
 /// - 新型態不是 `relation`，所以清除 `relation_entity_id`
 /// - `decimal_places`、`options`、`validation` 依新型態整筆取代，須符合 [`validate_field_config`]
 /// - `default_value` 轉換成新型態；無法轉換 → 錯誤（`default_value`）
@@ -712,6 +785,8 @@ mod tests {
             options: None,
             decimal_places: None,
             relation_entity_id: None,
+            formula: None,
+            formula_result_type: None,
             ui_widget: None,
             column_width: None,
             help_text: None,
@@ -735,6 +810,8 @@ mod tests {
             options: def.options.clone(),
             decimal_places: def.decimal_places,
             relation_entity_id: None,
+            formula: def.formula.clone(),
+            formula_result_type: def.formula_result_type,
             ui_widget: def.ui_widget.clone(),
             column_width: def.column_width,
             help_text: def.help_text.clone(),
@@ -1292,7 +1369,7 @@ mod tests {
         );
         assert_eq!(
             create_err(&create_req("x", DataType::Formula)),
-            field::DATA_TYPE
+            field::FORMULA
         );
         assert_eq!(
             create_err(&CreateFieldRequest {
@@ -2048,5 +2125,206 @@ mod tests {
             change_err(&def, &change_req(&def, DataType::Integer)),
             field::DEFAULT_VALUE
         );
+    }
+
+    fn formula_req(formula: &str, result: DataType) -> CreateFieldRequest {
+        CreateFieldRequest {
+            formula: Some(formula.into()),
+            formula_result_type: Some(result),
+            ..create_req("total", DataType::Formula)
+        }
+    }
+
+    #[test]
+    fn formula_field_config() {
+        // 公式去除前後空白；可以開啟可搜尋
+        let def = created(&CreateFieldRequest {
+            is_searchable: true,
+            ..formula_req("  {qty} * 2 ", DataType::Integer)
+        });
+        assert_eq!(def.formula.as_deref(), Some("{qty} * 2"));
+        assert_eq!(def.formula_result_type, Some(DataType::Integer));
+        assert!(def.is_searchable);
+
+        // 公式與結果型態必填
+        for formula in [None, Some("  ".to_owned())] {
+            assert_eq!(
+                create_err(&CreateFieldRequest {
+                    formula,
+                    ..formula_req("1", DataType::Integer)
+                }),
+                field::FORMULA
+            );
+        }
+        assert_eq!(
+            create_err(&CreateFieldRequest {
+                formula_result_type: None,
+                ..formula_req("1", DataType::Integer)
+            }),
+            field::FORMULA_RESULT_TYPE
+        );
+        // 結果型態不支援
+        for t in [
+            DataType::Select,
+            DataType::MultiSelect,
+            DataType::Relation,
+            DataType::File,
+            DataType::Formula,
+        ] {
+            assert_eq!(
+                create_err(&formula_req("1", t)),
+                field::FORMULA_RESULT_TYPE,
+                "{t:?}"
+            );
+        }
+        for t in FORMULA_RESULT_TYPES {
+            let req = CreateFieldRequest {
+                decimal_places: t.uses_decimal_places().then_some(2),
+                ..formula_req("1", *t)
+            };
+            assert!(plan_create_field(new_id(), &req, NOW).is_ok(), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn formula_decimal_places_follow_result_type() {
+        assert_eq!(
+            create_err(&formula_req("1", DataType::Decimal)),
+            field::DECIMAL_PLACES
+        );
+        let def = created(&CreateFieldRequest {
+            decimal_places: Some(2),
+            ..formula_req("1", DataType::Money)
+        });
+        assert_eq!(def.decimal_places, Some(2));
+        assert_eq!(
+            create_err(&CreateFieldRequest {
+                decimal_places: Some(2),
+                ..formula_req("1", DataType::Integer)
+            }),
+            field::DECIMAL_PLACES
+        );
+    }
+
+    #[test]
+    fn formula_field_restrictions() {
+        let base = || formula_req("1", DataType::Integer);
+        let cases = [
+            (
+                CreateFieldRequest {
+                    is_unique: true,
+                    ..base()
+                },
+                field::IS_UNIQUE,
+            ),
+            (
+                CreateFieldRequest {
+                    is_required: true,
+                    ..base()
+                },
+                field::IS_REQUIRED,
+            ),
+            (
+                CreateFieldRequest {
+                    default_value: Some(json!(1)),
+                    ..base()
+                },
+                field::DEFAULT_VALUE,
+            ),
+            (
+                CreateFieldRequest {
+                    validation: Some(Validation {
+                        min: Some(Decimal::ZERO),
+                        ..Default::default()
+                    }),
+                    ..base()
+                },
+                field::VALIDATION,
+            ),
+            (
+                CreateFieldRequest {
+                    options: options(&["a"]),
+                    ..base()
+                },
+                field::OPTIONS,
+            ),
+        ];
+        for (req, expected) in cases {
+            assert_eq!(create_err(&req), expected, "{req:?}");
+        }
+        // 預設值 null 視為沒有設定
+        assert!(
+            plan_create_field(
+                new_id(),
+                &CreateFieldRequest {
+                    default_value: Some(Value::Null),
+                    ..base()
+                },
+                NOW
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn non_formula_cannot_set_formula() {
+        assert_eq!(
+            create_err(&CreateFieldRequest {
+                formula: Some("1".into()),
+                ..create_req("name", DataType::Text)
+            }),
+            field::FORMULA
+        );
+        assert_eq!(
+            create_err(&CreateFieldRequest {
+                formula_result_type: Some(DataType::Text),
+                ..create_req("name", DataType::Text)
+            }),
+            field::FORMULA_RESULT_TYPE
+        );
+    }
+
+    #[test]
+    fn formula_and_result_type_can_be_updated() {
+        let current = created(&formula_req("1", DataType::Integer));
+        let next = plan_update_field(
+            &current,
+            &UpdateFieldRequest {
+                formula: Some("\"a\"".into()),
+                formula_result_type: Some(DataType::Text),
+                ..update_req(&current)
+            },
+        )
+        .unwrap();
+        assert_eq!(next.formula.as_deref(), Some("\"a\""));
+        assert_eq!(next.formula_result_type, Some(DataType::Text));
+        // 省略公式 → 錯誤
+        let err = plan_update_field(
+            &current,
+            &UpdateFieldRequest {
+                formula: None,
+                ..update_req(&current)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(field_of(&err), field::FORMULA);
+        // 不能透過修改欄位變更型態
+        let err = plan_update_field(
+            &current,
+            &UpdateFieldRequest {
+                data_type: DataType::Integer,
+                ..update_req(&current)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(field_of(&err), field::DATA_TYPE);
+    }
+
+    #[test]
+    fn formula_type_change_is_rejected() {
+        let def = created(&formula_req("1", DataType::Text));
+        for t in [DataType::Text, DataType::LongText, DataType::Integer] {
+            assert_eq!(change_err(&def, &change_req(&def, t)), field::DATA_TYPE);
+        }
     }
 }

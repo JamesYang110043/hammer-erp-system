@@ -326,7 +326,8 @@ export type AuditLogQuery_Serialize = {
  * 
  *  轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
  *  `relation` 只能轉成 `text` / `long_text`（轉換後清除 `relation_entity_id`），其他型態不能轉成
- *  `relation`；`file`、`formula` 不能轉換。
+ *  `relation`；`file`、`formula` 與其他型態之間不能轉換（公式欄位的公式與結果型態以
+ *  [`UpdateFieldRequest`] 修改）。
  * 
  *  錯誤：
  *  - 有資料無法轉換 → `422 VALIDATION`，`details` 為
@@ -356,7 +357,8 @@ export type ChangeFieldTypeRequest = ChangeFieldTypeRequest_Serialize | ChangeFi
  * 
  *  轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
  *  `relation` 只能轉成 `text` / `long_text`（轉換後清除 `relation_entity_id`），其他型態不能轉成
- *  `relation`；`file`、`formula` 不能轉換。
+ *  `relation`；`file`、`formula` 與其他型態之間不能轉換（公式欄位的公式與結果型態以
+ *  [`UpdateFieldRequest`] 修改）。
  * 
  *  錯誤：
  *  - 有資料無法轉換 → `422 VALIDATION`，`details` 為
@@ -397,7 +399,8 @@ export type ChangeFieldTypeRequest_Deserialize = {
  * 
  *  轉換後的值仍須符合新的設定（選項、小數位數、驗證規則），「不可重複」的欄位轉換後也不可重複。
  *  `relation` 只能轉成 `text` / `long_text`（轉換後清除 `relation_entity_id`），其他型態不能轉成
- *  `relation`；`file`、`formula` 不能轉換。
+ *  `relation`；`file`、`formula` 與其他型態之間不能轉換（公式欄位的公式與結果型態以
+ *  [`UpdateFieldRequest`] 修改）。
  * 
  *  錯誤：
  *  - 有資料無法轉換 → `422 VALIDATION`，`details` 為
@@ -557,14 +560,14 @@ export type CreateEntityRequest_Serialize = {
 /**
  *  建立欄位的輸入。儲存方式固定為 `json`。
  * 
- *  目前不允許 `file`、`formula`（見 [`DataType::is_value_supported`]）。
+ *  `formula` 欄位見 [`CreateFieldRequest::formula`]。
  */
 export type CreateFieldRequest = CreateFieldRequest_Serialize | CreateFieldRequest_Deserialize;
 
 /**
  *  建立欄位的輸入。儲存方式固定為 `json`。
  * 
- *  目前不允許 `file`、`formula`（見 [`DataType::is_value_supported`]）。
+ *  `formula` 欄位見 [`CreateFieldRequest::formula`]。
  */
 export type CreateFieldRequest_Deserialize = {
 	/**  欄位代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -593,6 +596,22 @@ export type CreateFieldRequest_Deserialize = {
 	 *  `relation_entity_id`。系統資料類別在 M3 支援。`relation` 欄位不可設定預設值。
 	 */
 	relation_entity_id?: string | null,
+	/**
+	 *  `formula` 必填：公式（語法見 architecture.md §7.6）；其他型態不可設定。
+	 * 
+	 *  儲存時檢查語法、引用的欄位（本筆欄位、關聯引用、子表彙總都必須存在且有效）、型態與循環引用，
+	 *  不符合時回傳 `422 VALIDATION`，`details` 為 `{ "field": "formula", "span": { "start", "end" } }`
+	 *  （錯誤在公式中的字元位置，從 0 開始、不含 `end`）或 `{ "field": "formula", "cycle": ["a", "b", "a"] }`
+	 *  （循環路徑，明細欄位為 `明細子表代碼.欄位代碼`）。
+	 * 
+	 *  公式欄位可以設定「可搜尋」，不可設定「不可重複」、預設值、必填。
+	 */
+	formula?: string | null,
+	/**
+	 *  `formula` 必填：結果型態，只能是 `text`、`long_text`、`integer`、`decimal`、`money`、
+	 *  `date`、`datetime`、`boolean`；`decimal`、`money` 須設定 `decimal_places`。其他型態不可設定。
+	 */
+	formula_result_type?: DataType | null,
 	ui_widget?: string | null,
 	column_width?: number | null,
 	help_text?: string | null,
@@ -603,7 +622,7 @@ export type CreateFieldRequest_Deserialize = {
 /**
  *  建立欄位的輸入。儲存方式固定為 `json`。
  * 
- *  目前不允許 `file`、`formula`（見 [`DataType::is_value_supported`]）。
+ *  `formula` 欄位見 [`CreateFieldRequest::formula`]。
  */
 export type CreateFieldRequest_Serialize = {
 	/**  欄位代碼，須符合 [`validate_key`]；建立後不可修改。 */
@@ -632,6 +651,22 @@ export type CreateFieldRequest_Serialize = {
 	 *  `relation_entity_id`。系統資料類別在 M3 支援。`relation` 欄位不可設定預設值。
 	 */
 	relation_entity_id: string | null,
+	/**
+	 *  `formula` 必填：公式（語法見 architecture.md §7.6）；其他型態不可設定。
+	 * 
+	 *  儲存時檢查語法、引用的欄位（本筆欄位、關聯引用、子表彙總都必須存在且有效）、型態與循環引用，
+	 *  不符合時回傳 `422 VALIDATION`，`details` 為 `{ "field": "formula", "span": { "start", "end" } }`
+	 *  （錯誤在公式中的字元位置，從 0 開始、不含 `end`）或 `{ "field": "formula", "cycle": ["a", "b", "a"] }`
+	 *  （循環路徑，明細欄位為 `明細子表代碼.欄位代碼`）。
+	 * 
+	 *  公式欄位可以設定「可搜尋」，不可設定「不可重複」、預設值、必填。
+	 */
+	formula: string | null,
+	/**
+	 *  `formula` 必填：結果型態，只能是 `text`、`long_text`、`integer`、`decimal`、`money`、
+	 *  `date`、`datetime`、`boolean`；`decimal`、`money` 須設定 `decimal_places`。其他型態不可設定。
+	 */
+	formula_result_type: DataType | null,
 	ui_widget: string | null,
 	column_width: number | null,
 	help_text: string | null,
@@ -736,7 +771,13 @@ export type DataType =
 /**  公式，唯讀，由系統計算（M2c）。 */
 "formula";
 
-/**  停用欄位的輸入（§7.2）。資料保留；系統欄位不可停用。 */
+/**
+ *  停用欄位的輸入（§7.2）。資料保留；系統欄位不可停用。
+ * 
+ *  被有效的公式欄位引用（本筆欄位、關聯引用、子表彙總）時不可停用 → `422 VALIDATION`，`details` 為
+ *  `{ "field": "formula", "formulas": [{ "entity_key", "entity_label", "field_key", "field_label" }] }`
+ *  （依資料類別、欄位代碼排序）。停用明細子表、刪除資料類別時也做相同檢查。
+ */
 export type DeactivateFieldRequest = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
 	version: number,
@@ -1531,11 +1572,21 @@ export type UpdateFieldRequest_Deserialize = {
 	decimal_places?: number | null,
 	/**  選填。關聯的資料類別建立後不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。 */
 	relation_entity_id?: string | null,
+	/**
+	 *  `formula` 的公式，可以修改（規則同 [`CreateFieldRequest::formula`]）；其他型態省略或 `null`。
+	 *  修改後既有資料不會自動重新計算。
+	 */
+	formula?: string | null,
+	/**  `formula` 的結果型態，可以修改（規則同 [`CreateFieldRequest::formula_result_type`]）。 */
+	formula_result_type?: DataType | null,
 	ui_widget?: string | null,
 	column_width?: number | null,
 	help_text?: string | null,
 	sort_order: number,
-	/**  停用欄位（§7.2），資料保留。系統欄位不可停用。 */
+	/**
+	 *  停用欄位（§7.2），資料保留。系統欄位不可停用；被有效的公式欄位引用時不可停用
+	 *  （見 [`DeactivateFieldRequest`]）。
+	 */
 	is_active: boolean,
 };
 
@@ -1567,11 +1618,21 @@ export type UpdateFieldRequest_Serialize = {
 	decimal_places: number | null,
 	/**  選填。關聯的資料類別建立後不可修改；帶了且與目前的值不同時回傳 `422 VALIDATION`。 */
 	relation_entity_id: string | null,
+	/**
+	 *  `formula` 的公式，可以修改（規則同 [`CreateFieldRequest::formula`]）；其他型態省略或 `null`。
+	 *  修改後既有資料不會自動重新計算。
+	 */
+	formula: string | null,
+	/**  `formula` 的結果型態，可以修改（規則同 [`CreateFieldRequest::formula_result_type`]）。 */
+	formula_result_type: DataType | null,
 	ui_widget: string | null,
 	column_width: number | null,
 	help_text: string | null,
 	sort_order: number,
-	/**  停用欄位（§7.2），資料保留。系統欄位不可停用。 */
+	/**
+	 *  停用欄位（§7.2），資料保留。系統欄位不可停用；被有效的公式欄位引用時不可停用
+	 *  （見 [`DeactivateFieldRequest`]）。
+	 */
 	is_active: boolean,
 };
 
