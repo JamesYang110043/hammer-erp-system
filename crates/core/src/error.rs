@@ -5,6 +5,7 @@
 use crate::record_data::FieldError;
 use crate::record_lines::LineError;
 use crate::schema::RelationReference;
+use crate::schema::formula::{FormulaError, FormulaErrorLocation};
 use crate::schema::index::DuplicateValue;
 use crate::schema::type_change::ConversionFailure;
 use hammer_db::DbError;
@@ -82,6 +83,19 @@ pub enum CoreError {
     #[error("此資料類別還有 {} 個關聯欄位引用，請先停用或刪除這些欄位", .0.len())]
     EntityReferenced(Vec<RelationReference>),
 
+    /// 公式欄位的公式不合法：語法、引用的欄位、型態或循環引用（§7.6，[`crate::schema::formula`]）。
+    /// API 回應為 `VALIDATION`，`details` 為 `{ "field": "formula", "span": { "start", "end" } }`
+    /// （錯誤在公式中的字元位置，從 0 開始、不含 `end`）或
+    /// `{ "field": "formula", "cycle": ["a", "lines.b", "a"] }`（循環路徑）。
+    #[error("{}", .0.message)]
+    InvalidFormula(FormulaError),
+
+    /// 停用欄位、停用明細子表或刪除資料類別時，還有有效的公式欄位引用它（§7.6）。
+    /// API 回應為 `VALIDATION`，`details` 為
+    /// `{ "field": "formula", "formulas": [{ "entity_key", "entity_label", "field_key", "field_label" }] }`。
+    #[error("還有 {} 個公式欄位引用，請先修改或停用這些公式欄位", .0.len())]
+    FormulaReferenced(Vec<RelationReference>),
+
     /// 操作後系統沒有任何有效（啟用、未刪除）的管理者（§6.2）。
     /// API 回應為 `VALIDATION`，`details.reason` 為 [`LAST_ADMIN_REASON`]。
     #[error("系統至少需要保留一個有效的管理者，無法停用、刪除最後一個管理者或變更其角色")]
@@ -143,6 +157,8 @@ impl CoreError {
             | Self::ConversionFailed { .. }
             | Self::DuplicateValues { .. }
             | Self::EntityReferenced(_)
+            | Self::InvalidFormula(_)
+            | Self::FormulaReferenced(_)
             | Self::LastAdmin => ErrorCode::Validation,
             Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::PayloadTooLarge(_) => ErrorCode::PayloadTooLarge,
@@ -254,6 +270,34 @@ impl From<CoreError> for ApiError {
             ApiError::new(code, err.to_string()).with_details(serde_json::json!({
                 "field": "relation_entity_id",
                 "fields": fields,
+            }))
+        } else if let CoreError::InvalidFormula(e) = &err {
+            let details = match &e.location {
+                FormulaErrorLocation::Span { start, end } => serde_json::json!({
+                    "field": "formula",
+                    "span": { "start": start, "end": end },
+                }),
+                FormulaErrorLocation::Cycle(path) => serde_json::json!({
+                    "field": "formula",
+                    "cycle": path,
+                }),
+            };
+            ApiError::new(code, err.to_string()).with_details(details)
+        } else if let CoreError::FormulaReferenced(refs) = &err {
+            let formulas: Vec<_> = refs
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "entity_key": r.entity_key,
+                        "entity_label": r.entity_label,
+                        "field_key": r.field_key,
+                        "field_label": r.field_label,
+                    })
+                })
+                .collect();
+            ApiError::new(code, err.to_string()).with_details(serde_json::json!({
+                "field": "formula",
+                "formulas": formulas,
             }))
         } else if let CoreError::LastAdmin = err {
             ApiError::new(code, err.to_string())
@@ -574,5 +618,55 @@ mod tests {
         let err = CoreError::from(DbError::Sqlx(hammer_db::sqlx::Error::RowNotFound));
         assert_eq!(err.code(), ErrorCode::Internal);
         assert!(!err.is_user_facing());
+    }
+
+    #[test]
+    fn invalid_formula_details() {
+        let api: ApiError = CoreError::InvalidFormula(FormulaError {
+            message: "第 1 個字元：找不到欄位「x」".into(),
+            location: FormulaErrorLocation::Span { start: 0, end: 3 },
+        })
+        .into();
+        assert_eq!(api.code, ErrorCode::Validation);
+        assert_eq!(api.message, "第 1 個字元：找不到欄位「x」");
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "field": "formula", "span": { "start": 0, "end": 3 } }))
+        );
+
+        let api: ApiError = CoreError::InvalidFormula(FormulaError {
+            message: "公式有循環引用：a → b → a".into(),
+            location: FormulaErrorLocation::Cycle(vec!["a".into(), "b".into(), "a".into()]),
+        })
+        .into();
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "field": "formula", "cycle": ["a", "b", "a"] }))
+        );
+    }
+
+    #[test]
+    fn formula_referenced_lists_formulas() {
+        let api: ApiError = CoreError::FormulaReferenced(vec![RelationReference {
+            entity_key: "repair_order".into(),
+            entity_label: "維修單".into(),
+            field_key: "total".into(),
+            field_label: "總計".into(),
+        }])
+        .into();
+        assert_eq!(api.code, ErrorCode::Validation);
+        assert!(api.message.contains("1 個公式欄位"), "{}", api.message);
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({
+                "field": "formula",
+                "formulas": [{
+                    "entity_key": "repair_order",
+                    "entity_label": "維修單",
+                    "field_key": "total",
+                    "field_label": "總計",
+                }],
+            }))
+        );
     }
 }

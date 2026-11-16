@@ -216,7 +216,7 @@ desktop(src-tauri) ──▶ shared, formula
 | `multi_select` | 下拉多選 | string[] |
 | `relation` | 關聯到其他資料類別 | string（UUID） |
 | `file` | 附件 | string（attachments.id） |
-| `formula` | 公式（唯讀，由系統計算） | 依 `result_type` 決定 |
+| `formula` | 公式（唯讀，由系統計算） | 依 `formula_result_type` 決定（與該型態相同） |
 
 **關聯欄位（`relation`）**（檢查在 `hammer_core::schema::rules`、`hammer_core::relations`；API 格式見 `hammer_shared::record`）：
 
@@ -238,6 +238,15 @@ desktop(src-tauri) ──▶ shared, formula
 - 不可設定預設值、不能變更型態（§7.4）。篩選只支援 `empty`；不能排序。資料標題中為空字串（§8.5）。
 - 不做：一個欄位多個檔案、圖片縮圖、線上預覽。
 
+**公式欄位（`formula`）**（設定檢查在 `hammer_core::schema::rules`，公式的檢查在 `hammer_core::schema::formula`；語法與計算見 §7.6）：
+
+- 建立與修改欄位時必須提供 `formula` 與 `formula_result_type`；結果型態只能是 `text`、`long_text`、`integer`、`decimal`、`money`、`date`、`datetime`、`boolean`，`decimal` / `money` 需要 `decimal_places`。其他型態不可設定 `formula`、`formula_result_type`。
+- 公式與結果型態可以修改；修改後既有資料**不會**自動重新計算（重新計算另有功能）。只修改其他屬性時不重新檢查公式；重新啟用已停用的公式欄位時重新完整檢查。
+- 可以設為「可搜尋」；不能設為「不可重複」、預設值、必填（`422`，`details.field` 為該屬性）。
+- 儲存時的檢查見 §7.6「定義公式時的檢查」；不合法 → `422 VALIDATION`，`details` 為 `{ "field": "formula", "span": { "start", "end" } }`（錯誤在公式中的字元位置，從 0 開始、不含 `end`）或 `{ "field": "formula", "cycle": ["a", "lines.b", "a"] }`（循環路徑）。
+- 被有效公式引用的欄位不能停用（含停用 API 與修改 API 的 `is_active = false`）；停用明細子表、刪除資料類別時也檢查是否被其他資料類別的有效公式引用。→ `422 VALIDATION`，`details` 為 `{ "field": "formula", "formulas": [{ "entity_key", "entity_label", "field_key", "field_label" }] }`（依資料類別、欄位代碼排序）。「有效公式」是啟用中、所屬資料類別未刪除（含已停用的資料類別）的公式欄位。
+- 寫入資料、存檔時計算、篩選與排序在之後的 issue 處理；目前資料 API 寫入公式欄位的值回傳「目前不支援此欄位型態」。
+
 ### 7.4 欄位型態變更規則
 
 | 從 → 到 | 規則 |
@@ -249,6 +258,7 @@ desktop(src-tauri) ──▶ shared, formula
 | `relation` → `text` / `long_text` | 允許（值為資料 id 的文字，轉換後清除 `relation_entity_id`） |
 | `relation` → 其他型態、其他型態 → `relation` | 不允許 |
 | `file` → 任意型態、任意型態 → `file` | 不允許（附件綁定在欄位上，轉換後無法維持附件與欄位值的對應） |
+| `formula` → 任意型態、任意型態 → `formula` | 不允許（公式的值由系統計算，與輸入值無法互轉）；公式與結果型態以修改欄位變更（§7.3） |
 | 其他轉換 | 先驗證全部既有資料。只要有一筆轉換失敗就拒絕，並列出失敗的資料 |
 
 - 轉換範圍包含已軟刪除的資料，在同一個交易內完成資料轉換與欄位定義更新。
@@ -297,6 +307,22 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 | 相依性 | 儲存公式時建立相依圖並檢查循環引用，有循環就拒絕儲存；計算順序依拓撲排序 |
 | 重新計算 | 修改公式後，管理者可對該資料類別的全部資料執行「重新計算」 |
 | 限制 | 公式只能讀資料，不能寫入其他欄位；系統欄位（例如單據金額、稅額）不能用公式覆蓋 |
+
+**明細子表的公式**：只能引用同一筆明細的欄位與關聯引用；不能引用主表欄位，也不能使用子表彙總。主表的公式以子表彙總讀取明細（包含明細的公式欄位）。因此循環只可能發生在同一張表內，計算時明細的公式先於主表。
+
+**子表彙總**：`SUM(明細子表代碼.欄位代碼)`，參數只能是一個「明細子表代碼.欄位代碼」，明細子表必須是本資料類別有效的明細子表；`SUM`、`AVG`、`MIN`、`MAX` 只能用於數字欄位（或結果為數字的公式欄位），`COUNT` 可用於任何支援的型態。
+
+**定義公式時的檢查**（`hammer_core::schema::formula`，使用 `crates/formula`）：
+
+1. 語法（`hammer_formula::parse`）
+2. 引用：本筆欄位存在且有效；關聯引用的關聯欄位存在且有效、目標資料類別有效，目標欄位存在且有效；子表彙總的明細子表有效，欄位存在且有效
+3. 型別檢查（`hammer_formula::check_formula`）：運算子與函式的參數型態、`IF` / `COALESCE` 的結果型態一致，結果型態能存成 `formula_result_type`
+4. 循環引用：以整個資料類別（主表與有效的明細子表）所有有效公式欄位的 `formula_deps` 重建相依圖（`hammer_formula::calculation_order`），引用自己也算循環
+5. 通過後寫入 `formula_deps`（格式見 §8.5 `field_definitions`）
+
+被引用的資料類別（關聯目標、明細子表）在檢查時以 `FOR SHARE` 鎖定；停用欄位、明細子表時以 `FOR UPDATE` 鎖定所屬資料類別，所以兩者依序進行，檢查通過的公式不會引用到剛被停用的欄位。
+
+已知限制（之後處理）：被引用欄位的型態變更、被引用公式的結果型態變更，不會重新檢查引用它的公式；計算時型態不符的結果為空值（見上方「錯誤」）。
 
 ---
 
@@ -516,7 +542,8 @@ products ───────────────────────�
   | `boolean` | `是` / `否` |
   | `select` | 選項名稱（選項已移除時為選項值） |
   | `multi_select` | 選項名稱，以 `、` 連接 |
-  | `relation`、`file`、`formula` | 目前為空字串 |
+  | `formula` | 依 `formula_result_type` 套用上列規則；計算失敗（存值為 `null`）時為空字串 |
+  | `relation`、`file` | 目前為空字串 |
 
 - 空值、引用已停用的欄位、存值格式不正確 → 空字串；結果去除前後空白。範本產生的結果是空字串時就回傳空字串，不改用預設規則。
 - 沒有設定範本時，依序使用第一個有值的：單號 → 排序最前面、有效的 `text` 欄位的值 → id 前 8 碼。資料庫中的範本不合法（加入檢查前存入的）時也使用預設規則。
@@ -555,7 +582,7 @@ products ───────────────────────�
 | relation_entity_id | UUID FK → entity_definitions | relation 使用；建立後不可修改，限制見 §7.3 |
 | formula | TEXT | formula 使用 |
 | formula_result_type | TEXT | formula 的結果型態 |
-| formula_deps | JSONB | 解析後的相依欄位，供相依圖使用；格式見下方 |
+| formula_deps | JSONB | 解析後的相依欄位，供相依圖與停用檢查使用；儲存公式時由伺服器產生；格式見下方 |
 | ui_widget | TEXT | 選用的輸入元件 |
 | column_width | INTEGER | 列表欄寬 |
 | help_text | TEXT | |

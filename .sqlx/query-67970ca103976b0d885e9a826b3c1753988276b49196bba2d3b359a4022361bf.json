@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT entity_id, field_key, formula_deps\n        FROM field_definitions\n        WHERE entity_id = ANY($1) AND data_type = 'formula'\n          AND is_active AND deleted_at IS NULL\n        ORDER BY entity_id, sort_order, id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "entity_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "field_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "field_key"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "formula_deps",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "formula_deps"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "67970ca103976b0d885e9a826b3c1753988276b49196bba2d3b359a4022361bf"
+}

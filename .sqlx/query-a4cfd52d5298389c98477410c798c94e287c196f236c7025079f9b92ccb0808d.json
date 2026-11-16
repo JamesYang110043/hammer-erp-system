@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT e.key AS entity_key, e.label AS entity_label,\n               f.field_key, f.label AS field_label\n        FROM field_definitions f\n        JOIN entity_definitions e ON e.id = f.entity_id AND e.deleted_at IS NULL\n        CROSS JOIN LATERAL jsonb_array_elements(\n            CASE WHEN jsonb_typeof(f.formula_deps) = 'array' THEN f.formula_deps ELSE '[]' END\n        ) AS d(dep)\n        WHERE f.data_type = 'formula' AND f.is_active AND f.deleted_at IS NULL\n          AND NOT (f.entity_id = ANY($1))\n          AND (\n            (d.dep->>'kind' = 'relation' AND EXISTS (\n                SELECT 1 FROM field_definitions rf\n                WHERE rf.entity_id = f.entity_id AND rf.field_key = d.dep->>'relation'\n                  AND rf.data_type = 'relation' AND rf.relation_entity_id = ANY($1)\n                  AND rf.deleted_at IS NULL\n            ))\n            OR (d.dep->>'kind' = 'detail' AND EXISTS (\n                SELECT 1 FROM entity_definitions de\n                WHERE de.id = ANY($1) AND de.parent_entity_id = f.entity_id\n                  AND de.key = d.dep->>'detail'\n            ))\n          )\n        ORDER BY e.key, f.field_key\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "entity_label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entity_definitions",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "field_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "field_key"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "field_label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "field_definitions",
+            "name": "label"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a4cfd52d5298389c98477410c798c94e287c196f236c7025079f9b92ccb0808d"
+}

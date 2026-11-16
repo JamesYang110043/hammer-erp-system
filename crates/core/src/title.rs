@@ -28,7 +28,8 @@
 //! | `boolean` | `是` / `否` |
 //! | `select` | 選項名稱；選項已移除時為選項值 |
 //! | `multi_select` | 選項名稱，以 `、` 連接 |
-//! | `relation`、`file`、`formula` | 目前為空字串 |
+//! | `formula` | 依 `formula_result_type` 套用上列規則 |
+//! | `relation`、`file` | 目前為空字串 |
 //!
 //! 引用已停用或不存在的欄位、存值格式不正確時視為沒有值。結果去除前後空白。
 //!
@@ -267,14 +268,23 @@ impl<'a> TitleRenderer<'a> {
 }
 
 /// 欄位值在標題中的文字。已停用、沒有值或格式不正確時為空字串。
+///
+/// `formula` 欄位的存值格式與它的 `formula_result_type` 相同（§7.3），依結果型態格式化。
 fn field_text(field: &FieldDefinition, data: &Map<String, Value>) -> String {
-    if !field.is_active || !field.data_type.is_value_supported() {
+    let value_type = match field.data_type {
+        DataType::Formula => match field.formula_result_type {
+            Some(t) => t,
+            None => return String::new(),
+        },
+        t => t,
+    };
+    if !field.is_active || !value_type.is_value_supported() {
         return String::new();
     }
     let Some(json) = data.get(&field.field_key) else {
         return String::new();
     };
-    let Ok(Some(value)) = parse_value(field.data_type, json) else {
+    let Ok(Some(value)) = parse_value(value_type, json) else {
         return String::new();
     };
     match value {
@@ -564,6 +574,69 @@ mod tests {
             ),
             "[]"
         );
+    }
+
+    fn formula(key: &str, result: Option<DataType>) -> FieldDefinition {
+        let mut f = field(key, DataType::Formula, 0);
+        f.formula = Some("1".into());
+        f.formula_result_type = result;
+        f
+    }
+
+    #[test]
+    fn formula_fields_format_by_result_type() {
+        let mut inactive = formula("old", Some(DataType::Text));
+        inactive.is_active = false;
+        let fields = [
+            formula("f_text", Some(DataType::Text)),
+            formula("f_long", Some(DataType::LongText)),
+            formula("f_int", Some(DataType::Integer)),
+            formula("f_dec", Some(DataType::Decimal)),
+            formula("f_money", Some(DataType::Money)),
+            formula("f_day", Some(DataType::Date)),
+            formula("f_at", Some(DataType::DateTime)),
+            formula("f_ok", Some(DataType::Boolean)),
+            formula("f_none", None),
+            inactive,
+        ];
+        let cases = [
+            ("{f_text}", json!({ "f_text": "A-01" }), "A-01"),
+            ("{f_long}", json!({ "f_long": "a\nb" }), "a b"),
+            ("{f_int}", json!({ "f_int": 42 }), "42"),
+            ("{f_dec}", json!({ "f_dec": "0.1250" }), "0.1250"),
+            ("{f_money}", json!({ "f_money": "1200.50" }), "1200.50"),
+            ("{f_day}", json!({ "f_day": "2026-11-05" }), "2026-11-05"),
+            (
+                "{f_at}",
+                json!({ "f_at": "2026-11-05T16:30:00Z" }),
+                "2026-11-06 00:30",
+            ),
+            ("{f_ok}", json!({ "f_ok": true }), "是"),
+            // 計算失敗（null）、沒有值、存值格式不符結果型態 → 空字串
+            ("[{f_int}]", json!({ "f_int": null }), "[]"),
+            ("[{f_int}]", json!({}), "[]"),
+            ("[{f_int}]", json!({ "f_int": "abc" }), "[]"),
+            // 沒有結果型態（資料庫中的定義不完整）、已停用 → 空字串
+            ("[{f_none}]", json!({ "f_none": "x" }), "[]"),
+            ("[{old}]", json!({ "old": "x" }), "[]"),
+        ];
+        for (template, v, expected) in cases {
+            assert_eq!(
+                render(template, &fields, v.clone()),
+                expected,
+                "{template} {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn formula_fields_are_not_default_title() {
+        // 預設規則只使用 `text` 欄位，不使用結果為文字的公式欄位
+        let fields = [formula("code", Some(DataType::Text))];
+        let id = new_id();
+        let title =
+            TitleRenderer::new(None, &fields).render(id, None, &data(json!({ "code": "A-01" })));
+        assert_eq!(title, id.to_string()[..ID_PREFIX_LEN]);
     }
 
     // ---- 預設規則 ----

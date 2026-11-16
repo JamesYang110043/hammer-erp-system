@@ -6,7 +6,8 @@
 //!   [`insert_entity`]、[`update_entity`]、[`update_entity_sort_order`]、[`soft_delete_entity`]、
 //!   [`list_relation_references`]
 //! - `field_definitions`：[`list_fields`]、[`list_fields_for_update`]、[`find_field`]、
-//!   [`find_field_for_update`]、[`insert_field`]、[`update_field`]、[`update_field_sort_order`]
+//!   [`find_field_for_update`]、[`insert_field`]、[`update_field`]、[`update_field_sort_order`]、
+//!   [`list_formula_deps`]、[`list_formula_field_references`]、[`list_formula_entity_references`]
 //! - `schema_change_logs`：[`insert_schema_change_log`]
 //!
 //! 已軟刪除（`deleted_at IS NOT NULL`）的資料類別與欄位一律視為不存在。
@@ -420,7 +421,8 @@ pub async fn soft_delete_entity<'e>(
     Ok(result)
 }
 
-/// 指向某些資料類別的關聯欄位。
+/// 引用某些資料類別或欄位的欄位：關聯欄位（[`list_relation_references`]）或公式欄位
+/// （[`list_formula_field_references`]、[`list_formula_entity_references`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationReferenceRow {
     pub entity_key: String,
@@ -605,6 +607,12 @@ pub struct FieldAttributes<'a> {
     pub validation: Option<&'a Value>,
     pub options: Option<&'a Value>,
     pub decimal_places: Option<i16>,
+    /// `formula` 的公式；其他型態為 `None`。
+    pub formula: Option<&'a str>,
+    /// `formula` 的結果型態；其他型態為 `None`。
+    pub formula_result_type: Option<&'a str>,
+    /// `formula` 的相依欄位（`hammer_formula::deps_to_json`）；其他型態為 `None`。
+    pub formula_deps: Option<&'a Value>,
     pub ui_widget: Option<&'a str>,
     pub column_width: Option<i32>,
     pub help_text: Option<&'a str>,
@@ -640,9 +648,10 @@ pub async fn insert_field<'e>(
              is_required, is_visible, is_readonly, is_searchable, is_unique,
              default_value, validation, options, decimal_places, ui_widget, column_width,
              help_text, sort_order, created_at, created_by, updated_at, updated_by,
-             relation_entity_id)
+             relation_entity_id, formula, formula_result_type, formula_deps)
         VALUES ($1, $2, $3, $4, $5, false, 'json', $6, $7, $8, $9, $10,
-                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $19, $20, $21)
+                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $19, $20, $21,
+                $22, $23, $24)
         "#,
         new.id,
         new.entity_id,
@@ -665,13 +674,16 @@ pub async fn insert_field<'e>(
         new.created_at,
         new.created_by,
         new.relation_entity_id,
+        a.formula,
+        a.formula_result_type,
+        a.formula_deps,
     )
     .execute(executor)
     .await?;
     Ok(())
 }
 
-/// 修改欄位的可設定屬性與 `is_active`，並遞增 `version`。版本號不符時影響 0 筆。
+/// 修改欄位的可設定屬性（含公式）與 `is_active`，並遞增 `version`。版本號不符時影響 0 筆。
 pub async fn update_field<'e>(
     executor: impl PgExecutor<'e>,
     id: Uuid,
@@ -688,7 +700,8 @@ pub async fn update_field<'e>(
             is_searchable = $7, is_unique = $8, default_value = $9, validation = $10,
             options = $11, decimal_places = $12, ui_widget = $13, column_width = $14,
             help_text = $15, sort_order = $16, is_active = $17,
-            updated_by = $18, version = version + 1
+            updated_by = $18, formula = $19, formula_result_type = $20, formula_deps = $21,
+            version = version + 1
         WHERE id = $1 AND version = $2 AND deleted_at IS NULL
         "#,
         id,
@@ -709,10 +722,136 @@ pub async fn update_field<'e>(
         a.sort_order,
         is_active,
         updated_by,
+        a.formula,
+        a.formula_result_type,
+        a.formula_deps,
     )
     .execute(executor)
     .await?;
     Ok(result)
+}
+
+/// 一個公式欄位的相依（`formula_deps`）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormulaDepsRow {
+    pub entity_id: Uuid,
+    pub field_key: String,
+    pub formula_deps: Option<Value>,
+}
+
+/// 列出 `entity_ids` 中有效（啟用、未刪除）的公式欄位與其 `formula_deps`，
+/// 依資料類別、`sort_order`、`id` 排序。
+pub async fn list_formula_deps<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_ids: &[Uuid],
+) -> Result<Vec<FormulaDepsRow>, DbError> {
+    let rows = sqlx::query_as!(
+        FormulaDepsRow,
+        r#"
+        SELECT entity_id, field_key, formula_deps
+        FROM field_definitions
+        WHERE entity_id = ANY($1) AND data_type = 'formula'
+          AND is_active AND deleted_at IS NULL
+        ORDER BY entity_id, sort_order, id
+        "#,
+        entity_ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 列出引用欄位（資料類別 `entity_id` 的 `field_key`）的有效公式欄位：公式欄位啟用、未刪除，
+/// 所屬資料類別未刪除（含已停用，重新啟用後公式仍需要這些欄位）；不含欄位本身。
+/// 依資料類別代碼、欄位代碼排序。
+///
+/// 引用的方式（`formula_deps` 的元素，見 architecture.md §8.5）：
+///
+/// - `{"kind":"field"}`：同一個資料類別的欄位
+/// - `{"kind":"relation"}`：同一個資料類別的關聯欄位本身（`relation`），或關聯欄位目標資料類別的
+///   欄位（`field`）
+/// - `{"kind":"detail"}`：所屬資料類別的明細子表（代碼為 `detail`）的欄位
+pub async fn list_formula_field_references<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_id: Uuid,
+    field_key: &str,
+) -> Result<Vec<RelationReferenceRow>, DbError> {
+    let rows = sqlx::query_as!(
+        RelationReferenceRow,
+        r#"
+        SELECT DISTINCT e.key AS entity_key, e.label AS entity_label,
+               f.field_key, f.label AS field_label
+        FROM field_definitions f
+        JOIN entity_definitions e ON e.id = f.entity_id AND e.deleted_at IS NULL
+        CROSS JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(f.formula_deps) = 'array' THEN f.formula_deps ELSE '[]' END
+        ) AS d(dep)
+        WHERE f.data_type = 'formula' AND f.is_active AND f.deleted_at IS NULL
+          AND NOT (f.entity_id = $1 AND f.field_key = $2)
+          AND (
+            (d.dep->>'kind' = 'field' AND f.entity_id = $1 AND d.dep->>'field' = $2)
+            OR (d.dep->>'kind' = 'relation' AND f.entity_id = $1 AND d.dep->>'relation' = $2)
+            OR (d.dep->>'kind' = 'relation' AND d.dep->>'field' = $2 AND EXISTS (
+                SELECT 1 FROM field_definitions rf
+                WHERE rf.entity_id = f.entity_id AND rf.field_key = d.dep->>'relation'
+                  AND rf.data_type = 'relation' AND rf.relation_entity_id = $1
+                  AND rf.deleted_at IS NULL
+            ))
+            OR (d.dep->>'kind' = 'detail' AND d.dep->>'field' = $2 AND EXISTS (
+                SELECT 1 FROM entity_definitions de
+                WHERE de.id = $1 AND de.parent_entity_id = f.entity_id
+                  AND de.key = d.dep->>'detail'
+            ))
+          )
+        ORDER BY e.key, f.field_key
+        "#,
+        entity_id,
+        field_key,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 列出引用資料類別 `targets`（停用明細子表、刪除資料類別時）的有效公式欄位，不含 `targets`
+/// 本身的公式欄位：以子表彙總引用明細子表的欄位，或以關聯引用目標資料類別的欄位。
+/// 公式欄位與所屬資料類別的條件同 [`list_formula_field_references`]。依資料類別代碼、欄位代碼排序。
+pub async fn list_formula_entity_references<'e>(
+    executor: impl PgExecutor<'e>,
+    targets: &[Uuid],
+) -> Result<Vec<RelationReferenceRow>, DbError> {
+    let rows = sqlx::query_as!(
+        RelationReferenceRow,
+        r#"
+        SELECT DISTINCT e.key AS entity_key, e.label AS entity_label,
+               f.field_key, f.label AS field_label
+        FROM field_definitions f
+        JOIN entity_definitions e ON e.id = f.entity_id AND e.deleted_at IS NULL
+        CROSS JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(f.formula_deps) = 'array' THEN f.formula_deps ELSE '[]' END
+        ) AS d(dep)
+        WHERE f.data_type = 'formula' AND f.is_active AND f.deleted_at IS NULL
+          AND NOT (f.entity_id = ANY($1))
+          AND (
+            (d.dep->>'kind' = 'relation' AND EXISTS (
+                SELECT 1 FROM field_definitions rf
+                WHERE rf.entity_id = f.entity_id AND rf.field_key = d.dep->>'relation'
+                  AND rf.data_type = 'relation' AND rf.relation_entity_id = ANY($1)
+                  AND rf.deleted_at IS NULL
+            ))
+            OR (d.dep->>'kind' = 'detail' AND EXISTS (
+                SELECT 1 FROM entity_definitions de
+                WHERE de.id = ANY($1) AND de.parent_entity_id = f.entity_id
+                  AND de.key = d.dep->>'detail'
+            ))
+          )
+        ORDER BY e.key, f.field_key
+        "#,
+        targets,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
 }
 
 /// 變更欄位型態所需的資料（§7.4）。
