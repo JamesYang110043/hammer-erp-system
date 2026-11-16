@@ -6,11 +6,14 @@
 //!
 //! - 相依分析：[`dependencies`] 取出公式引用的欄位（`formula_deps`，[`deps_to_json`]）；
 //!   [`calculation_order`] 檢查循環引用並回傳計算順序。
+//! - 一筆資料的計算：[`record::Formulas`] 依相依順序計算主表與明細的所有公式欄位（伺服器存檔、
+//!   重新計算與桌面端即時預覽共用）。
 //! - 型別檢查：[`check_formula`] 依呼叫端提供的欄位定義（[`TypeSchema`]）推斷結果型態，
 //!   檢查引用規則與 `formula_result_type`。
 //!
-//! 本 crate 只依賴 `hammer-shared`（§4），不讀取資料庫：伺服器（`crates/core`）與桌面端各自實作
-//! [`Environment`]、提供 [`TypeSchema`]。
+//! 本 crate 只依賴 `hammer-shared`（§4），不讀取資料庫：一筆資料的計算環境由 [`record`] 提供，
+//! 需要讀取的關聯目標資料由呼叫端（伺服器的 `crates/core`、桌面端的預覽）讀取後傳入；
+//! 型別檢查的 [`TypeSchema`] 由呼叫端提供。
 //!
 //! # 語法
 //!
@@ -123,6 +126,7 @@ mod eval;
 mod graph;
 mod lexer;
 mod parser;
+pub mod record;
 mod storage;
 mod typecheck;
 mod value;
