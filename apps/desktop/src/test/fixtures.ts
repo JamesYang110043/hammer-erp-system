@@ -34,6 +34,8 @@ export function startupCommands(
     get_server_url: () => 'http://localhost:8080',
     // 左側選單的資料類別
     list_entities: () => [],
+    // 資料類別管理畫面（含已停用）
+    list_all_entities: () => [],
   };
 }
 

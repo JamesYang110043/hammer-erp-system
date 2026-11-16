@@ -18,7 +18,8 @@ use hammer_shared::record::{
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
-    EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
+    DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
+    ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
 };
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use hammer_shared::user::{
@@ -196,8 +197,11 @@ impl AppState {
     }
 
     /// 資料類別列表。
-    pub async fn list_entities(&self) -> Result<Vec<EntityDefinition>, ClientError> {
-        self.with_token(async |client, url, token| client.list_entities(url, token).await)
+    pub async fn list_entities(
+        &self,
+        query: &ListEntitiesQuery,
+    ) -> Result<Vec<EntityDefinition>, ClientError> {
+        self.with_token(async |client, url, token| client.list_entities(url, token, query).await)
             .await
     }
 
@@ -214,6 +218,37 @@ impl AppState {
     ) -> Result<EntityDetail, ClientError> {
         self.with_token(async |client, url, token| client.create_entity(url, token, req).await)
             .await
+    }
+
+    /// 修改資料類別（含停用、重新啟用）。
+    pub async fn update_entity(
+        &self,
+        key: &str,
+        req: &UpdateEntityRequest,
+    ) -> Result<EntityDetail, ClientError> {
+        self.with_token(async |client, url, token| client.update_entity(url, token, key, req).await)
+            .await
+    }
+
+    /// 調整資料類別的選單排序。
+    pub async fn reorder_entities(
+        &self,
+        req: &ReorderEntitiesRequest,
+    ) -> Result<Vec<EntityDefinition>, ClientError> {
+        self.with_token(async |client, url, token| client.reorder_entities(url, token, req).await)
+            .await
+    }
+
+    /// 刪除資料類別（軟刪除）。
+    pub async fn delete_entity(
+        &self,
+        key: &str,
+        query: &DeleteEntityQuery,
+    ) -> Result<(), ClientError> {
+        self.with_token(async |client, url, token| {
+            client.delete_entity(url, token, key, query).await
+        })
+        .await
     }
 
     /// 新增欄位。

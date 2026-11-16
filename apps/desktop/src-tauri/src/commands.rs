@@ -21,7 +21,8 @@ use hammer_shared::record::{
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
-    EntityDefinition, EntityDetail, FieldDefinition, ReorderFieldsRequest, UpdateFieldRequest,
+    DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
+    ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
 };
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use hammer_shared::user::{
@@ -200,13 +201,26 @@ pub async fn list_audit_logs(
     state.list_audit_logs(&query).await
 }
 
-/// 資料類別列表（有效的資料類別）。
+/// 資料類別列表（啟用中的資料類別，選單用）。
 #[tauri::command]
 #[specta::specta]
 pub async fn list_entities(
     state: State<'_, AppState>,
 ) -> Result<Vec<EntityDefinition>, ClientError> {
-    state.list_entities().await
+    state.list_entities(&ListEntitiesQuery::default()).await
+}
+
+/// 資料類別列表，含已停用的資料類別（管理畫面用，需要 `schema.manage`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_all_entities(
+    state: State<'_, AppState>,
+) -> Result<Vec<EntityDefinition>, ClientError> {
+    state
+        .list_entities(&ListEntitiesQuery {
+            include_inactive: true,
+        })
+        .await
 }
 
 /// 資料類別與其所有欄位定義（含已停用），欄位依排序。
@@ -219,7 +233,7 @@ pub async fn get_entity(
     state.get_entity(&key).await
 }
 
-/// 新增自訂資料類別（需要 `schema.manage`）。M2a 只能建立主檔。
+/// 新增自訂資料類別（需要 `schema.manage`）：主檔、單據或明細子表。
 #[tauri::command]
 #[specta::specta]
 pub async fn create_entity(
@@ -227,6 +241,42 @@ pub async fn create_entity(
     req: CreateEntityRequest,
 ) -> Result<EntityDetail, ClientError> {
     state.create_entity(&req).await
+}
+
+/// 修改資料類別，含停用與重新啟用（需要 `schema.manage`）。`req.version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn update_entity(
+    state: State<'_, AppState>,
+    key: String,
+    req: UpdateEntityRequest,
+) -> Result<EntityDetail, ClientError> {
+    state.update_entity(&key, &req).await
+}
+
+/// 調整資料類別的選單排序（需要 `schema.manage`）。任一筆版本不符時整批不寫入。
+#[tauri::command]
+#[specta::specta]
+pub async fn reorder_entities(
+    state: State<'_, AppState>,
+    req: ReorderEntitiesRequest,
+) -> Result<Vec<EntityDefinition>, ClientError> {
+    state.reorder_entities(&req).await
+}
+
+/// 刪除自訂資料類別（軟刪除，需要 `schema.manage`）；明細子表一起刪除。
+///
+/// 被其他資料類別的關聯欄位引用時回傳 `422 VALIDATION`，`details.fields` 列出這些欄位。
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_entity(
+    state: State<'_, AppState>,
+    key: String,
+    version: i32,
+) -> Result<(), ClientError> {
+    state
+        .delete_entity(&key, &DeleteEntityQuery { version })
+        .await
 }
 
 /// 新增欄位（需要 `schema.manage`）。

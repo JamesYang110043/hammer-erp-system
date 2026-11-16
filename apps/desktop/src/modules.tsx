@@ -14,6 +14,8 @@ import type { ReactNode } from 'react';
 import type { Permission } from './auth/permission';
 import { PERMISSIONS } from './bindings';
 import type { EntityDefinition } from './bindings';
+import { groupEntities } from './schema/entities';
+import type { EntityGroup } from './schema/entities';
 import { AuditLogsPage } from './pages/audit/AuditLogsPage';
 import { EntitiesPage } from './pages/schema/EntitiesPage';
 import { FieldsPage } from './pages/schema/FieldsPage';
@@ -84,14 +86,15 @@ export const ENTITIES_PATH = 'entities';
 export const ENTITY_MENU_AFTER = 'finance';
 
 /**
- * 左側選單列出的資料類別：自訂資料類別（`custom_records`）的主檔與單據，依排序。
+ * 左側選單列出的資料類別：啟用中的自訂資料類別（`custom_records`），依種類分組（主檔、單據），
+ * 組內依選單排序；沒有資料類別的組不列出。
  *
  * 明細子表從所屬的主表開啟，不放在選單；系統資料類別有各自的模組頁面（M3 起）。
  */
-export function menuEntities(entities: readonly EntityDefinition[]): EntityDefinition[] {
-  return entities
-    .filter((e) => e.is_active && e.storage === 'custom_records' && e.kind !== 'detail')
-    .sort((a, b) => a.sort_order - b.sort_order);
+export function menuEntityGroups(entities: readonly EntityDefinition[]): EntityGroup[] {
+  return groupEntities(
+    entities.filter((e) => e.is_active && e.storage === 'custom_records'),
+  ).filter((g) => g.entities.length > 0);
 }
 
 /** 資料列表頁。 */
