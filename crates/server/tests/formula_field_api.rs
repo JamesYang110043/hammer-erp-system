@@ -433,7 +433,7 @@ async fn creates_formula_fields_with_deps(pool: PgPool) {
         create_field(&pool, &admin, REPAIR, formula_field(key, formula, result)).await;
     }
 
-    // 有公式欄位的資料類別仍可新增、讀取資料（存檔時計算在之後的 issue）
+    // 有公式欄位的資料類別可以新增、讀取資料（存檔時計算見 formula_compute_api.rs）
     let (status, body) = call(
         &pool,
         Method::POST,

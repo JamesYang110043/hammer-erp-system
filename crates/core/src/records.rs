@@ -30,6 +30,12 @@
 //! 明細的樂觀鎖定由主表的 `version` 負責，明細有變動時主表的 `version` 也遞增；軟刪除主表時明細一起
 //! 軟刪除。明細的變動記在主表那筆操作紀錄的 `lines.<明細子表代碼>`。單筆查詢與寫入的回應包含明細
 //! （[`Record::lines`]），列表不包含。
+//!
+//! 公式欄位（`formula`）：新增與修改時在同一個 transaction 內計算（[`crate::formulas`]），先算每一列
+//! 明細、再算主表；修改時所有公式都重算，有公式時 request 沒帶到的明細子表也一起重算（主表的子表彙總
+//! 需要所有明細）。request 帶的公式欄位值一律忽略。計算失敗的欄位在 `data` 中沒有值，原因寫入
+//! `formula_errors`（[`Record::formula_errors`]），不中斷存檔。公式的值變動記在操作紀錄的 diff。
+//! 篩選與排序依 `formula_result_type`。
 
 use hammer_db::DbError;
 use hammer_db::ensure_version_matched;
@@ -58,6 +64,9 @@ use crate::CoreError;
 use crate::attachments::{FileChanges, apply_file_changes, attach_files, prepare_file_changes};
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
+use crate::formulas::{
+    FormulaErrors, Formulas, errors_from_json, errors_to_json, load_targets, today_of, value_type,
+};
 use crate::numbering::{NumberingPattern, numbering_date};
 use crate::record_data::{FieldError, WriteMode, normalize_record_data};
 use crate::record_lines::{
@@ -213,13 +222,17 @@ pub async fn create_record(
     let mut tx = pool.begin().await.map_err(DbError::from)?;
     let (entity, fields) = load_entity_for_write(&mut tx, entity_key).await?;
     let details = load_details_for_write(&mut tx, &entity).await?;
+    let formulas = formulas_of(&fields, &details);
     let master = normalize_record_data(&fields, &req.data, WriteMode::Create);
     let mut line_errors = Vec::new();
-    let lines = prepare_lines(&mut tx, &details, &req.lines, None, &mut line_errors).await?;
-    let data = validation_error(master, line_errors)?;
+    let mut lines =
+        prepare_lines(&mut tx, &details, &req.lines, None, false, &mut line_errors).await?;
+    let mut data = validation_error(master, line_errors)?;
     check_relations(&mut tx, &fields, &data, None).await?;
     let files = prepare_file_changes(&mut tx, &fields, &data, None).await?;
     ensure_unique_attachments(&files, &lines)?;
+    let formula_errors = compute_formulas(&mut tx, &formulas, &mut data, &mut lines, now).await?;
+    let formula_errors = errors_to_json(&formula_errors);
     let data = Value::Object(data);
 
     // 驗證通過後才取號：流水號的列鎖定到 transaction 結束，越晚取號鎖定的時間越短
@@ -234,6 +247,7 @@ pub async fn create_record(
             parent_record_id: None,
             sort_order: 0,
             data: &data,
+            formula_errors: formula_errors.as_ref(),
             created_by: ctx.user_id,
             created_at: now,
         },
@@ -303,12 +317,28 @@ pub async fn update_record(
     ensure_version(current.version, req.version)?;
 
     let details = load_details_for_write(&mut tx, &entity).await?;
+    let formulas = formulas_of(&fields, &details);
     let existing = data_object(&current.data)?;
     let master = normalize_record_data(&fields, &req.data, WriteMode::Update { existing });
     let mut line_errors = Vec::new();
-    let lines = prepare_lines(&mut tx, &details, &req.lines, Some(id), &mut line_errors).await?;
-    let data = validation_error(master, line_errors)?;
-    if data == *existing && lines.iter().all(|d| !d.changed()) {
+    // 有公式時所有明細都要重算（主表的子表彙總也需要沒帶到的明細）
+    let recompute_all = !formulas.is_empty();
+    let mut lines = prepare_lines(
+        &mut tx,
+        &details,
+        &req.lines,
+        Some(id),
+        recompute_all,
+        &mut line_errors,
+    )
+    .await?;
+    let mut data = validation_error(master, line_errors)?;
+    let formula_errors = compute_formulas(&mut tx, &formulas, &mut data, &mut lines, now).await?;
+    let formula_errors = errors_to_json(&formula_errors);
+    if data == *existing
+        && formula_errors == current.formula_errors
+        && lines.iter().all(|d| !d.changed())
+    {
         let record = record_from_row(current, &renderer(&entity, &fields))?;
         let mut record = with_relations(&mut tx, &fields, record).await?;
         record.lines = Some(fetch_lines(&mut tx, &details, id).await?);
@@ -322,7 +352,15 @@ pub async fn update_record(
     let data = Value::Object(data);
 
     // 只有明細變動時 data 不變，但 version 仍遞增
-    let updated = db::update_record_data(&mut *tx, id, req.version, &data, ctx.user_id).await;
+    let updated = db::update_record_data(
+        &mut *tx,
+        id,
+        req.version,
+        &data,
+        formula_errors.as_ref(),
+        ctx.user_id,
+    )
+    .await;
     match updated {
         Ok(result) => {
             ensure_version_matched(result)?;
@@ -451,7 +489,7 @@ pub fn plan_list(
                 });
             }
             let field = queryable_field(fields, &sort.field_key, query_param::SORT)?;
-            let cast = sort_cast(field.data_type).ok_or_else(|| CoreError::InvalidParam {
+            let cast = sort_cast(query_type(field)).ok_or_else(|| CoreError::InvalidParam {
                 param: query_param::SORT.to_owned(),
                 message: "此欄位型態不支援排序".to_owned(),
             })?;
@@ -506,7 +544,7 @@ pub fn plan_list(
     ))
 }
 
-/// 可用於篩選與排序的欄位：有效、`storage = json`、目前支援的型態。
+/// 可用於篩選與排序的欄位：有效、`storage = json`；`formula` 欄位必須有結果型態。
 fn queryable_field<'a>(
     fields: &'a [FieldDefinition],
     field_key: &str,
@@ -518,12 +556,17 @@ fn queryable_field<'a>(
             f.field_key == field_key
                 && f.is_active
                 && f.storage == FieldStorage::Json
-                && f.data_type.is_value_supported()
+                && value_type(f).is_some()
         })
         .ok_or_else(|| CoreError::InvalidParam {
             param: param.to_owned(),
             message: format!("沒有可查詢的欄位「{field_key}」"),
         })
+}
+
+/// 篩選與排序時欄位的型態：`formula` 欄位為它的 `formula_result_type`（[`value_type`]）。
+fn query_type(field: &FieldDefinition) -> DataType {
+    value_type(field).unwrap_or(field.data_type)
 }
 
 /// 比較與排序時的轉型方式；`multi_select` 只能排序不能比較，`relation` 只能比較（`eq`）不能排序。
@@ -568,7 +611,8 @@ fn filter_condition(
     field: &FieldDefinition,
     filter: &RecordFilter,
 ) -> Result<RecordCondition, String> {
-    if !op_supported(field.data_type, filter.op) {
+    let data_type = query_type(field);
+    if !op_supported(data_type, filter.op) {
         return Err(format!("此欄位型態不支援 {} 篩選", filter.op.as_str()));
     }
     let field_key = field.field_key.clone();
@@ -576,9 +620,9 @@ fn filter_condition(
         Ok(RecordCondition::Compare {
             field_key: field.field_key.clone(),
             // op_supported 已確認可比較
-            cast: compare_cast(field.data_type).unwrap_or(JsonCast::Text),
+            cast: compare_cast(data_type).unwrap_or(JsonCast::Text),
             op,
-            value: compare_value(field.data_type, &filter.value)?,
+            value: compare_value(data_type, &filter.value)?,
         })
     };
     match filter.op {
@@ -712,6 +756,7 @@ pub fn record_from_row(row: RecordRow, titles: &TitleRenderer<'_>) -> Result<Rec
         data,
         relations: Default::default(),
         attachments: Default::default(),
+        formula_errors: errors_from_json(row.formula_errors.as_ref()),
         lines: None,
         created_at: row.created_at,
         created_by: row.created_by,
@@ -916,15 +961,42 @@ enum LineAction {
     Unchanged,
 }
 
+/// 既有明細修改前的內容（判斷是否有變動）。
+struct PreviousLine {
+    sort_order: i32,
+    data: Value,
+    formula_errors: Option<Value>,
+}
+
 /// 一列要寫入的明細（已驗證）。
 struct LineWrite {
     id: Id,
     /// 在 request 陣列中的位置，也是寫入的 `sort_order`。
     index: usize,
     sort_order: i32,
-    action: LineAction,
     data: Value,
+    /// 公式的計算錯誤（[`compute_formulas`] 寫入）。
+    formula_errors: Option<Value>,
     files: FileChanges,
+    /// 既有的明細；新的明細為 `None`。
+    previous: Option<PreviousLine>,
+}
+
+impl LineWrite {
+    /// 寫入方式：與修改前比較 `data`（含公式的結果）、公式錯誤與順序。
+    fn action(&self) -> LineAction {
+        match &self.previous {
+            None => LineAction::Insert,
+            Some(p)
+                if p.sort_order == self.sort_order
+                    && p.data == self.data
+                    && p.formula_errors == self.formula_errors =>
+            {
+                LineAction::Unchanged
+            }
+            Some(_) => LineAction::Update,
+        }
+    }
 }
 
 /// 一個明細子表要寫入的內容（request 有帶到的明細子表）。
@@ -940,7 +1012,11 @@ struct DetailWrite<'a> {
 
 impl DetailWrite<'_> {
     fn changed(&self) -> bool {
-        !self.removed.is_empty() || self.lines.iter().any(|l| l.action != LineAction::Unchanged)
+        !self.removed.is_empty()
+            || self
+                .lines
+                .iter()
+                .any(|l| l.action() != LineAction::Unchanged)
     }
 
     fn before_audit(&self) -> Value {
@@ -956,11 +1032,15 @@ impl DetailWrite<'_> {
 /// （不中斷，以便一次列出所有錯誤）；有錯誤時回傳的內容不可寫入。
 ///
 /// `parent_id` 為修改的主表資料（鎖定並比對既有明細）；新增時為 `None`。
+///
+/// `all_details = true` 時（修改有公式的資料，所有明細都要重算），request 沒帶到的有效明細子表也
+/// 列入，視為列出所有既有明細且不修改任何欄位。
 async fn prepare_lines<'d>(
     tx: &mut PgTransaction<'_>,
     details: &'d [Detail],
     input: &BTreeMap<String, Vec<LineInput>>,
     parent_id: Option<Id>,
+    all_details: bool,
     errors: &mut Vec<LineError>,
 ) -> Result<Vec<DetailWrite<'d>>, CoreError> {
     let active: Vec<&EntityDefinition> = details
@@ -970,11 +1050,21 @@ async fn prepare_lines<'d>(
         .collect();
     errors.extend(unknown_details(input, &active));
 
+    let mut keys: Vec<&str> = input.keys().map(String::as_str).collect();
+    if all_details && parent_id.is_some() {
+        keys.extend(
+            active
+                .iter()
+                .map(|e| e.key.as_str())
+                .filter(|k| !input.contains_key(*k)),
+        );
+    }
+
     let mut writes = Vec::new();
-    for (key, inputs) in input {
+    for key in keys {
         let Some(detail) = details
             .iter()
-            .find(|d| d.entity.is_active && d.entity.key == *key)
+            .find(|d| d.entity.is_active && d.entity.key == key)
         else {
             continue;
         };
@@ -983,6 +1073,20 @@ async fn prepare_lines<'d>(
                 db::list_lines_for_update(&mut **tx, detail.entity.id, parent_id).await?
             }
             None => Vec::new(),
+        };
+        let unchanged: Vec<LineInput>;
+        let inputs = match input.get(key) {
+            Some(inputs) => inputs,
+            None => {
+                unchanged = existing
+                    .iter()
+                    .map(|r| LineInput {
+                        id: Some(r.id),
+                        data: Map::new(),
+                    })
+                    .collect();
+                &unchanged
+            }
         };
         let existing_ids: Vec<Id> = existing.iter().map(|r| r.id).collect();
         let matched = match match_lines(key, inputs, &existing_ids, parent_id.is_none()) {
@@ -1004,24 +1108,20 @@ async fn prepare_lines<'d>(
                 i32::try_from(index).map_err(|_| CoreError::Validation("明細的列數過多".into()))?;
             match prepare_line(tx, detail, line, current).await? {
                 Ok((data, files)) => {
-                    let action = match current {
-                        None => LineAction::Insert,
-                        Some(row)
-                            if row.sort_order == sort_order
-                                && row.data.as_object() == Some(&data) =>
-                        {
-                            LineAction::Unchanged
-                        }
-                        Some(_) => LineAction::Update,
-                    };
                     normalized.push(Some(data.clone()));
                     lines.push(LineWrite {
                         id: current.map_or_else(new_id, |r| r.id),
                         index,
                         sort_order,
-                        action,
                         data: Value::Object(data),
+                        // 沒有公式時保持原樣，由 compute_formulas 取代
+                        formula_errors: current.and_then(|r| r.formula_errors.clone()),
                         files,
+                        previous: current.map(|r| PreviousLine {
+                            sort_order: r.sort_order,
+                            data: r.data.clone(),
+                            formula_errors: r.formula_errors.clone(),
+                        }),
                     });
                 }
                 Err(field_errors) => {
@@ -1072,6 +1172,58 @@ async fn prepare_line(
     }
 }
 
+/// 主表與有效明細子表的公式欄位（[`Formulas`]）。
+fn formulas_of(master_fields: &[FieldDefinition], details: &[Detail]) -> Formulas {
+    let details: Vec<(&str, &[FieldDefinition])> = details
+        .iter()
+        .filter(|d| d.entity.is_active)
+        .map(|d| (d.entity.key.as_str(), d.fields.as_slice()))
+        .collect();
+    Formulas::new(master_fields, &details)
+}
+
+/// 計算公式（[`crate::formulas`]）：先算 `lines` 每一列明細（結果與錯誤寫入該列），再算主表
+/// `data`，回傳主表的錯誤。`lines` 為要寫入的明細子表；沒有列出的有效明細子表視為沒有明細。
+async fn compute_formulas(
+    tx: &mut PgTransaction<'_>,
+    formulas: &Formulas,
+    data: &mut Map<String, Value>,
+    lines: &mut [DetailWrite<'_>],
+    now: OffsetDateTime,
+) -> Result<FormulaErrors, CoreError> {
+    let today = today_of(now);
+    let wanted = formulas.targets(
+        data,
+        lines.iter().flat_map(|d| {
+            let key = d.detail.entity.key.as_str();
+            d.lines
+                .iter()
+                .filter_map(move |l| Some((key, l.data.as_object()?)))
+        }),
+    );
+    let targets = load_targets(tx, wanted).await?;
+
+    for detail in lines.iter_mut() {
+        let key = detail.detail.entity.key.as_str();
+        for line in &mut detail.lines {
+            if let Value::Object(map) = &mut line.data {
+                let errors = formulas.compute_line(key, map, &targets, today);
+                line.formula_errors = errors_to_json(&errors);
+            }
+        }
+    }
+    let rows: BTreeMap<&str, Vec<&Map<String, Value>>> = lines
+        .iter()
+        .map(|d| {
+            (
+                d.detail.entity.key.as_str(),
+                d.lines.iter().filter_map(|l| l.data.as_object()).collect(),
+            )
+        })
+        .collect();
+    Ok(formulas.compute_master(data, &rows, &targets, today))
+}
+
 /// 同一個附件不可同時用在主表與明細（或兩列明細）。
 fn ensure_unique_attachments(
     master: &FileChanges,
@@ -1113,12 +1265,19 @@ async fn write_lines(
     }
     for detail in details {
         for line in &detail.lines {
-            match line.action {
+            match line.action() {
                 LineAction::Unchanged => {}
                 LineAction::Update => {
                     // 已由 list_lines_for_update 鎖定
-                    db::update_line(&mut **tx, line.id, line.sort_order, &line.data, ctx.user_id)
-                        .await?;
+                    db::update_line(
+                        &mut **tx,
+                        line.id,
+                        line.sort_order,
+                        &line.data,
+                        line.formula_errors.as_ref(),
+                        ctx.user_id,
+                    )
+                    .await?;
                 }
                 LineAction::Insert => {
                     db::insert_record(
@@ -1130,6 +1289,7 @@ async fn write_lines(
                             parent_record_id: Some(parent_id),
                             sort_order: line.sort_order,
                             data: &line.data,
+                            formula_errors: line.formula_errors.as_ref(),
                             created_by: ctx.user_id,
                             created_at: now,
                         },
@@ -1189,7 +1349,7 @@ async fn line_write_error(
         for line in detail
             .lines
             .iter()
-            .filter(|l| l.action != LineAction::Unchanged)
+            .filter(|l| l.action() != LineAction::Unchanged)
         {
             for field in detail.detail.fields.iter().filter(|f| f.is_unique) {
                 let Some(value) = line.data.get(&field.field_key) else {
@@ -1576,6 +1736,80 @@ mod tests {
         }
     }
 
+    fn formula_fields() -> Vec<FieldDefinition> {
+        let formula = |key: &str, result: Option<DataType>| FieldDefinition {
+            formula: Some("1".into()),
+            formula_result_type: result,
+            ..field(key, DataType::Formula)
+        };
+        vec![
+            formula("total", Some(DataType::Money)),
+            formula("label", Some(DataType::Text)),
+            formula("due", Some(DataType::Date)),
+            formula("broken", None),
+        ]
+    }
+
+    #[test]
+    fn formula_fields_use_result_type() {
+        let fields = formula_fields();
+        let plan = |pairs: &[(&str, &str)]| plan_list(Id::nil(), &fields, &query(pairs));
+
+        let (filter, _) = plan(&[
+            ("sort", "-total"),
+            ("filter.total.gte", "10"),
+            ("filter.label.contains", "A"),
+            ("filter.due.lt", "2026-12-01"),
+            ("filter.total.empty", "true"),
+        ])
+        .unwrap();
+        assert_eq!(
+            filter.order,
+            Some(RecordOrder {
+                target: OrderTarget::Field {
+                    field_key: "total".into(),
+                    cast: JsonCast::Numeric,
+                },
+                descending: true,
+            })
+        );
+        assert_eq!(
+            filter.conditions,
+            vec![
+                compare("total", JsonCast::Numeric, CompareOp::Gte, "10"),
+                RecordCondition::Contains {
+                    field_key: "label".into(),
+                    text: "A".into(),
+                },
+                compare("due", JsonCast::Date, CompareOp::Lt, "2026-12-01"),
+                RecordCondition::HasValue {
+                    field_key: "total".into(),
+                    has_value: false,
+                },
+            ]
+        );
+
+        // 運算子與值依結果型態檢查
+        for (param, value) in [
+            ("filter.label.gt", "a"),
+            ("filter.total.contains", "1"),
+            ("filter.total.eq", "abc"),
+            ("filter.due.eq", "2026/12/01"),
+        ] {
+            match plan(&[(param, value)]) {
+                Err(CoreError::InvalidParam { param: p, .. }) => assert_eq!(p, param),
+                other => panic!("{param} 預期 InvalidParam，實際為 {other:?}"),
+            }
+        }
+        // 沒有結果型態的公式欄位不能查詢
+        for pairs in [[("sort", "broken")], [("filter.broken.empty", "true")]] {
+            assert!(
+                matches!(plan(&pairs), Err(CoreError::InvalidParam { .. })),
+                "{pairs:?}"
+            );
+        }
+    }
+
     #[test]
     fn invalid_page_is_invalid_param() {
         assert_eq!(invalid_param(&[("page", "0")]).0, page_field::PAGE);
@@ -1607,6 +1841,7 @@ mod tests {
             entity_id: new_id(),
             record_no: Some("RO-001".into()),
             data: serde_json::json!({ "qty": 1 }),
+            formula_errors: Some(serde_json::json!({ "total": "除數不可為零" })),
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,
             updated_at: OffsetDateTime::UNIX_EPOCH,
@@ -1619,6 +1854,7 @@ mod tests {
         assert_eq!(r.record_no.as_deref(), Some("RO-001"));
         assert_eq!(r.title, "RO-001");
         assert_eq!(r.version, 3);
+        assert_eq!(r.formula_errors["total"], "除數不可為零");
         let bad = RecordRow {
             data: serde_json::json!([1]),
             ..row

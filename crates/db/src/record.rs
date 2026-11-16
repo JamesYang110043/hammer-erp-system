@@ -33,6 +33,8 @@ pub struct RecordRow {
     /// 單號；資料類別沒有設定單號規則時為 `None`。
     pub record_no: Option<String>,
     pub data: Value,
+    /// 公式欄位的計算錯誤：鍵為欄位代碼、值為錯誤原因；沒有錯誤時為 `None`（§7.6）。
+    pub formula_errors: Option<Value>,
     pub created_at: OffsetDateTime,
     pub created_by: Option<Uuid>,
     pub updated_at: OffsetDateTime,
@@ -49,8 +51,8 @@ pub async fn find_record<'e>(
     let row = sqlx::query_as!(
         RecordRow,
         r#"
-        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,
-               version
+        SELECT id, entity_id, record_no, data, formula_errors, created_at, created_by,
+               updated_at, updated_by, version
         FROM custom_records
         WHERE id = $1 AND entity_id = $2 AND deleted_at IS NULL
         "#,
@@ -71,8 +73,8 @@ pub async fn find_record_for_update<'e>(
     let row = sqlx::query_as!(
         RecordRow,
         r#"
-        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,
-               version
+        SELECT id, entity_id, record_no, data, formula_errors, created_at, created_by,
+               updated_at, updated_by, version
         FROM custom_records
         WHERE id = $1 AND entity_id = $2 AND deleted_at IS NULL
         FOR UPDATE
@@ -98,6 +100,8 @@ pub struct NewRecord<'a> {
     pub sort_order: i32,
     /// JSON 物件。
     pub data: &'a Value,
+    /// 公式欄位的計算錯誤（JSON 物件）；沒有錯誤時為 `None`。
+    pub formula_errors: Option<&'a Value>,
     pub created_by: Uuid,
     pub created_at: OffsetDateTime,
 }
@@ -111,9 +115,9 @@ pub async fn insert_record<'e>(
     sqlx::query!(
         r#"
         INSERT INTO custom_records
-            (id, entity_id, record_no, parent_record_id, sort_order, data,
+            (id, entity_id, record_no, parent_record_id, sort_order, data, formula_errors,
              created_at, created_by, updated_at, updated_by)
-        VALUES ($1, $2, $3, $7, $8, $4, $5, $6, $5, $6)
+        VALUES ($1, $2, $3, $7, $8, $4, $9, $5, $6, $5, $6)
         "#,
         new.id,
         new.entity_id,
@@ -123,30 +127,33 @@ pub async fn insert_record<'e>(
         new.created_by,
         new.parent_record_id,
         new.sort_order,
+        new.formula_errors,
     )
     .execute(executor)
     .await?;
     Ok(())
 }
 
-/// 取代資料的 `data` 並遞增 `version`。版本號不符時影響 0 筆。
+/// 取代資料的 `data`、`formula_errors` 並遞增 `version`。版本號不符時影響 0 筆。
 pub async fn update_record_data<'e>(
     executor: impl PgExecutor<'e>,
     id: Uuid,
     version: i32,
     data: &Value,
+    formula_errors: Option<&Value>,
     updated_by: Uuid,
 ) -> Result<PgQueryResult, DbError> {
     let result = sqlx::query!(
         r#"
         UPDATE custom_records
-        SET data = $3, updated_by = $4, version = version + 1
+        SET data = $3, formula_errors = $5, updated_by = $4, version = version + 1
         WHERE id = $1 AND version = $2 AND deleted_at IS NULL
         "#,
         id,
         version,
         data,
         updated_by,
+        formula_errors,
     )
     .execute(executor)
     .await?;
@@ -216,6 +223,8 @@ pub struct LineRow {
     pub parent_record_id: Uuid,
     pub sort_order: i32,
     pub data: Value,
+    /// 同 [`RecordRow::formula_errors`]。
+    pub formula_errors: Option<Value>,
     pub created_at: OffsetDateTime,
     pub created_by: Option<Uuid>,
     pub updated_at: OffsetDateTime,
@@ -231,6 +240,7 @@ impl LineRow {
             entity_id: self.entity_id,
             record_no: None,
             data: self.data,
+            formula_errors: self.formula_errors,
             created_at: self.created_at,
             created_by: self.created_by,
             updated_at: self.updated_at,
@@ -249,7 +259,7 @@ pub async fn list_lines<'e>(
         LineRow,
         r#"
         SELECT id, entity_id, parent_record_id AS "parent_record_id!", sort_order, data,
-               created_at, created_by, updated_at, updated_by, version
+               formula_errors, created_at, created_by, updated_at, updated_by, version
         FROM custom_records
         WHERE parent_record_id = $1 AND deleted_at IS NULL
         ORDER BY entity_id, sort_order, id
@@ -272,7 +282,7 @@ pub async fn list_lines_for_update<'e>(
         LineRow,
         r#"
         SELECT id, entity_id, parent_record_id AS "parent_record_id!", sort_order, data,
-               created_at, created_by, updated_at, updated_by, version
+               formula_errors, created_at, created_by, updated_at, updated_by, version
         FROM custom_records
         WHERE entity_id = $1 AND parent_record_id = $2 AND deleted_at IS NULL
         ORDER BY sort_order, id
@@ -286,25 +296,28 @@ pub async fn list_lines_for_update<'e>(
     Ok(rows)
 }
 
-/// 取代明細的 `data` 與 `sort_order` 並遞增 `version`。明細的樂觀鎖定由主表的 `version` 負責，
-/// 這裡不檢查版本；呼叫前必須已用 [`list_lines_for_update`] 鎖定。回傳影響的筆數。
+/// 取代明細的 `data`、`formula_errors` 與 `sort_order` 並遞增 `version`。明細的樂觀鎖定由主表的
+/// `version` 負責，這裡不檢查版本；呼叫前必須已用 [`list_lines_for_update`] 鎖定。回傳影響的筆數。
 pub async fn update_line<'e>(
     executor: impl PgExecutor<'e>,
     id: Uuid,
     sort_order: i32,
     data: &Value,
+    formula_errors: Option<&Value>,
     updated_by: Uuid,
 ) -> Result<u64, DbError> {
     let result = sqlx::query!(
         r#"
         UPDATE custom_records
-        SET data = $3, sort_order = $2, updated_by = $4, version = version + 1
+        SET data = $3, formula_errors = $5, sort_order = $2, updated_by = $4,
+            version = version + 1
         WHERE id = $1 AND parent_record_id IS NOT NULL AND deleted_at IS NULL
         "#,
         id,
         sort_order,
         data,
         updated_by,
+        formula_errors,
     )
     .execute(executor)
     .await?;
@@ -449,8 +462,8 @@ pub async fn list_records_before<'e>(
     let rows = sqlx::query_as!(
         RecordRow,
         r#"
-        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,
-               version
+        SELECT id, entity_id, record_no, data, formula_errors, created_at, created_by,
+               updated_at, updated_by, version
         FROM custom_records
         WHERE entity_id = $1 AND deleted_at IS NULL AND ($2::uuid IS NULL OR id < $2)
         ORDER BY id DESC
@@ -645,8 +658,8 @@ pub async fn list_records<'e>(
     offset: i64,
 ) -> Result<Vec<RecordRow>, DbError> {
     let mut qb = QueryBuilder::<Postgres>::new(
-        "SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by, \
-         version FROM custom_records",
+        "SELECT id, entity_id, record_no, data, formula_errors, created_at, created_by, \
+         updated_at, updated_by, version FROM custom_records",
     );
     push_where(&mut qb, filter);
     match &filter.order {

@@ -245,7 +245,7 @@ desktop(src-tauri) ──▶ shared, formula
 - 可以設為「可搜尋」；不能設為「不可重複」、預設值、必填（`422`，`details.field` 為該屬性）。
 - 儲存時的檢查見 §7.6「定義公式時的檢查」；不合法 → `422 VALIDATION`，`details` 為 `{ "field": "formula", "span": { "start", "end" } }`（錯誤在公式中的字元位置，從 0 開始、不含 `end`）或 `{ "field": "formula", "cycle": ["a", "lines.b", "a"] }`（循環路徑）。
 - 被有效公式引用的欄位不能停用（含停用 API 與修改 API 的 `is_active = false`）；停用明細子表、刪除資料類別時也檢查是否被其他資料類別的有效公式引用。→ `422 VALIDATION`，`details` 為 `{ "field": "formula", "formulas": [{ "entity_key", "entity_label", "field_key", "field_label" }] }`（依資料類別、欄位代碼排序）。「有效公式」是啟用中、所屬資料類別未刪除（含已停用的資料類別）的公式欄位。
-- 寫入資料、存檔時計算、篩選與排序在之後的 issue 處理；目前資料 API 寫入公式欄位的值回傳「目前不支援此欄位型態」。
+- 值由伺服器在存檔時計算（§7.6「存檔時計算」）；request 帶公式欄位的值時一律忽略。篩選與排序依 `formula_result_type` 支援對應的運算子（§10）。
 
 ### 7.4 欄位型態變更規則
 
@@ -323,6 +323,19 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 被引用的資料類別（關聯目標、明細子表）在檢查時以 `FOR SHARE` 鎖定；停用欄位、明細子表時以 `FOR UPDATE` 鎖定所屬資料類別，所以兩者依序進行，檢查通過的公式不會引用到剛被停用的欄位。
 
 已知限制（之後處理）：被引用欄位的型態變更、被引用公式的結果型態變更，不會重新檢查引用它的公式；計算時型態不符的結果為空值（見上方「錯誤」）。
+
+**存檔時計算**（`hammer_core::formulas`，在 `hammer_core::records` 的新增與修改中呼叫）：
+
+- 新增與修改資料（含主表與明細一起存檔）時，在同一個 transaction 內計算整個資料類別（主表與有效的明細子表）所有**有效**的公式欄位，順序依相依圖（`hammer_formula::calculation_order`）：先算每一列明細的公式，再算主表的公式；主表的子表彙總讀取明細公式的結果。
+- 修改時所有公式都重算（不只有變動的欄位）。資料類別有公式時，request 沒帶到的明細子表也一起重算（視為列出所有既有明細且不修改欄位），主表的彙總因此使用全部明細；明細的值有變動時一併寫入。重算後主表與明細都沒有變動時不寫入、`version` 不變。
+- request 的 `data`（主表與明細）帶了公式欄位的值時一律忽略，不回傳錯誤（含已停用的公式欄位）。已停用的公式欄位不計算，既有的值保留。
+- 公式引用的欄位依目前的欄位定義，只能讀取有效的欄位；`formula` 欄位以 `formula_result_type` 讀取。
+- 關聯引用讀取目標資料**目前**的值，目標已軟刪除時仍讀取其資料；關聯欄位沒有值時為空值。目標資料之後被修改，引用它的公式**不會**自動更新，要等該筆資料再次存檔（或之後的「重新計算」功能）。
+- `TODAY()` 為存檔時間在 Asia/Taipei 的日期（D13）。
+- 結果依 `formula_result_type` 轉成 §7.3 的存值寫入 `data`；空值與空字串不寫入（與一般欄位相同，沒有值的欄位不出現在 `data`）。
+- 計算失敗（除以零、型態不符、溢位、引用的欄位不存在等）時不中斷存檔：該欄位沒有值，錯誤原因寫入 `custom_records.formula_errors`（`{ "<field_key>": "除數不可為零" }`），回應帶 `formula_errors`（§10）。資料庫中的公式無法解析或有循環引用（資料不一致）時，相關欄位同樣記錄錯誤。
+- 操作紀錄的 diff 包含公式欄位值的變動（公式的值存在 `data`）；`formula_errors` 不記錄。
+- 不做：重新計算 API、被引用資料變動時自動重算。
 
 ---
 
@@ -643,7 +656,8 @@ products ───────────────────────�
 | parent_record_id | UUID FK → self | 明細子表指向主表的資料 |
 | record_no | TEXT | 依單號規則產生（如果有設定），見 §8.4 `number_sequences` |
 | sort_order | INTEGER | 明細的順序（存檔時 request 陣列中的位置，從 0 開始）；主表的資料固定為 0 |
-| data | JSONB | 所有欄位的值，鍵為 field_key |
+| data | JSONB | 所有欄位的值，鍵為 field_key（含公式欄位的計算結果） |
+| formula_errors | JSONB | 公式欄位的計算錯誤：鍵為欄位代碼、值為錯誤原因；沒有錯誤時為 `NULL`（§7.6「存檔時計算」）。CHECK 必須是 JSON 物件 |
 | ＋共通欄位 | | |
 
 索引：`(entity_id)`、`(parent_record_id, entity_id, sort_order, id) WHERE parent_record_id IS NOT NULL`、`GIN(data)`、部分唯一索引 `(entity_id, record_no) WHERE record_no IS NOT NULL`（含已刪除的資料），以及第 7.5 節所述的動態索引。
@@ -1094,6 +1108,7 @@ GROUP BY product_id;
     | `any` | 包含任一選項；可重複帶多個（`filter.tags.any=a&filter.tags.any=b`），符合任一個即可 | `multi_select` |
   - 值的格式：數值 `12.5`、日期 `YYYY-MM-DD`、日期時間 RFC 3339、勾選 `true` / `false`。值為空字串的條件視為未指定。
   - `relation` 只支援 `eq`、`empty`，不能排序（§7.3）。
+  - `formula` 依它的 `formula_result_type` 套用上表的運算子、值的格式與排序方式（例如結果為 `money` 時以數值比較與排序）。
   - 欄位不存在或已停用、運算子不適用於該型態、值的格式錯誤 → `422 VALIDATION`，`details.field` 為參數名稱（例如 `filter.qty.gte`）。不認得的參數名稱忽略。
   - 單號：`sort` 與 `filter` 可使用 `record_no`（保留的代碼，不是欄位），依文字排序，篩選只支援 `eq`、`contains`（§8.4）。
 - 主表與明細（明細子表的規則見 §8.5 `custom_records`；型別在 `hammer_shared::record`）：
@@ -1104,6 +1119,7 @@ GROUP BY product_id;
   - 新增：所有明細與主表一起建立；明細不可帶 `id`。
   - 修改：有帶到的明細子表「整組取代」——有 `id` 的更新（`data` 只合併有帶到的欄位）、沒有 `id` 的新增、目前有但沒列出的軟刪除；沒帶到的明細子表不變。`id` 必須是這筆主表在該明細子表的未刪除明細，且不可重複出現。主表與明細都沒有變動時不寫入、`version` 不變。
   - 主表與明細在同一個 transaction 內存檔，任一筆驗證失敗整筆不寫入（也不消耗單號）。
+  - 回應：列表、單筆與明細的每一筆資料都有 `formula_errors: { "<field_key>": "<錯誤原因>" }`，列出計算失敗的公式欄位（沒有錯誤時為空物件；§7.6「存檔時計算」）。
   - 回應：單筆查詢與新增、修改的回應有 `lines`，包含主表所有有效的明細子表（沒有明細時為空陣列），每一列的格式與一般資料相同（`record_no`、`lines` 為 `null`），依順序排列；列表不回傳 `lines`。
   - 錯誤：明細不合法時為 `422 VALIDATION`，`details` 為
     ```json

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, entity_id, record_no, data, created_at, created_by, updated_at, updated_by,\n               version\n        FROM custom_records\n        WHERE id = $1 AND entity_id = $2 AND deleted_at IS NULL\n        FOR UPDATE\n        ",
+  "query": "\n        SELECT id, entity_id, parent_record_id AS \"parent_record_id!\", sort_order, data,\n               formula_errors, created_at, created_by, updated_at, updated_by, version\n        FROM custom_records\n        WHERE entity_id = $1 AND parent_record_id = $2 AND deleted_at IS NULL\n        ORDER BY sort_order, id\n        FOR UPDATE\n        ",
   "describe": {
     "columns": [
       {
@@ -27,17 +27,28 @@
       },
       {
         "ordinal": 2,
-        "name": "record_no",
-        "type_info": "Text",
+        "name": "parent_record_id!",
+        "type_info": "Uuid",
         "origin": {
           "Table": {
             "table": "custom_records",
-            "name": "record_no"
+            "name": "parent_record_id"
           }
         }
       },
       {
         "ordinal": 3,
+        "name": "sort_order",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "sort_order"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "data",
         "type_info": "Jsonb",
         "origin": {
@@ -48,7 +59,18 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
+        "name": "formula_errors",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "custom_records",
+            "name": "formula_errors"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -59,7 +81,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 7,
         "name": "created_by",
         "type_info": "Uuid",
         "origin": {
@@ -70,7 +92,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 8,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -81,7 +103,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 9,
         "name": "updated_by",
         "type_info": "Uuid",
         "origin": {
@@ -92,7 +114,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 10,
         "name": "version",
         "type_info": "Int4",
         "origin": {
@@ -118,8 +140,10 @@
       true,
       false,
       true,
+      false,
+      true,
       false
     ]
   },
-  "hash": "3c49c02131d8635464dfb8a373cd306fb58f68cfb11d5baa8a8ebbb56a5914f9"
+  "hash": "51d80c3d196573de24311f43c133459e310cb21274d4c5a3e7ad2afcd89a7da7"
 }
