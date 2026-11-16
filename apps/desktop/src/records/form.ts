@@ -36,7 +36,7 @@ export const MAX_SAFE_INTEGER_TEXT = '9007199254740991';
 /** 日期時間送出的格式：選擇的時間視為台北時間（D13）。 */
 const DATETIME_VALUE_FORMAT = 'YYYY-MM-DDTHH:mm:ss';
 
-/** 表單可以輸入的型態（`formula` 在 M2c 處理）。 */
+/** 表單可以輸入的型態（`formula` 唯讀，另外顯示預覽，見 `formulaPreview.ts`）。 */
 export function isFormSupported(field: FieldDefinition): boolean {
   return field.data_type !== 'formula';
 }

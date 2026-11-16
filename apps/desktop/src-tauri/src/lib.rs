@@ -70,6 +70,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::change_field_type,
             commands::recalculate_entity,
             commands::check_formula_syntax,
+            commands::preview_formulas,
             commands::list_records,
             commands::get_record,
             commands::create_record,
@@ -128,6 +129,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::schema::EntityOrderItem>()
         .typ::<hammer_shared::schema::RecalculateResult>()
         .typ::<crate::formula::FormulaSyntaxError>()
+        .typ::<crate::formula::FormulaPreviewRequest>()
+        .typ::<crate::formula::FormulaPreview>()
         // 自訂資料類別的資料
         .typ::<hammer_shared::record::Record>()
         .typ::<hammer_shared::record::FilterOp>()

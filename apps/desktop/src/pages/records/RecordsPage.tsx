@@ -32,7 +32,7 @@ import type {
 } from '../../bindings';
 import { generatedConfig, resolveColumns } from '../../records/columns';
 import type { LayoutColumn, LayoutConfig } from '../../records/columns';
-import { isNumericType } from '../../records/display';
+import { isNumericType, valueField } from '../../records/display';
 import { RECORD_NO, showsRecordNo } from '../../records/lines';
 import { GENERATED_LAYOUT_ID, canEditLayout, sameConfig } from '../../records/layouts';
 import type { ViewLayout } from '../../records/layouts';
@@ -144,7 +144,7 @@ function RecordList({
       dataIndex: ['data', field.field_key],
       width,
       align: isNumericType(field) ? 'right' : undefined,
-      ellipsis: field.data_type === 'long_text',
+      ellipsis: valueField(field).data_type === 'long_text',
       sorter: isSortable(field),
       sortOrder: columnSortOrder(config.sort, field.field_key),
       render: (value: unknown, record) => (
@@ -275,7 +275,10 @@ function RecordList({
       </Space>
       <FilterPanel
         key={`${layoutId}:${JSON.stringify(config.filters)}`}
-        fields={fields.filter(isQueryable).sort((a, b) => a.sort_order - b.sort_order)}
+        fields={fields
+          .filter(isQueryable)
+          .map(valueField)
+          .sort((a, b) => a.sort_order - b.sort_order)}
         filters={config.filters}
         onApply={(filters) => changeConfig({ filters })}
       />

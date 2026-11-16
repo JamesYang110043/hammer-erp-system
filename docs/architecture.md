@@ -324,7 +324,7 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 
 已知限制（之後處理）：被引用欄位的型態變更、被引用公式的結果型態變更，不會重新檢查引用它的公式；計算時型態不符的結果為空值（見上方「錯誤」）。
 
-**存檔時計算**（`hammer_core::formulas`，在 `hammer_core::records` 的新增與修改中呼叫）：
+**存檔時計算**（計算在 `hammer_formula::record`，與桌面端預覽共用；讀取關聯目標等資料庫工作在 `hammer_core::formulas`，在 `hammer_core::records` 的新增與修改中呼叫）：
 
 - 新增與修改資料（含主表與明細一起存檔）時，在同一個 transaction 內計算整個資料類別（主表與有效的明細子表）所有**有效**的公式欄位，順序依相依圖（`hammer_formula::calculation_order`）：先算每一列明細的公式，再算主表的公式；主表的子表彙總讀取明細公式的結果。
 - 修改時所有公式都重算（不只有變動的欄位）。資料類別有公式時，request 沒帶到的明細子表也一起重算（視為列出所有既有明細且不修改欄位），主表的彙總因此使用全部明細；明細的值有變動時一併寫入。重算後主表與明細都沒有變動時不寫入、`version` 不變。
@@ -336,6 +336,13 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 - 計算失敗（除以零、型態不符、溢位、引用的欄位不存在等）時不中斷存檔：該欄位沒有值，錯誤原因寫入 `custom_records.formula_errors`（`{ "<field_key>": "除數不可為零" }`），回應帶 `formula_errors`（§10）。資料庫中的公式無法解析或有循環引用（資料不一致）時，相關欄位同樣記錄錯誤。
 - 操作紀錄的 diff 包含公式欄位值的變動（公式的值存在 `data`）；`formula_errors` 不記錄。
 - 不做：被引用資料變動時自動重算。
+
+**桌面端即時預覽**（Tauri command `preview_formulas`，`apps/desktop/src-tauri/src/formula.rs`；前端在 `records/formulaPreview.ts`）：
+
+- 輸入欄位定義（主表與有效的明細子表）、本筆資料與明細的 JSON 存值，可另外提供關聯目標資料的快照；以 `hammer_formula::record` 計算，與伺服器存檔時的結果一致（`crates/formula/testdata/record_preview.json` 為兩邊共用的測試資料）。`TODAY()` 為電腦目前時間在 Asia/Taipei 的日期。
+- 表單：公式欄位唯讀，輸入其他欄位或明細時更新（停止輸入 150 毫秒後）；明細的公式與主表的子表彙總一起更新。預覽的錯誤顯示錯誤提示，不阻擋存檔；存檔時以伺服器計算的結果為準。
+- 關聯引用：表單不讀取關聯資料的最新值（不提供快照）。直接或間接使用關聯引用的公式欄位（含子表彙總讀取的明細公式）顯示上一次存檔的值與錯誤；表單有未存檔的修改時標示「存檔後更新」。
+- 列表與單筆顯示：公式欄位依 `formula_result_type` 格式化；`formula_errors` 有該欄位時顯示錯誤圖示，滑鼠移上去顯示原因。篩選與排序依結果型態（§10）。
 
 **重新計算**（`hammer_core::recalculate`，`POST /api/v1/entities/{key}/recalculate`，§10）：
 

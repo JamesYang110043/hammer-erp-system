@@ -3,6 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { LOOKUP_DEFAULT_LIMIT, commands } from '../bindings';
 import type {
   CreateRecordRequest_Deserialize as CreateRecordRequest,
+  FormulaPreviewRequest_Deserialize as FormulaPreviewRequest,
   CreateViewLayoutRequest_Deserialize as CreateViewLayoutRequest,
   Record as DataRecord,
   RecordListQuery_Deserialize as RecordListQuery,
@@ -10,6 +11,7 @@ import type {
   UpdateViewLayoutRequest_Deserialize as UpdateViewLayoutRequest,
   ViewLayout_Serialize as ViewLayout,
 } from '../bindings';
+import { useDebouncedValue } from '../utils/useDebouncedValue';
 import { auditLogsKey } from './auditLogs';
 import { unwrap } from './client';
 
@@ -59,6 +61,28 @@ export function useLookupRecords(entityKey: string | undefined, q: string, enabl
       unwrap(commands.lookupRecords(entityKey!, { q: q || null, limit: LOOKUP_DEFAULT_LIMIT })),
     enabled: enabled && entityKey !== undefined,
     // 輸入下一個字時保留上一次的結果，避免選單閃爍
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** 表單停止輸入多久（毫秒）後更新公式預覽。 */
+export const FORMULA_PREVIEW_DELAY_MS = 150;
+
+/**
+ * 公式欄位的即時預覽（Tauri command，使用 `crates/formula`，不需連線）。`req` 為 `undefined` 時不預覽。
+ *
+ * 輸入停止 {@link FORMULA_PREVIEW_DELAY_MS} 毫秒後計算；計算新的輸入時保留上一次的結果，避免閃爍。
+ */
+export function useFormulaPreview(req: FormulaPreviewRequest | undefined) {
+  // 以 JSON 文字比較與延遲：表單每次重新繪製都會產生新的物件
+  const json = req ? JSON.stringify(req) : '';
+  const debounced = useDebouncedValue(json, FORMULA_PREVIEW_DELAY_MS);
+  return useQuery({
+    queryKey: ['formulaPreview', debounced] as const,
+    queryFn: () => commands.previewFormulas(JSON.parse(debounced) as FormulaPreviewRequest),
+    enabled: debounced !== '',
+    staleTime: Infinity,
+    gcTime: 60_000,
     placeholderData: keepPreviousData,
   });
 }

@@ -8,6 +8,7 @@ import {
   fromRecordFilters,
   isQueryable,
   isSortable,
+  queryType,
   sortFromTable,
   toRecordFilters,
 } from './query';
@@ -32,6 +33,16 @@ describe('isQueryable', () => {
     expect(isQueryable(fieldDef({ data_type: 'formula' }))).toBe(false);
     expect(isQueryable(fieldDef({ data_type: 'relation' }))).toBe(true);
     expect(isQueryable(fieldDef({ data_type: 'file' }))).toBe(true);
+  });
+
+  it('formula_uses_result_type', () => {
+    const money = fieldDef({ data_type: 'formula', formula_result_type: 'money' });
+    expect(queryType(money)).toBe('money');
+    expect(isQueryable(money)).toBe(true);
+    expect(isSortable(money)).toBe(true);
+    // 沒有結果型態（資料不一致）時不能查詢
+    expect(queryType(fieldDef({ data_type: 'formula' }))).toBeUndefined();
+    expect(isSortable(fieldDef({ data_type: 'formula' }))).toBe(false);
   });
 
   it('relation_and_file_are_not_sortable', () => {

@@ -34,7 +34,7 @@ use tauri::{State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 
 use crate::error::ClientError;
-use crate::formula::FormulaSyntaxError;
+use crate::formula::{FormulaPreview, FormulaPreviewRequest, FormulaSyntaxError};
 use crate::settings::normalize_server_url;
 use crate::state::{AppState, UploadProgress};
 
@@ -362,6 +362,15 @@ pub async fn change_field_type(
 #[specta::specta]
 pub fn check_formula_syntax(formula: String) -> Option<FormulaSyntaxError> {
     crate::formula::check_syntax(&formula)
+}
+
+/// 表單中公式欄位的即時預覽（`hammer_formula::record`，與伺服器存檔時的計算相同，不需連線）。
+///
+/// `TODAY()` 為電腦目前時間在 Asia/Taipei 的日期。存檔時以伺服器計算的結果為準（§7.6）。
+#[tauri::command]
+#[specta::specta]
+pub fn preview_formulas(req: FormulaPreviewRequest) -> FormulaPreview {
+    crate::formula::preview(&req, hammer_shared::time::today_taipei())
 }
 
 /// 資料列表（需要 `record.read`）。分頁、排序與篩選見 [`RecordListQuery`]。

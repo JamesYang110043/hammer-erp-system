@@ -4,11 +4,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
 import { apiErrorCode, errorMessage } from '../../api/client';
-import { useCreateRecord, useRecord, useUpdateRecord } from '../../api/records';
+import { useCreateRecord, useFormulaPreview, useRecord, useUpdateRecord } from '../../api/records';
 import { useEntities, useEntity, useEntityDetails } from '../../api/schema';
 import { usePermission } from '../../auth/permission';
 import { PERMISSIONS } from '../../bindings';
-import type { EntityDefinition, FieldDefinition, Record as DataRecord } from '../../bindings';
+import type {
+  EntityDefinition,
+  EntityDetail,
+  FieldDefinition,
+  Record as DataRecord,
+} from '../../bindings';
 import { recordListPath, recordPath } from '../../modules';
 import {
   baselineData,
@@ -21,6 +26,8 @@ import {
   validateFieldValue,
 } from '../../records/form';
 import type { RecordFormValues } from '../../records/form';
+import { buildPreviewRequest, formulaCell, formulaFields } from '../../records/formulaPreview';
+import type { PreviewTable } from '../../records/formulaPreview';
 import {
   LINES_FORM_KEY,
   buildCreateLines,
@@ -36,6 +43,7 @@ import {
 } from '../../records/lines';
 import type { DetailTable, LineFormValues } from '../../records/lines';
 import { entityIcon } from '../schema/entityIcons';
+import { FormulaValue } from './FieldValue';
 import { LinesTable } from './LinesTable';
 import type { LineRefs } from './LinesTable';
 import { RecordFieldInput } from './RecordFieldInput';
@@ -60,8 +68,20 @@ function lineRefs(record?: DataRecord): LineRefs {
   return refs;
 }
 
+/** 明細列的既有資料（公式欄位顯示上一次存檔的值用），鍵為明細 id。 */
+function savedLines(record?: DataRecord): Map<string, DataRecord> {
+  return new Map(
+    Object.values(record?.lines ?? {})
+      .flat()
+      .map((line) => [line.id, line]),
+  );
+}
+
 /**
  * 新增或編輯一筆資料的表單。`record` 為 `undefined` 時是新增。
+ *
+ * 公式欄位唯讀：輸入其他欄位或明細時，以 Tauri command 即時預覽（`records/formulaPreview`）；
+ * 預覽有錯誤時顯示錯誤提示，但不阻擋存檔（存檔時以伺服器計算為準，§7.6）。
  *
  * 父元件在資料重新載入（存檔成功、衝突後重新載入）時以 `key` 重設本元件。
  */
@@ -69,6 +89,7 @@ function RecordForm({
   entity,
   fields,
   details,
+  detailDefs,
   record,
   onReload,
 }: {
@@ -76,6 +97,8 @@ function RecordForm({
   fields: FieldDefinition[];
   /** 明細子表（欄位已依表單規則篩選）。 */
   details: DetailTable[];
+  /** 明細子表完整的欄位定義（公式預覽用）。 */
+  detailDefs: EntityDetail[];
   record?: DataRecord;
   onReload: () => void;
 }) {
@@ -89,6 +112,11 @@ function RecordForm({
   const saving = createRecord.isPending || updateRecord.isPending;
 
   const visible = useMemo(() => formFields(fields), [fields]);
+  // 表單上的欄位與公式欄位，依欄位排序
+  const displayed = useMemo(
+    () => [...visible, ...formulaFields(fields)].sort((a, b) => a.sort_order - b.sort_order),
+    [visible, fields],
+  );
   const initialValues = useMemo<FormValues>(
     () => ({
       ...initialFormValues(visible, record?.data),
@@ -99,6 +127,34 @@ function RecordForm({
   const baseline = useMemo(() => baselineData(visible, record?.data), [visible, record]);
   const lineBaseline = useMemo(() => linesBaseline(details, record), [details, record]);
   const refs = useMemo(() => lineRefs(record), [record]);
+  const savedLineById = useMemo(() => savedLines(record), [record]);
+
+  // 公式預覽：表單目前的值（onValuesChange 時更新）
+  const [current, setCurrent] = useState<FormValues>(initialValues);
+  const previewTables = useMemo(() => {
+    const shown = new Map(details.map((d) => [d.entity.key, d.fields]));
+    return {
+      master: { fields, shown: visible } satisfies PreviewTable,
+      details: new Map(
+        detailDefs.map((d) => [
+          d.entity.key,
+          { fields: d.fields, shown: shown.get(d.entity.key) ?? [] } satisfies PreviewTable,
+        ]),
+      ),
+    };
+  }, [fields, visible, details, detailDefs]);
+  const previewRequest = useMemo(
+    () =>
+      buildPreviewRequest(
+        previewTables.master,
+        previewTables.details,
+        current,
+        current[LINES_FORM_KEY],
+        record,
+      ),
+    [previewTables, current, record],
+  );
+  const preview = useFormulaPreview(previewRequest).data;
 
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -126,6 +182,7 @@ function RecordForm({
 
   const onValuesChange = () => {
     const values = form.getFieldsValue(true) as FormValues;
+    setCurrent(values);
     markDirty(
       changedFieldKeys(visible, values, baseline).length > 0 ||
         linesChanged(details, values[LINES_FORM_KEY], lineBaseline),
@@ -237,7 +294,7 @@ function RecordForm({
           }
         />
       )}
-      {visible.length === 0 && details.length === 0 ? (
+      {displayed.length === 0 && details.length === 0 ? (
         <Empty description="此資料類別沒有可以輸入的欄位" />
       ) : (
         <Form<FormValues>
@@ -261,31 +318,53 @@ function RecordForm({
                 />
               </Form.Item>
             )}
-            {visible.map((field) => (
-              <Form.Item
-                key={field.field_key}
-                name={field.field_key}
-                label={field.label}
-                extra={field.help_text ?? undefined}
-                required={field.is_required && !field.is_readonly}
-                rules={[
-                  {
-                    validator: (_, value: unknown) => {
-                      const error = validateFieldValue(field, value);
-                      return error ? Promise.reject(new Error(error)) : Promise.resolve();
+            {displayed.map((field) => {
+              if (field.data_type === 'formula') {
+                const cell = formulaCell(preview, null, 0, field.field_key, {
+                  data: record?.data,
+                  errors: record?.formula_errors,
+                });
+                return (
+                  <Form.Item
+                    key={field.field_key}
+                    label={field.label}
+                    extra={field.help_text ?? undefined}
+                  >
+                    <FormulaValue
+                      field={field}
+                      value={cell.value}
+                      error={cell.error}
+                      pending={cell.pending && (dirty || !record)}
+                    />
+                  </Form.Item>
+                );
+              }
+              return (
+                <Form.Item
+                  key={field.field_key}
+                  name={field.field_key}
+                  label={field.label}
+                  extra={field.help_text ?? undefined}
+                  required={field.is_required && !field.is_readonly}
+                  rules={[
+                    {
+                      validator: (_, value: unknown) => {
+                        const error = validateFieldValue(field, value);
+                        return error ? Promise.reject(new Error(error)) : Promise.resolve();
+                      },
                     },
-                  },
-                ]}
-              >
-                {/* 傳 false 會蓋過 Form 的 disabled（唯讀者），只在唯讀欄位時指定 */}
-                <RecordFieldInput
-                  field={field}
-                  disabled={field.is_readonly || undefined}
-                  relation={record?.relations?.[field.field_key]}
-                  attachment={record?.attachments?.[field.field_key]}
-                />
-              </Form.Item>
-            ))}
+                  ]}
+                >
+                  {/* 傳 false 會蓋過 Form 的 disabled（唯讀者），只在唯讀欄位時指定 */}
+                  <RecordFieldInput
+                    field={field}
+                    disabled={field.is_readonly || undefined}
+                    relation={record?.relations?.[field.field_key]}
+                    attachment={record?.attachments?.[field.field_key]}
+                  />
+                </Form.Item>
+              );
+            })}
           </div>
           {details.map((table) => (
             <LinesTable
@@ -294,6 +373,14 @@ function RecordForm({
               canWrite={canWrite}
               refs={refs}
               onRowsChange={onValuesChange}
+              showPending={dirty || !record}
+              formulaCell={(index, lineId, fieldKey) => {
+                const saved = lineId ? savedLineById.get(lineId) : undefined;
+                return formulaCell(preview, table.entity.key, index, fieldKey, {
+                  data: saved?.data,
+                  errors: saved?.formula_errors,
+                });
+              }}
             />
           ))}
           {canWrite && (
@@ -346,7 +433,12 @@ export function RecordFormPage() {
   );
   const detailDefs = useEntityDetails(detailEntities);
   const details = useMemo<DetailTable[] | undefined>(
-    () => detailDefs.data?.map((d) => ({ entity: d.entity, fields: formFields(d.fields) })),
+    () =>
+      detailDefs.data?.map((d) => ({
+        entity: d.entity,
+        fields: formFields(d.fields),
+        formulas: formulaFields(d.fields),
+      })),
     [detailDefs.data],
   );
 
@@ -358,7 +450,7 @@ export function RecordFormPage() {
       </Card>
     );
   }
-  if (!entity.data || !details || (id !== undefined && !record.data)) {
+  if (!entity.data || !details || !detailDefs.data || (id !== undefined && !record.data)) {
     return <Card title="資料" loading />;
   }
   const detail = entity.data;
@@ -376,6 +468,7 @@ export function RecordFormPage() {
       entity={detail.entity}
       fields={detail.fields}
       details={details}
+      detailDefs={detailDefs.data}
       record={record.data}
       onReload={() => void record.refetch()}
     />

@@ -35,6 +35,8 @@ export type LineFormValues = RecordFormValues & { [LINE_ID_KEY]?: string };
 export interface DetailTable {
   entity: EntityDefinition;
   fields: FieldDefinition[];
+  /** 顯示的公式欄位（唯讀，見 `formulaFields`）；沒有時省略。 */
+  formulas?: FieldDefinition[];
 }
 
 /** 主表的明細子表：有效、`kind = detail`、`parent_entity_id` 為主表，依選單排序。 */

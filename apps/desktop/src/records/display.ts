@@ -45,38 +45,50 @@ export function findOption(field: FieldDefinition, value: string): SelectOption 
  * | `decimal`、`money` | 依小數位數補零、千分位 |
  * | `date` | `YYYY-MM-DD` |
  * | `datetime` | 台北時間 `YYYY-MM-DD HH:mm` |
+ * | `formula` | 依 `formula_result_type` |
  * | 其他 | 原樣 |
  */
 export function formatFieldText(field: FieldDefinition, value: unknown): string | undefined {
   if (value === null || value === undefined || value === '') {
     return undefined;
   }
-  switch (field.data_type) {
+  const f = valueField(field);
+  switch (f.data_type) {
     case 'integer':
       return groupThousands(String(value));
     case 'decimal':
     case 'money':
-      return formatDecimal(String(value), field.decimal_places);
+      return formatDecimal(String(value), f.decimal_places);
     case 'datetime':
       return typeof value === 'string' ? formatTaipei(value, 'YYYY-MM-DD HH:mm') : String(value);
     case 'boolean':
       return value === true ? '是' : '否';
     case 'select':
-      return typeof value === 'string' ? (findOption(field, value)?.label ?? value) : String(value);
+      return typeof value === 'string' ? (findOption(f, value)?.label ?? value) : String(value);
     case 'multi_select':
       return Array.isArray(value)
-        ? value.map((v) => findOption(field, String(v))?.label ?? String(v)).join('、')
+        ? value.map((v) => findOption(f, String(v))?.label ?? String(v)).join('、')
         : String(value);
     default:
       return typeof value === 'string' ? value : JSON.stringify(value);
   }
 }
 
-/** 數值型態靠右對齊。 */
+/**
+ * 顯示、篩選與排序時使用的欄位定義：公式欄位的值依 `formula_result_type` 處理（§7.3），
+ * 所以把型態換成結果型態；其他欄位原樣回傳。沒有結果型態的公式欄位（資料不一致）視為文字。
+ */
+export function valueField(field: FieldDefinition): FieldDefinition {
+  if (field.data_type !== 'formula') {
+    return field;
+  }
+  return { ...field, data_type: field.formula_result_type ?? 'text' };
+}
+
+/** 數值型態（公式欄位依結果型態）靠右對齊。 */
 export function isNumericType(field: FieldDefinition): boolean {
-  return (
-    field.data_type === 'integer' || field.data_type === 'decimal' || field.data_type === 'money'
-  );
+  const { data_type } = valueField(field);
+  return data_type === 'integer' || data_type === 'decimal' || data_type === 'money';
 }
 
 /** 已刪除的關聯資料加在標題後面的文字。 */
@@ -85,4 +97,12 @@ export const DELETED_SUFFIX = '（已刪除）';
 /** 關聯資料的顯示文字：標題；目標資料已刪除時加上「（已刪除）」。 */
 export function relationLabel(ref: Pick<RelationRef, 'title' | 'deleted'>): string {
   return ref.deleted ? `${ref.title}${DELETED_SUFFIX}` : ref.title;
+}
+
+/** 公式欄位要存檔後才會更新的標示（關聯引用的值，預覽時沒有最新的關聯資料）。 */
+export const FORMULA_PENDING_TEXT = '存檔後更新';
+
+/** 公式錯誤圖示的無障礙標籤，例如「公式錯誤：除數不可為零」。 */
+export function formulaErrorLabel(error: string): string {
+  return `公式錯誤：${error}`;
 }
