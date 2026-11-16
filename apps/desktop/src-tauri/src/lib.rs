@@ -8,6 +8,7 @@
 pub mod api_client;
 pub mod commands;
 pub mod error;
+pub mod formula;
 pub mod settings;
 pub mod state;
 pub mod token_store;
@@ -67,6 +68,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::deactivate_field,
             commands::reorder_fields,
             commands::change_field_type,
+            commands::recalculate_entity,
+            commands::check_formula_syntax,
             commands::list_records,
             commands::get_record,
             commands::create_record,
@@ -124,6 +127,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::schema::ReorderEntitiesRequest>()
         .typ::<hammer_shared::schema::EntityOrderItem>()
         .typ::<hammer_shared::schema::RecalculateResult>()
+        .typ::<crate::formula::FormulaSyntaxError>()
         // 自訂資料類別的資料
         .typ::<hammer_shared::record::Record>()
         .typ::<hammer_shared::record::FilterOp>()

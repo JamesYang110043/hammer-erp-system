@@ -19,7 +19,8 @@ use hammer_shared::record::{
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
-    ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
+    RecalculateResult, ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest,
+    UpdateFieldRequest,
 };
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use hammer_shared::user::{
@@ -249,6 +250,12 @@ impl AppState {
             client.delete_entity(url, token, key, query).await
         })
         .await
+    }
+
+    /// 重新計算資料類別所有資料的公式欄位。
+    pub async fn recalculate_entity(&self, key: &str) -> Result<RecalculateResult, ClientError> {
+        self.with_token(async |client, url, token| client.recalculate_entity(url, token, key).await)
+            .await
     }
 
     /// 新增欄位。
