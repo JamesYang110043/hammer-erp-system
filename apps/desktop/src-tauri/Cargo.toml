@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 hammer-shared.workspace = true
+hammer-formula.workspace = true
 
 # 預設的 `v1` feature：macOS Keychain、Windows 認證管理員、Linux Secret Service
 keyring = "4"

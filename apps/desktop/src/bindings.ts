@@ -84,6 +84,18 @@ export const commands = {
 	 *  有資料無法轉換時回傳 `422 VALIDATION`，`details.records` 列出失敗的資料。
 	 */
 	changeFieldType: (key: string, fieldKey: string, req: ChangeFieldTypeRequest_Deserialize) => typedError<FieldDefinition_Serialize, ClientError_Serialize>(__TAURI_INVOKE("change_field_type", { key, fieldKey, req })),
+	/**
+	 *  重新計算資料類別所有未刪除資料的公式欄位（需要 `schema.manage`）。
+	 * 
+	 *  只能對自訂的主檔、單據執行（明細隨主表一起重算）；其他回傳 `404 NOT_FOUND`。
+	 */
+	recalculateEntity: (key: string) => typedError<RecalculateResult, ClientError_Serialize>(__TAURI_INVOKE("recalculate_entity", { key })),
+	/**
+	 *  檢查公式的語法（`hammer_formula::parse`，不需連線）。語法正確時回傳 `null`。
+	 * 
+	 *  只檢查語法；引用的欄位、型態與循環引用由伺服器在儲存時檢查（`docs/architecture.md` §7.6）。
+	 */
+	checkFormulaSyntax: (formula: string) => __TAURI_INVOKE<FormulaSyntaxError | null>("check_formula_syntax", { formula }),
 	/**  資料列表（需要 `record.read`）。分頁、排序與篩選見 [`RecordListQuery`]。 */
 	listRecords: (key: string, query: RecordListQuery_Deserialize) => typedError<Page<Record_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_records", { key, query })),
 	/**  取得一筆資料（需要 `record.read`）。 */
@@ -1109,6 +1121,16 @@ export type FieldStorage =
  *  `formula` 欄位依它的 `formula_result_type` 套用上表。
  */
 export type FilterOp = "eq" | "contains" | "gt" | "gte" | "lt" | "lte" | "empty" | "any";
+
+/**  公式的語法錯誤。 */
+export type FormulaSyntaxError = {
+	/**  錯誤訊息（繁體中文，不含位置）。 */
+	message: string,
+	/**  錯誤在公式中的位置：**字元**位移（Unicode 字元，不是 UTF-16），從 0 開始。 */
+	start: number,
+	/**  錯誤範圍的結尾（不含）；與 `start` 相同時代表該位置缺少內容（例如公式不完整）。 */
+	end: number,
+};
 
 /**
  *  `GET /api/v1/health` 的回應。

@@ -87,3 +87,16 @@ export function referencingFields(err: unknown): ReferencingField[] | undefined 
   }
   return details.fields as ReferencingField[];
 }
+
+/**
+ * 停用被公式引用的欄位被拒絕時，引用它的公式欄位（docs/architecture.md §7.3）：
+ * `details` 為 `{ field: "formula", formulas: [{ entity_key, entity_label, field_key, field_label }] }`。
+ * 不是這種錯誤時回傳 `undefined`。
+ */
+export function formulaReferences(err: unknown): ReferencingField[] | undefined {
+  const details = validationDetails(err);
+  if (details?.field !== 'formula' || !Array.isArray(details.formulas)) {
+    return undefined;
+  }
+  return details.formulas as ReferencingField[];
+}

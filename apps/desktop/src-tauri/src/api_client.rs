@@ -26,8 +26,8 @@ use hammer_shared::record::{
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
-    ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
-    validate_key,
+    RecalculateResult, ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest,
+    UpdateFieldRequest, validate_key,
 };
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use hammer_shared::user::{
@@ -374,6 +374,20 @@ impl ApiClient {
             .bearer_auth(token)
             .query(query);
         authed(read_empty(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/entities/{key}/recalculate`。
+    pub async fn recalculate_entity(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+    ) -> Result<RecalculateResult, ClientError> {
+        let builder = self
+            .http
+            .post(entity_endpoint(server_url, key, None, "/recalculate")?)
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
     }
 
     /// `POST /api/v1/entities/{key}/fields`。
@@ -1695,6 +1709,13 @@ mod tests {
                             AxumStatus::NO_CONTENT
                         },
                     ),
+                )
+                .route(
+                    "/entities/{key}/recalculate",
+                    post(|Path(key): Path<String>| async move {
+                        assert_eq!(key, "repair");
+                        axum::Json(json!({ "processed": 12, "changed": 3, "with_errors": 1 }))
+                    }),
                 ),
         )
         .await;
@@ -1754,6 +1775,23 @@ mod tests {
             client
                 .delete_entity(&url, "tok", "../x", &DeleteEntityQuery { version: 1 })
                 .await,
+            Err(ClientError::InvalidInput { .. })
+        ));
+
+        let result = client
+            .recalculate_entity(&url, "tok", "repair")
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            RecalculateResult {
+                processed: 12,
+                changed: 3,
+                with_errors: 1,
+            }
+        );
+        assert!(matches!(
+            client.recalculate_entity(&url, "tok", "../x").await,
             Err(ClientError::InvalidInput { .. })
         ));
     }

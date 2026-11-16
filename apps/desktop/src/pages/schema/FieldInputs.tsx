@@ -25,15 +25,18 @@ const OPTION_COLORS = [
  */
 export function TypeSettingsFields({
   dataType,
+  resultType,
   disabled = false,
   relationLocked = false,
 }: {
   dataType: DataType;
+  /** `formula` 的結果型態（決定是否需要小數位數）。 */
+  resultType?: DataType | null;
   disabled?: boolean;
   /** 關聯的資料類別不可修改（編輯既有欄位）。 */
   relationLocked?: boolean;
 }) {
-  const settings = typeSettings(dataType);
+  const settings = typeSettings(dataType, resultType);
   return (
     <>
       {settings.includes('relation_entity') && (

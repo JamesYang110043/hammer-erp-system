@@ -11,7 +11,7 @@ import type {
   Validation,
 } from '../bindings';
 import { TAIPEI_OFFSET_MINUTES } from '../utils/time';
-import { hasDefaultValue, isPropEditable, typeSettings } from './fieldSettings';
+import { hasDefaultValue, isPropApplicable, isPropEditable, typeSettings } from './fieldSettings';
 
 /** 選項的表單值。 */
 export interface OptionFormValue {
@@ -43,6 +43,10 @@ export interface FieldFormValues {
   pattern?: string | null;
   /** `relation` 關聯的資料類別 id。 */
   relation_entity_id?: string | null;
+  /** `formula` 的公式（引用的是欄位代碼，§7.6）。 */
+  formula?: string | null;
+  /** `formula` 的結果型態。 */
+  formula_result_type?: DataType | null;
   default_value?: unknown;
   column_width?: number | null;
   help_text?: string | null;
@@ -85,6 +89,8 @@ export function toFormValues(field: FieldDefinition): FieldFormValues {
     max_length: field.validation?.max_length ?? null,
     pattern: field.validation?.pattern ?? null,
     relation_entity_id: field.relation_entity_id ?? null,
+    formula: field.formula ?? null,
+    formula_result_type: field.formula_result_type ?? null,
     default_value: defaultToForm(field.data_type, field.default_value),
     column_width: field.column_width ?? null,
     help_text: field.help_text ?? null,
@@ -93,7 +99,7 @@ export function toFormValues(field: FieldDefinition): FieldFormValues {
 
 /** 表單值 → 型態設定。不屬於該型態的設定一律送 `null`（伺服器不接受多餘的設定）。 */
 export function toTypeConfig(dataType: DataType, values: Partial<FieldFormValues>): TypeConfig {
-  const settings = typeSettings(dataType);
+  const settings = typeSettings(dataType, values.formula_result_type);
   const validation: Validation = {};
   if (settings.includes('min_max')) {
     const min = blankToNull(values.min);
@@ -121,23 +127,45 @@ export function toTypeConfig(dataType: DataType, values: Partial<FieldFormValues
   };
 }
 
-/** 新增欄位的請求。`sort_order` 排在現有欄位之後。 */
+/** 公式與結果型態：`formula` 才送出，其他型態送 `null`（伺服器不接受多餘的設定）。 */
+export function toFormulaConfig(
+  dataType: DataType,
+  values: Partial<FieldFormValues>,
+): { formula: string | null; formula_result_type: DataType | null } {
+  if (dataType !== 'formula') {
+    return { formula: null, formula_result_type: null };
+  }
+  return {
+    formula: blankToNull(values.formula),
+    formula_result_type: values.formula_result_type ?? null,
+  };
+}
+
+/**
+ * 新增欄位的請求。`sort_order` 排在現有欄位之後。
+ *
+ * 公式欄位不適用「不可重複」、必填、預設值（{@link isPropApplicable}），一律送 `false` / `null`。
+ */
 export function toCreateRequest(values: FieldFormValues, sortOrder: number): CreateFieldRequest {
+  const applies = (prop: Parameters<typeof isPropApplicable>[1]) =>
+    isPropApplicable(values.data_type, prop);
   return {
     field_key: values.field_key,
     label: values.label.trim(),
     data_type: values.data_type,
-    is_required: values.is_required,
+    is_required: applies('is_required') && values.is_required,
     is_visible: values.is_visible,
     is_readonly: values.is_readonly,
     is_searchable: values.is_searchable,
-    is_unique: values.is_unique,
-    default_value: hasDefaultValue(values.data_type)
-      ? defaultToJson(values.data_type, values.default_value)
-      : null,
+    is_unique: applies('is_unique') && values.is_unique,
+    default_value:
+      hasDefaultValue(values.data_type) && applies('default_value')
+        ? defaultToJson(values.data_type, values.default_value)
+        : null,
     ...toTypeConfig(values.data_type, values),
     relation_entity_id:
       values.data_type === 'relation' ? (values.relation_entity_id ?? null) : null,
+    ...toFormulaConfig(values.data_type, values),
     ui_widget: null,
     column_width: values.column_width ?? null,
     help_text: blankToNull(values.help_text),
@@ -155,7 +183,9 @@ export function toUpdateRequest(
   field: FieldDefinition,
   values: FieldFormValues,
 ): UpdateFieldRequest {
-  const can = (prop: Parameters<typeof isPropEditable>[1]) => isPropEditable(field, prop);
+  // 不適用的屬性（公式欄位的不可重複、預設值）不出現在表單，送出原值
+  const can = (prop: Parameters<typeof isPropEditable>[1]) =>
+    isPropEditable(field, prop) && isPropApplicable(field.data_type, prop);
   const config: TypeConfig = can('type_settings')
     ? toTypeConfig(field.data_type, values)
     : {
@@ -179,6 +209,13 @@ export function toUpdateRequest(
     ...config,
     // 關聯的資料類別建立後不可修改，送出原值
     relation_entity_id: field.relation_entity_id ?? null,
+    // 公式與結果型態可以修改（§7.3）
+    ...(can('type_settings')
+      ? toFormulaConfig(field.data_type, values)
+      : {
+          formula: field.formula ?? null,
+          formula_result_type: field.formula_result_type ?? null,
+        }),
     ui_widget: field.ui_widget ?? null,
     column_width: can('column_width')
       ? (values.column_width ?? null)

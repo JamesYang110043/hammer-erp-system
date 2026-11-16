@@ -36,10 +36,42 @@ export const SUPPORTED_DATA_TYPES: readonly DataType[] = [
 ];
 
 /**
- * 可以建立欄位、在表單輸入、在列表篩選的型態：`formula`（M2c）以外的型態，
+ * 可以在表單輸入、在列表篩選的型態：`formula`（M2c）以外的型態，
  * 與 `DataType::is_value_supported` 相同。
  */
 export const VALUE_DATA_TYPES: readonly DataType[] = [...SUPPORTED_DATA_TYPES, 'relation', 'file'];
+
+/** 新增欄位時可以選的型態：{@link VALUE_DATA_TYPES} 加上公式。 */
+export const CREATABLE_DATA_TYPES: readonly DataType[] = [...VALUE_DATA_TYPES, 'formula'];
+
+/**
+ * 公式的結果型態，與 `hammer_core::schema::rules::FORMULA_RESULT_TYPES` 相同（§7.3）。
+ * `decimal`、`money` 需要小數位數。
+ */
+export const FORMULA_RESULT_TYPES: readonly DataType[] = [
+  'text',
+  'long_text',
+  'integer',
+  'decimal',
+  'money',
+  'date',
+  'datetime',
+  'boolean',
+];
+
+/** 數字型態：`SUM`、`AVG`、`MIN`、`MAX` 只能用於這些型態（含結果為數字的公式欄位，§7.6）。 */
+export function isNumericField(field: Pick<FieldDefinition, 'data_type' | 'formula_result_type'>) {
+  const t = field.data_type === 'formula' ? field.formula_result_type : field.data_type;
+  return t === 'integer' || t === 'decimal' || t === 'money';
+}
+
+/**
+ * 可以在公式中引用的欄位型態（`hammer_formula::json_to_value`）：`multi_select`、`relation`、
+ * `file` 不能直接引用（關聯欄位以 `{關聯欄位.目標欄位}` 引用目標資料的欄位）。
+ */
+export function isFormulaOperand(field: Pick<FieldDefinition, 'data_type'>): boolean {
+  return !['multi_select', 'relation', 'file'].includes(field.data_type);
+}
 
 /** 可以設定預設值的型態：`relation`、`file` 不可設定（§7.3）。 */
 export function hasDefaultValue(dataType: DataType): boolean {
@@ -67,8 +99,13 @@ export type TypeSetting =
   /** 關聯的資料類別：`relation`（建立後不可修改） */
   | 'relation_entity';
 
-/** 資料型態使用哪些設定（與 `hammer_core::schema::rules::validate_field_config` 的規則相同）。 */
-export function typeSettings(dataType: DataType): TypeSetting[] {
+/**
+ * 資料型態使用哪些設定（與 `hammer_core::schema::rules::validate_field_config` 的規則相同）。
+ *
+ * `formula` 的小數位數依結果型態 `resultType`（`decimal`、`money` 才需要）；
+ * 公式與結果型態本身另外顯示（`FormulaSettings`）。
+ */
+export function typeSettings(dataType: DataType, resultType?: DataType | null): TypeSetting[] {
   switch (dataType) {
     case 'text':
       return ['max_length', 'pattern'];
@@ -84,6 +121,8 @@ export function typeSettings(dataType: DataType): TypeSetting[] {
       return ['options'];
     case 'relation':
       return ['relation_entity'];
+    case 'formula':
+      return resultType === 'decimal' || resultType === 'money' ? ['decimal_places'] : [];
     default:
       return [];
   }
@@ -147,6 +186,16 @@ export function isPropVisible(field: FieldDefinition | undefined, prop: FieldPro
     return true;
   }
   return prop === 'field_key' || prop === 'data_type' || SYSTEM_EDITABLE.has(prop);
+}
+
+/**
+ * 屬性是否適用於這個型態：公式欄位由系統計算，不可設定「不可重複」、必填、預設值（§7.3）。
+ */
+export function isPropApplicable(dataType: DataType, prop: FieldProp): boolean {
+  if (dataType === 'formula') {
+    return prop !== 'is_unique' && prop !== 'is_required' && prop !== 'default_value';
+  }
+  return true;
 }
 
 /** 欄位可以變更資料型態（自訂、啟用中、型態已支援）。 */

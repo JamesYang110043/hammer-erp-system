@@ -97,6 +97,8 @@ describe('requests', () => {
       options: null,
       validation: null,
       relation_entity_id: null,
+      formula: null,
+      formula_result_type: null,
       ui_widget: null,
       column_width: null,
       help_text: null,
@@ -157,6 +159,8 @@ describe('requests', () => {
       options: [{ value: 'a', label: 'A', color: 'blue' }],
       validation: null,
       relation_entity_id: null,
+      formula: null,
+      formula_result_type: null,
       ui_widget: 'radio',
       column_width: 120,
       help_text: null,
@@ -200,6 +204,89 @@ describe('requests', () => {
       decimal_places: 2,
       options: null,
       validation: { min: '0' },
+    });
+  });
+});
+
+describe('formula requests', () => {
+  const formulaField = fieldDef({
+    field_key: 'total',
+    label: '總價',
+    data_type: 'formula',
+    formula: '{qty} * 2',
+    formula_result_type: 'decimal',
+    decimal_places: 2,
+    version: 3,
+  });
+
+  it('create_request_has_formula_and_no_unique_required_default', () => {
+    const req = toCreateRequest(
+      {
+        ...NEW_FIELD_VALUES,
+        field_key: 'total',
+        label: '總價',
+        data_type: 'formula',
+        // 切換型態前留下的值不送出
+        is_required: true,
+        is_unique: true,
+        default_value: 'x',
+        max_length: 10,
+        formula: '  {qty} * 2 ',
+        formula_result_type: 'integer',
+        decimal_places: 2,
+      },
+      0,
+    );
+    expect(req).toMatchObject({
+      formula: '{qty} * 2',
+      formula_result_type: 'integer',
+      is_required: false,
+      is_unique: false,
+      default_value: null,
+      // 整數不需要小數位數
+      decimal_places: null,
+      validation: null,
+    });
+  });
+
+  it('non_formula_sends_null_formula', () => {
+    const req = toCreateRequest(
+      {
+        ...NEW_FIELD_VALUES,
+        field_key: 'a',
+        label: 'A',
+        formula: '1',
+        formula_result_type: 'text',
+      },
+      0,
+    );
+    expect(req.formula).toBeNull();
+    expect(req.formula_result_type).toBeNull();
+  });
+
+  it('update_request_keeps_or_changes_formula', () => {
+    expect(toUpdateRequest(formulaField, toFormValues(formulaField))).toMatchObject({
+      formula: '{qty} * 2',
+      formula_result_type: 'decimal',
+      decimal_places: 2,
+      is_unique: false,
+      default_value: null,
+    });
+    // 公式欄位的表單沒有不可重複、預設值的欄位（undefined），送出原值
+    const values = {
+      ...toFormValues(formulaField),
+      is_unique: undefined as unknown as boolean,
+      formula: '{qty} * 3',
+      formula_result_type: 'money' as const,
+    };
+    expect(toUpdateRequest(formulaField, values)).toMatchObject({
+      formula: '{qty} * 3',
+      formula_result_type: 'money',
+      is_unique: false,
+    });
+    expect(toReactivateRequest(formulaField)).toMatchObject({
+      formula: '{qty} * 2',
+      is_active: true,
     });
   });
 });

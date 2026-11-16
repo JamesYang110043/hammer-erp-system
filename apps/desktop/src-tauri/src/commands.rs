@@ -22,7 +22,8 @@ use hammer_shared::record::{
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
-    ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest, UpdateFieldRequest,
+    RecalculateResult, ReorderEntitiesRequest, ReorderFieldsRequest, UpdateEntityRequest,
+    UpdateFieldRequest,
 };
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
 use hammer_shared::user::{
@@ -33,6 +34,7 @@ use tauri::{State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 
 use crate::error::ClientError;
+use crate::formula::FormulaSyntaxError;
 use crate::settings::normalize_server_url;
 use crate::state::{AppState, UploadProgress};
 
@@ -279,6 +281,18 @@ pub async fn delete_entity(
         .await
 }
 
+/// 重新計算資料類別所有未刪除資料的公式欄位（需要 `schema.manage`）。
+///
+/// 只能對自訂的主檔、單據執行（明細隨主表一起重算）；其他回傳 `404 NOT_FOUND`。
+#[tauri::command]
+#[specta::specta]
+pub async fn recalculate_entity(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<RecalculateResult, ClientError> {
+    state.recalculate_entity(&key).await
+}
+
 /// 新增欄位（需要 `schema.manage`）。
 #[tauri::command]
 #[specta::specta]
@@ -339,6 +353,15 @@ pub async fn change_field_type(
     req: ChangeFieldTypeRequest,
 ) -> Result<FieldDefinition, ClientError> {
     state.change_field_type(&key, &field_key, &req).await
+}
+
+/// 檢查公式的語法（`hammer_formula::parse`，不需連線）。語法正確時回傳 `null`。
+///
+/// 只檢查語法；引用的欄位、型態與循環引用由伺服器在儲存時檢查（`docs/architecture.md` §7.6）。
+#[tauri::command]
+#[specta::specta]
+pub fn check_formula_syntax(formula: String) -> Option<FormulaSyntaxError> {
+    crate::formula::check_syntax(&formula)
 }
 
 /// 資料列表（需要 `record.read`）。分頁、排序與篩選見 [`RecordListQuery`]。

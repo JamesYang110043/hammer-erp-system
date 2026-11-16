@@ -404,3 +404,38 @@ describe('左側選單', () => {
     expect(repair).toBeInTheDocument();
   });
 });
+
+describe('重新計算公式', () => {
+  it('recalculates_after_confirm_and_shows_result', async () => {
+    const invoke = renderEntitiesPage({
+      recalculate_entity: () => ({ processed: 12, changed: 3, with_errors: 1 }),
+    });
+    const user = userEvent.setup();
+    const row = await rowOf('repair');
+    await user.click(row.getByRole('button', { name: '重新計算' }));
+
+    // 先確認，確認前不呼叫
+    const confirm = await screen.findByRole('tooltip');
+    expect(within(confirm).getByText('確定要重新計算「維修單」？')).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith('recalculate_entity', expect.anything());
+    await user.click(within(confirm).getByRole('button', { name: '重新計算' }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('recalculate_entity', { key: 'repair' }),
+    );
+    expect(await screen.findByText('處理 12 筆，其中 3 筆有變動。')).toBeInTheDocument();
+    expect(screen.getByText(/有 1 筆資料的公式計算錯誤/)).toBeInTheDocument();
+  });
+
+  it('only_active_custom_master_or_document_can_recalculate', async () => {
+    renderEntitiesPage();
+    expect((await rowOf('repair')).getByRole('button', { name: '重新計算' })).toBeInTheDocument();
+    expect(
+      (await rowOf('sales_order')).getByRole('button', { name: '重新計算' }),
+    ).toBeInTheDocument();
+    // 已停用
+    expect(
+      (await rowOf('equipment')).queryByRole('button', { name: '重新計算' }),
+    ).not.toBeInTheDocument();
+  });
+});
