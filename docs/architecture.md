@@ -555,13 +555,31 @@ products ───────────────────────�
 | relation_entity_id | UUID FK → entity_definitions | relation 使用；建立後不可修改，限制見 §7.3 |
 | formula | TEXT | formula 使用 |
 | formula_result_type | TEXT | formula 的結果型態 |
-| formula_deps | JSONB | 解析後的相依欄位，供相依圖使用 |
+| formula_deps | JSONB | 解析後的相依欄位，供相依圖使用；格式見下方 |
 | ui_widget | TEXT | 選用的輸入元件 |
 | column_width | INTEGER | 列表欄寬 |
 | help_text | TEXT | |
 | sort_order | INTEGER | |
 | is_active | BOOLEAN | |
 | ＋共通欄位 | | |
+
+`formula_deps` 的格式（`hammer_formula::dependencies` 產生，排序並去除重複）：公式引用的欄位陣列，每個元素是下列其中一種：
+
+```json
+[
+  {"kind": "field", "field": "qty"},
+  {"kind": "relation", "relation": "customer", "field": "discount_rate"},
+  {"kind": "detail", "detail": "lines", "field": "amount"}
+]
+```
+
+| kind | 公式語法 | 相依圖中指向的欄位 |
+|---|---|---|
+| `field` | `{qty}` | 同一張表（主表或該明細子表）的 `qty` |
+| `relation` | `{customer.discount_rate}` | 同一張表的關聯欄位 `customer`；目標欄位在其他資料，不參與排序 |
+| `detail` | `SUM(lines.amount)` | 明細子表 `lines` 的 `amount`（只有主表的公式可以使用） |
+
+儲存公式時，以資料類別（含明細子表）所有公式欄位的 `formula_deps` 建立相依圖，有循環就拒絕並回傳循環路徑；計算順序依拓撲排序，明細的公式先於主表（`hammer_formula::calculation_order`）。
 
 #### `schema_change_logs`
 | 欄位 | 型態 | 說明 |
