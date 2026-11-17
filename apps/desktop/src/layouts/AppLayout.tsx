@@ -22,6 +22,7 @@ import {
   CONNECTION_SETTINGS_PATH,
   ENTITIES_PATH,
   ENTITY_MENU_AFTER,
+  MASTER_DATA_MODULES,
   MODULES,
   masterDataEntities,
   menuEntityGroups,
@@ -61,8 +62,15 @@ export function AppLayout() {
         children: g.entities.map(entityItem),
       }))
     : [];
-  // 系統主檔（商品、客戶、廠商…）放在選單最上方
-  const masterData = canReadRecords ? masterDataEntities(entities.data ?? []) : [];
+  // 系統主檔（商品、客戶、廠商…）與幣別、匯率放在選單最上方
+  const masterData: MenuItem[] = [
+    ...(canReadRecords ? masterDataEntities(entities.data ?? []) : []).map(entityItem),
+    ...MASTER_DATA_MODULES.filter((m) => !m.permission || can(m.permission)).map((m): MenuItem => ({
+      key: m.path,
+      icon: m.icon,
+      label: m.label,
+    })),
+  ];
   const masterDataItems: MenuItem[] =
     masterData.length > 0
       ? [
@@ -70,7 +78,7 @@ export function AppLayout() {
             type: 'group',
             key: `${ENTITIES_PATH}-system`,
             label: MASTER_DATA_LABEL,
-            children: masterData.map(entityItem),
+            children: masterData,
           },
           { type: 'divider', key: `${ENTITIES_PATH}-system-divider` },
         ]

@@ -3,7 +3,7 @@ import { Navigate, createHashRouter } from 'react-router';
 import { RequirePermission } from './components/RequirePermission';
 import { AppLayout } from './layouts/AppLayout';
 import { PERMISSIONS } from './bindings';
-import { CONNECTION_SETTINGS_PATH, ENTITIES_PATH, MODULES } from './modules';
+import { CONNECTION_SETTINGS_PATH, ENTITIES_PATH, MASTER_DATA_MODULES, MODULES } from './modules';
 import { ConnectionSettingsPage } from './pages/ConnectionSettingsPage';
 import { PlaceholderPage } from './pages/PlaceholderPage';
 import { RecordFormPage } from './pages/records/RecordFormPage';
@@ -20,7 +20,7 @@ export const router = createHashRouter([
         index: true,
         element: <Navigate to={MODULES[0]?.path ?? CONNECTION_SETTINGS_PATH} replace />,
       },
-      ...MODULES.flatMap((m) => [
+      ...[...MASTER_DATA_MODULES, ...MODULES].flatMap((m) => [
         {
           path: m.path,
           element: (

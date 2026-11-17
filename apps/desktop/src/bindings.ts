@@ -54,6 +54,22 @@ export const commands = {
 	listAuditLogs: (query: AuditLogQuery_Deserialize) => typedError<Page<AuditLogEntry_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_audit_logs", { query })),
 	/**  幣別列表（幣別選單用）：`include_inactive` 為 `true` 時含已停用的幣別。 */
 	listCurrencies: (includeInactive: boolean) => typedError<Currency_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_currencies", { includeInactive })),
+	/**  新增幣別（需要 `settings.manage`）。代碼的小寫由伺服器轉成大寫。 */
+	createCurrency: (req: CreateCurrencyRequest_Deserialize) => typedError<Currency_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_currency", { req })),
+	/**
+	 *  修改幣別的名稱、符號、小數位數、啟用狀態（需要 `settings.manage`）。
+	 * 
+	 *  `symbol` 為空字串時清除符號；`req.version` 不符時回傳 `409 CONFLICT`。
+	 */
+	updateCurrency: (code: string, req: UpdateCurrencyRequest_Deserialize) => typedError<Currency_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_currency", { code, req })),
+	/**  匯率列表（需要 `record.read`），依日期新到舊分頁。 */
+	listExchangeRates: (query: ExchangeRateQuery_Deserialize) => typedError<Page<ExchangeRate_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_exchange_rates", { query })),
+	/**  新增匯率（需要 `record.write`）。匯率以字串傳入，不經過浮點數。 */
+	createExchangeRate: (req: CreateExchangeRateRequest_Deserialize) => typedError<ExchangeRate_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_exchange_rate", { req })),
+	/**  修改匯率值（需要 `record.write`）。`req.version` 不符時回傳 `409 CONFLICT`。 */
+	updateExchangeRate: (id: string, req: UpdateExchangeRateRequest_Deserialize) => typedError<ExchangeRate_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_exchange_rate", { id, req })),
+	/**  刪除匯率（需要 `record.write`）。`version` 不符時回傳 `409 CONFLICT`。 */
+	deleteExchangeRate: (id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_exchange_rate", { id, version })),
 	/**  資料類別列表（啟用中的資料類別，選單用）。 */
 	listEntities: () => typedError<EntityDefinition_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_entities")),
 	/**  資料類別列表，含已停用的資料類別（管理畫面用，需要 `schema.manage`）。 */
@@ -501,6 +517,33 @@ export type CreateAdminRequest = {
 	password: string,
 };
 
+/**  `POST /api/v1/currencies` 的輸入。 */
+export type CreateCurrencyRequest = CreateCurrencyRequest_Serialize | CreateCurrencyRequest_Deserialize;
+
+/**  `POST /api/v1/currencies` 的輸入。 */
+export type CreateCurrencyRequest_Deserialize = {
+	/**  3 個英文字母，小寫會轉成大寫；不可與既有幣別（含已停用）重複。 */
+	code: string,
+	/**  名稱（前後空白會去除），不可為空。 */
+	name: string,
+	/**  符號（前後空白會去除）；省略、`null` 或空字串代表沒有符號。 */
+	symbol?: string | null,
+	/**  金額的小數位數，0–4。 */
+	decimal_places: number,
+};
+
+/**  `POST /api/v1/currencies` 的輸入。 */
+export type CreateCurrencyRequest_Serialize = {
+	/**  3 個英文字母，小寫會轉成大寫；不可與既有幣別（含已停用）重複。 */
+	code: string,
+	/**  名稱（前後空白會去除），不可為空。 */
+	name: string,
+	/**  符號（前後空白會去除）；省略、`null` 或空字串代表沒有符號。 */
+	symbol: string | null,
+	/**  金額的小數位數，0–4。 */
+	decimal_places: number,
+};
+
 /**
  *  建立自訂資料類別的輸入。儲存方式固定為 `custom_records`。
  * 
@@ -575,6 +618,29 @@ export type CreateEntityRequest_Serialize = {
 	title_template: string | null,
 	/**  選單排序（預設 0）。 */
 	sort_order: number,
+};
+
+/**  `POST /api/v1/exchange-rates` 的輸入。 */
+export type CreateExchangeRateRequest = CreateExchangeRateRequest_Serialize | CreateExchangeRateRequest_Deserialize;
+
+/**  `POST /api/v1/exchange-rates` 的輸入。 */
+export type CreateExchangeRateRequest_Deserialize = {
+	/**  幣別代碼（不分大小寫）：必須存在、啟用中、不是本位幣。 */
+	currency_code: string,
+	/**  適用日期；同一幣別同一天只能有一筆未刪除的匯率。可以是未來的日期。 */
+	rate_date: string,
+	/**  大於 0，最多 6 位小數（不自動四捨五入）。 */
+	rate: string,
+};
+
+/**  `POST /api/v1/exchange-rates` 的輸入。 */
+export type CreateExchangeRateRequest_Serialize = {
+	/**  幣別代碼（不分大小寫）：必須存在、啟用中、不是本位幣。 */
+	currency_code: string,
+	/**  適用日期；同一幣別同一天只能有一筆未刪除的匯率。可以是未來的日期。 */
+	rate_date: string,
+	/**  大於 0，最多 6 位小數（不自動四捨五入）。 */
+	rate: string,
 };
 
 /**
@@ -1055,6 +1121,86 @@ export type ErrorCode =
 "ACCOUNT_LOCKED" | 
 /**  帳號已停用，無法登入。 */
 "ACCOUNT_DISABLED";
+
+/**  匯率。 */
+export type ExchangeRate = ExchangeRate_Serialize | ExchangeRate_Deserialize;
+
+/**
+ *  `GET /api/v1/exchange-rates` 的 query string。所有條件都可省略。
+ * 
+ *  只列出未刪除的匯率，依 `rate_date` 由新到舊、再依幣別、`id` 排序。
+ */
+export type ExchangeRateQuery = ExchangeRateQuery_Serialize | ExchangeRateQuery_Deserialize;
+
+/**
+ *  `GET /api/v1/exchange-rates` 的 query string。所有條件都可省略。
+ * 
+ *  只列出未刪除的匯率，依 `rate_date` 由新到舊、再依幣別、`id` 排序。
+ */
+export type ExchangeRateQuery_Deserialize = {
+	/**  幣別代碼（不分大小寫）；空字串視為未指定。 */
+	currency_code?: string | null,
+	/**  `rate_date >= date_from`（含）。 */
+	date_from?: string | null,
+	/**  `rate_date <= date_to`（含）。 */
+	date_to?: string | null,
+	/**  頁碼，從 1 開始（預設 1）。 */
+	page?: number | null,
+	/**  每頁筆數（預設 50，上限 200）。 */
+	page_size?: number | null,
+};
+
+/**
+ *  `GET /api/v1/exchange-rates` 的 query string。所有條件都可省略。
+ * 
+ *  只列出未刪除的匯率，依 `rate_date` 由新到舊、再依幣別、`id` 排序。
+ */
+export type ExchangeRateQuery_Serialize = {
+	/**  幣別代碼（不分大小寫）；空字串視為未指定。 */
+	currency_code: string | null,
+	/**  `rate_date >= date_from`（含）。 */
+	date_from: string | null,
+	/**  `rate_date <= date_to`（含）。 */
+	date_to: string | null,
+	/**  頁碼，從 1 開始（預設 1）。 */
+	page: number | null,
+	/**  每頁筆數（預設 50，上限 200）。 */
+	page_size: number | null,
+};
+
+/**  匯率。 */
+export type ExchangeRate_Deserialize = {
+	id: string,
+	/**  幣別代碼。 */
+	currency_code: string,
+	/**  匯率適用的日期（`YYYY-MM-DD`）。 */
+	rate_date: string,
+	/**  1 外幣 = ? 台幣，固定 6 位小數，例如 `"32.150000"`。 */
+	rate: string,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號，修改、刪除時帶回（§9.4）。 */
+	version: number,
+};
+
+/**  匯率。 */
+export type ExchangeRate_Serialize = {
+	id: string,
+	/**  幣別代碼。 */
+	currency_code: string,
+	/**  匯率適用的日期（`YYYY-MM-DD`）。 */
+	rate_date: string,
+	/**  1 外幣 = ? 台幣，固定 6 位小數，例如 `"32.150000"`。 */
+	rate: string,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號，修改、刪除時帶回（§9.4）。 */
+	version: number,
+};
 
 /**
  *  欄位定義（API 回應）。
@@ -1722,6 +1868,47 @@ export type TargetSnapshot_Serialize = {
 	records: TargetRecord[],
 };
 
+/**
+ *  `PATCH /api/v1/currencies/{code}` 的輸入。省略或 `null` 的欄位不修改。
+ * 
+ *  `code`、`is_base` 不可修改。
+ */
+export type UpdateCurrencyRequest = UpdateCurrencyRequest_Serialize | UpdateCurrencyRequest_Deserialize;
+
+/**
+ *  `PATCH /api/v1/currencies/{code}` 的輸入。省略或 `null` 的欄位不修改。
+ * 
+ *  `code`、`is_base` 不可修改。
+ */
+export type UpdateCurrencyRequest_Deserialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	name?: string | null,
+	/**  空字串代表清除符號。 */
+	symbol?: string | null,
+	/**  只影響之後輸入的金額，已存的金額不變。 */
+	decimal_places?: number | null,
+	/**  本位幣不可停用。 */
+	is_active?: boolean | null,
+};
+
+/**
+ *  `PATCH /api/v1/currencies/{code}` 的輸入。省略或 `null` 的欄位不修改。
+ * 
+ *  `code`、`is_base` 不可修改。
+ */
+export type UpdateCurrencyRequest_Serialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	name: string | null,
+	/**  空字串代表清除符號。 */
+	symbol: string | null,
+	/**  只影響之後輸入的金額，已存的金額不變。 */
+	decimal_places: number | null,
+	/**  本位幣不可停用。 */
+	is_active: boolean | null,
+};
+
 /**  修改資料類別的輸入（整筆取代可修改的屬性）。`key`、`kind`、`storage`、`parent_entity_id` 不可修改。 */
 export type UpdateEntityRequest = UpdateEntityRequest_Serialize | UpdateEntityRequest_Deserialize;
 
@@ -1771,6 +1958,25 @@ export type UpdateEntityRequest_Serialize = {
 	sort_order: number,
 	/**  停用後不出現在選單，資料 API 回傳 `404`；改回 `true` 即重新啟用。系統資料類別不可停用。 */
 	is_active: boolean,
+};
+
+/**  `PATCH /api/v1/exchange-rates/{id}` 的輸入。只能修改匯率；要換日期或幣別時刪除後重新新增。 */
+export type UpdateExchangeRateRequest = UpdateExchangeRateRequest_Serialize | UpdateExchangeRateRequest_Deserialize;
+
+/**  `PATCH /api/v1/exchange-rates/{id}` 的輸入。只能修改匯率；要換日期或幣別時刪除後重新新增。 */
+export type UpdateExchangeRateRequest_Deserialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	/**  大於 0，最多 6 位小數。 */
+	rate: string,
+};
+
+/**  `PATCH /api/v1/exchange-rates/{id}` 的輸入。只能修改匯率；要換日期或幣別時刪除後重新新增。 */
+export type UpdateExchangeRateRequest_Serialize = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+	/**  大於 0，最多 6 位小數。 */
+	rate: string,
 };
 
 /**

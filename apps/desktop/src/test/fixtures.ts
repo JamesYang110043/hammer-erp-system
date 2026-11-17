@@ -1,4 +1,4 @@
-import type { CurrentUser, Role, User } from '../bindings';
+import type { Currency, CurrentUser, ExchangeRate, Role, User } from '../bindings';
 import { PERMISSIONS } from '../bindings';
 import type { CommandHandler } from './ipc';
 
@@ -19,6 +19,21 @@ export const VIEWER: CurrentUser = {
   display_name: '李唯讀',
   role: 'viewer',
   permissions: [PERMISSIONS.DATA_EXPORT, PERMISSIONS.RECORD_READ],
+  must_change_password: false,
+};
+
+/** 可編輯者（docs/architecture.md §6.1）。 */
+export const EDITOR: CurrentUser = {
+  id: '0196f5a0-0000-7000-8000-000000000003',
+  username: 'editor',
+  display_name: '陳編輯',
+  role: 'editor',
+  permissions: [
+    PERMISSIONS.DATA_EXPORT,
+    PERMISSIONS.RECORD_POST,
+    PERMISSIONS.RECORD_READ,
+    PERMISSIONS.RECORD_WRITE,
+  ],
   must_change_password: false,
 };
 
@@ -63,6 +78,59 @@ export function managedUser(patch: Partial<User> = {}): User {
     created_at: '2026-11-12T08:00:00Z',
     updated_at: '2026-11-12T08:00:00Z',
     version: 3,
+    ...patch,
+  };
+}
+
+/** 幣別（`list_currencies`）。 */
+export function currencyRow(patch: Partial<Currency> = {}): Currency {
+  return {
+    id: '0190a000-0000-7000-8000-000000000020',
+    code: 'USD',
+    name: '美元',
+    symbol: 'US$',
+    decimal_places: 2,
+    is_base: false,
+    is_active: true,
+    created_at: '2026-11-17T00:00:00Z',
+    updated_at: '2026-11-17T00:00:00Z',
+    version: 1,
+    ...patch,
+  };
+}
+
+/** 預設的幣別：本位幣 TWD、USD、已停用的 JPY。 */
+export const CURRENCIES: Currency[] = [
+  currencyRow({
+    id: '0190a000-0000-7000-8000-000000000021',
+    code: 'TWD',
+    name: '新台幣',
+    symbol: 'NT$',
+    decimal_places: 0,
+    is_base: true,
+  }),
+  currencyRow({ version: 2 }),
+  currencyRow({
+    id: '0190a000-0000-7000-8000-000000000022',
+    code: 'JPY',
+    name: '日圓',
+    symbol: 'JP¥',
+    decimal_places: 0,
+    is_active: false,
+  }),
+];
+
+/** 匯率（`list_exchange_rates`）。 */
+export function exchangeRateRow(patch: Partial<ExchangeRate> = {}): ExchangeRate {
+  return {
+    id: '0190a000-0000-7000-8000-0000000000e1',
+    currency_code: 'USD',
+    rate_date: '2026-11-17',
+    rate: '32.150000',
+    created_at: '2026-11-17T01:00:00Z',
+    // 台北時間 2026-11-17 09:30:00
+    updated_at: '2026-11-17T01:30:00Z',
+    version: 4,
     ...patch,
   };
 }

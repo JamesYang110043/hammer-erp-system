@@ -7,7 +7,13 @@ use hammer_shared::Id;
 use hammer_shared::attachment::Attachment;
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
-use hammer_shared::currency::{Currency, CurrencyListQuery};
+use hammer_shared::currency::{
+    CreateCurrencyRequest, Currency, CurrencyListQuery, UpdateCurrencyRequest,
+};
+use hammer_shared::exchange_rate::{
+    CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
+    UpdateExchangeRateRequest,
+};
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
     ViewLayout,
@@ -214,6 +220,73 @@ impl AppState {
     ) -> Result<Vec<Currency>, ClientError> {
         self.with_token(async |client, url, token| client.list_currencies(url, token, query).await)
             .await
+    }
+
+    /// 新增幣別。
+    pub async fn create_currency(
+        &self,
+        req: &CreateCurrencyRequest,
+    ) -> Result<Currency, ClientError> {
+        self.with_token(async |client, url, token| client.create_currency(url, token, req).await)
+            .await
+    }
+
+    /// 修改幣別（含停用、重新啟用）。
+    pub async fn update_currency(
+        &self,
+        code: &str,
+        req: &UpdateCurrencyRequest,
+    ) -> Result<Currency, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.update_currency(url, token, code, req).await
+        })
+        .await
+    }
+
+    /// 匯率列表（分頁）。
+    pub async fn list_exchange_rates(
+        &self,
+        query: &ExchangeRateQuery,
+    ) -> Result<Page<ExchangeRate>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.list_exchange_rates(url, token, query).await
+        })
+        .await
+    }
+
+    /// 新增匯率。
+    pub async fn create_exchange_rate(
+        &self,
+        req: &CreateExchangeRateRequest,
+    ) -> Result<ExchangeRate, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.create_exchange_rate(url, token, req).await
+        })
+        .await
+    }
+
+    /// 修改匯率（只能修改匯率值）。
+    pub async fn update_exchange_rate(
+        &self,
+        id: Id,
+        req: &UpdateExchangeRateRequest,
+    ) -> Result<ExchangeRate, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.update_exchange_rate(url, token, id, req).await
+        })
+        .await
+    }
+
+    /// 刪除匯率（軟刪除）。
+    pub async fn delete_exchange_rate(
+        &self,
+        id: Id,
+        query: &DeleteExchangeRateQuery,
+    ) -> Result<(), ClientError> {
+        self.with_token(async |client, url, token| {
+            client.delete_exchange_rate(url, token, id, query).await
+        })
+        .await
     }
 
     /// 資料類別與其所有欄位定義。

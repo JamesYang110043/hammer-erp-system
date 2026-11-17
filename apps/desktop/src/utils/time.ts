@@ -20,3 +20,8 @@ export function formatTaipei(iso: string, format = 'YYYY-MM-DD HH:mm:ss'): strin
 export function taipeiStartOfDay(date: Dayjs): string {
   return `${date.format('YYYY-MM-DD')}T00:00:00+08:00`;
 }
+
+/** 台北時間的今天（`YYYY-MM-DD`），不受電腦本身時區影響。 */
+export function taipeiToday(now: Dayjs = dayjs()): string {
+  return now.utcOffset(TAIPEI_OFFSET_MINUTES).format('YYYY-MM-DD');
+}
