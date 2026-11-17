@@ -8,12 +8,14 @@
 //!
 //! - `{record_no}`：單號（[`RECORD_NO`]）；沒有單號時為空字串
 //! - `{field_key}`：本資料類別的欄位
+//! - `{relation_field.field_key}`：關聯引用，關聯欄位所指資料的欄位（或 `record_no`），只能一層
 //!
 //! `{}` 以外的文字原樣保留，但不可有單獨的 `{`、`}` 或控制字元；長度上限 [`MAX_TEMPLATE_LEN`]
-//! 個字元。引用關聯欄位的欄位（例如 `{customer.name}`）目前不支援。
+//! 個字元。
 //!
 //! 寫入資料類別前以 [`normalize_template`] 檢查：只能引用 `record_no` 或本資料類別已定義的欄位
-//! （含已停用）。
+//! （含已停用）；關聯引用的前半段必須是已定義、型態為 `relation` 的欄位，後半段必須是目標資料類別
+//! 已定義的欄位（含已停用）或 `record_no`。
 //!
 //! # 套用（[`TitleRenderer`]）
 //!
@@ -29,9 +31,14 @@
 //! | `select` | 選項名稱；選項已移除時為選項值 |
 //! | `multi_select` | 選項名稱，以 `、` 連接 |
 //! | `formula` | 依 `formula_result_type` 套用上列規則 |
-//! | `relation`、`file` | 目前為空字串 |
+//! | `relation`、`file` | 空字串（關聯目標的欄位請用關聯引用） |
 //!
 //! 引用已停用或不存在的欄位、存值格式不正確時視為沒有值。結果去除前後空白。
+//!
+//! 關聯引用讀取目標資料**目前**的值（含已軟刪除的資料），依目標欄位的型態套用上表；目標欄位是
+//! `relation` 或 `file` 時為空字串（不再往下一層）。關聯欄位沒有值、找不到目標資料、關聯欄位或
+//! 目標欄位已停用、關聯欄位已變更為其他型態時為空字串。目標資料由呼叫端批次讀取後以
+//! [`RelatedRecords`] 傳入（[`TitleRenderer::target_entities`]、[`TitleRenderer::related_ids`]）。
 //!
 //! # 沒有設定範本時
 //!
@@ -43,7 +50,7 @@
 //!
 //! 資料庫內的範本不合法時（例如加入檢查之前存入的），也使用以上預設規則。
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use hammer_shared::Id;
 use hammer_shared::record::RECORD_NO;
@@ -64,6 +71,11 @@ enum Part {
     Literal(String),
     RecordNo,
     Field(String),
+    /// `{relation.field}`；`field` 可能是 [`RECORD_NO`]。
+    Relation {
+        relation: String,
+        field: String,
+    },
 }
 
 /// 解析後的標題範本。
@@ -85,10 +97,14 @@ pub enum TemplateError {
     ControlChar,
     /// `{}` 內不是合法的欄位代碼。
     InvalidCode(String),
-    /// 引用關聯欄位的欄位（`{customer.name}`），目前不支援。
+    /// 兩層以上的關聯引用（`{customer.region.name}`），不支援。
     NestedReference(String),
     /// 引用本資料類別沒有的欄位。
     UnknownField(String),
+    /// 關聯引用的前半段不是 `relation` 欄位。
+    NotRelation(String),
+    /// 關聯引用的後半段不是目標資料類別的欄位（或找不到目標資料類別）。
+    UnknownTargetField { relation: String, field: String },
 }
 
 impl TemplateError {
@@ -99,13 +115,19 @@ impl TemplateError {
             Self::UnclosedBrace => "標題範本的「{」沒有對應的「}」".to_owned(),
             Self::UnmatchedCloseBrace => "標題範本的「}」沒有對應的「{」".to_owned(),
             Self::ControlChar => "標題範本不可包含換行等控制字元".to_owned(),
-            Self::InvalidCode(code) => {
-                format!("「{{{code}}}」不是合法的欄位代碼；請寫成 {{欄位代碼}} 或 {{record_no}}")
-            }
+            Self::InvalidCode(code) => format!(
+                "「{{{code}}}」不是合法的欄位代碼；請寫成 {{欄位代碼}}、{{record_no}} 或 {{關聯欄位.欄位代碼}}"
+            ),
             Self::NestedReference(code) => {
-                format!("目前不支援引用關聯資料的欄位「{{{code}}}」")
+                format!("「{{{code}}}」引用超過一層關聯；標題範本只能引用一層關聯資料的欄位")
             }
             Self::UnknownField(key) => format!("此資料類別沒有欄位「{key}」"),
+            Self::NotRelation(key) => {
+                format!("欄位「{key}」不是關聯欄位，不能引用「{key}.欄位代碼」")
+            }
+            Self::UnknownTargetField { relation, field } => {
+                format!("關聯欄位「{relation}」所指的資料類別沒有欄位「{field}」")
+            }
         }
     }
 }
@@ -158,17 +180,40 @@ impl TitleTemplate {
         Ok(Self { parts })
     }
 
-    /// 範本引用的欄位代碼（不含 `record_no`），依出現順序、不重複。
+    /// 範本引用的本資料類別欄位代碼（不含 `record_no`；關聯引用取前半段），依出現順序、不重複。
     pub fn field_keys(&self) -> Vec<&str> {
         let mut seen = HashSet::new();
         self.parts
             .iter()
             .filter_map(|p| match p {
                 Part::Field(key) => Some(key.as_str()),
+                Part::Relation { relation, .. } => Some(relation.as_str()),
                 _ => None,
             })
             .filter(|key| seen.insert(*key))
             .collect()
+    }
+
+    /// 檢查範本時需要欄位定義的目標資料類別：關聯引用的前半段是 `fields` 中（含已停用）型態為
+    /// `relation` 的欄位時，它的 `relation_entity_id`。排序、不重複。
+    pub fn relation_targets(&self, fields: &[FieldDefinition]) -> Vec<Id> {
+        self.relation_fields(fields)
+            .filter_map(|f| f.relation_entity_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn relation_fields<'f>(
+        &'f self,
+        fields: &'f [FieldDefinition],
+    ) -> impl Iterator<Item = &'f FieldDefinition> {
+        self.parts.iter().filter_map(move |p| match p {
+            Part::Relation { relation, .. } => fields
+                .iter()
+                .find(|f| f.field_key == *relation && f.data_type == DataType::Relation),
+            _ => None,
+        })
     }
 }
 
@@ -176,33 +221,84 @@ fn parse_code(code: &str) -> Result<Part, TemplateError> {
     if code == RECORD_NO {
         return Ok(Part::RecordNo);
     }
-    if code.contains('.') {
-        return Err(TemplateError::NestedReference(code.to_owned()));
+    if let Some((relation, field)) = code.split_once('.') {
+        if field.contains('.') {
+            return Err(TemplateError::NestedReference(code.to_owned()));
+        }
+        let invalid = || TemplateError::InvalidCode(code.to_owned());
+        validate_key(relation).map_err(|_| invalid())?;
+        if field != RECORD_NO {
+            validate_key(field).map_err(|_| invalid())?;
+        }
+        return Ok(Part::Relation {
+            relation: relation.to_owned(),
+            field: field.to_owned(),
+        });
     }
     validate_key(code).map_err(|_| TemplateError::InvalidCode(code.to_owned()))?;
     Ok(Part::Field(code.to_owned()))
 }
 
+/// 關聯目標資料類別的欄位定義（含已停用），鍵為資料類別 id。
+pub type TargetFields = HashMap<Id, Vec<FieldDefinition>>;
+
 /// 寫入資料類別前檢查並整理範本：去除前後空白，空白視為沒有範本（`None`）。
 ///
 /// `fields` 為資料類別目前的所有欄位定義（含已停用）；範本只能引用其中的欄位或 `record_no`。
+/// `targets` 為關聯引用的目標資料類別的欄位定義（[`TitleTemplate::relation_targets`] 列出的
+/// 資料類別；找不到的資料類別不放入）。
 pub fn normalize_template(
     template: Option<&str>,
     fields: &[FieldDefinition],
+    targets: &TargetFields,
 ) -> Result<Option<String>, TemplateError> {
     let Some(template) = template.map(str::trim).filter(|t| !t.is_empty()) else {
         return Ok(None);
     };
     let parsed = TitleTemplate::parse(template)?;
-    if let Some(missing) = parsed
-        .field_keys()
-        .into_iter()
-        .find(|key| !fields.iter().any(|f| f.field_key == *key))
-    {
-        return Err(TemplateError::UnknownField(missing.to_owned()));
+    let find = |key: &str| {
+        fields
+            .iter()
+            .find(|f| f.field_key == key)
+            .ok_or_else(|| TemplateError::UnknownField(key.to_owned()))
+    };
+    for part in &parsed.parts {
+        match part {
+            Part::Field(key) => {
+                find(key)?;
+            }
+            Part::Relation { relation, field } => {
+                let def = find(relation)?;
+                if def.data_type != DataType::Relation {
+                    return Err(TemplateError::NotRelation(relation.clone()));
+                }
+                // 目標資料類別不存在時也無法引用 record_no
+                let found = def
+                    .relation_entity_id
+                    .and_then(|id| targets.get(&id))
+                    .is_some_and(|t| field == RECORD_NO || t.iter().any(|f| f.field_key == *field));
+                if !found {
+                    return Err(TemplateError::UnknownTargetField {
+                        relation: relation.clone(),
+                        field: field.clone(),
+                    });
+                }
+            }
+            Part::Literal(_) | Part::RecordNo => {}
+        }
     }
     Ok(Some(template.to_owned()))
 }
+
+/// 關聯引用讀取的一筆目標資料。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RelatedRecord {
+    pub record_no: Option<String>,
+    pub data: Map<String, Value>,
+}
+
+/// 關聯引用讀取的目標資料，鍵為 `(目標資料類別 id, 資料 id)`。
+pub type RelatedRecords = HashMap<(Id, Id), RelatedRecord>;
 
 /// 依資料類別的範本與欄位定義產生資料的標題。
 #[derive(Debug, Clone)]
@@ -211,6 +307,8 @@ pub struct TitleRenderer<'a> {
     fields: &'a [FieldDefinition],
     /// 沒有範本時使用的文字欄位：排序最前面、有效的 `text` 欄位。
     default_field: Option<&'a FieldDefinition>,
+    /// 關聯引用的目標資料類別的欄位定義。
+    targets: TargetFields,
 }
 
 impl<'a> TitleRenderer<'a> {
@@ -229,11 +327,60 @@ impl<'a> TitleRenderer<'a> {
             template,
             fields,
             default_field,
+            targets: TargetFields::new(),
         }
     }
 
-    /// 產生一筆資料的標題。
-    pub fn render(&self, id: Id, record_no: Option<&str>, data: &Map<String, Value>) -> String {
+    /// 產生標題需要讀取的目標資料類別：範本的關聯引用中，有效、型態為 `relation` 的欄位的目標。
+    /// 排序、不重複。呼叫端讀取這些資料類別的欄位定義後以 [`Self::set_target_fields`] 設定。
+    pub fn target_entities(&self) -> Vec<Id> {
+        let Some(template) = &self.template else {
+            return Vec::new();
+        };
+        template
+            .relation_fields(self.fields)
+            .filter(|f| f.is_active)
+            .filter_map(|f| f.relation_entity_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// 設定目標資料類別 `entity_id` 的欄位定義（含已停用）。沒有設定的資料類別，關聯引用為空字串。
+    pub fn set_target_fields(&mut self, entity_id: Id, fields: Vec<FieldDefinition>) {
+        self.targets.insert(entity_id, fields);
+    }
+
+    /// 產生 `data` 的標題需要讀取的目標資料 `(目標資料類別 id, 資料 id)`，不重複。
+    /// 只列出已設定欄位定義（[`Self::set_target_fields`]）的目標資料類別。
+    pub fn related_ids(&self, data: &Map<String, Value>) -> Vec<(Id, Id)> {
+        let Some(template) = &self.template else {
+            return Vec::new();
+        };
+        let mut out: Vec<(Id, Id)> = template
+            .relation_fields(self.fields)
+            .filter(|f| f.is_active)
+            .filter_map(|f| {
+                let entity_id = f.relation_entity_id?;
+                if !self.targets.contains_key(&entity_id) {
+                    return None;
+                }
+                Some((entity_id, relation_id(data.get(&f.field_key)?)?))
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// 產生一筆資料的標題。`related` 為關聯引用的目標資料（沒有關聯引用時可傳空的）。
+    pub fn render(
+        &self,
+        id: Id,
+        record_no: Option<&str>,
+        data: &Map<String, Value>,
+        related: &RelatedRecords,
+    ) -> String {
         let Some(template) = &self.template else {
             return self.default_title(id, record_no, data);
         };
@@ -247,9 +394,46 @@ impl<'a> TitleRenderer<'a> {
                         title.push_str(&field_text(field, data));
                     }
                 }
+                Part::Relation { relation, field } => {
+                    title.push_str(&self.relation_text(relation, field, data, related));
+                }
             }
         }
         title.trim().to_owned()
+    }
+
+    /// 關聯引用 `{relation.field}` 的文字。
+    fn relation_text(
+        &self,
+        relation: &str,
+        field: &str,
+        data: &Map<String, Value>,
+        related: &RelatedRecords,
+    ) -> String {
+        let Some(def) = self.fields.iter().find(|f| f.field_key == relation) else {
+            return String::new();
+        };
+        // 關聯欄位已停用、已變更為其他型態 → 空字串
+        if !def.is_active || def.data_type != DataType::Relation {
+            return String::new();
+        }
+        let Some(entity_id) = def.relation_entity_id else {
+            return String::new();
+        };
+        let Some(target_id) = data.get(relation).and_then(relation_id) else {
+            return String::new();
+        };
+        let Some(record) = related.get(&(entity_id, target_id)) else {
+            return String::new();
+        };
+        if field == RECORD_NO {
+            return sanitize(record.record_no.as_deref().unwrap_or_default());
+        }
+        self.targets
+            .get(&entity_id)
+            .and_then(|fields| fields.iter().find(|f| f.field_key == field))
+            .map(|f| field_text(f, &record.data))
+            .unwrap_or_default()
     }
 
     fn default_title(&self, id: Id, record_no: Option<&str>, data: &Map<String, Value>) -> String {
@@ -265,6 +449,20 @@ impl<'a> TitleRenderer<'a> {
         }
         id.to_string().chars().take(ID_PREFIX_LEN).collect()
     }
+}
+
+fn relation_id(value: &Value) -> Option<Id> {
+    match parse_value(DataType::Relation, value) {
+        Ok(Some(FieldValue::Relation(id))) => Some(id),
+        _ => None,
+    }
+}
+
+/// 控制字元換成空白。
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// 欄位值在標題中的文字。已停用、沒有值或格式不正確時為空字串。
@@ -289,10 +487,7 @@ fn field_text(field: &FieldDefinition, data: &Map<String, Value>) -> String {
     };
     match value {
         FieldValue::Text(s) if field.data_type == DataType::Select => option_label(field, &s),
-        FieldValue::Text(s) => s
-            .chars()
-            .map(|c| if c.is_control() { ' ' } else { c })
-            .collect(),
+        FieldValue::Text(s) => sanitize(&s),
         FieldValue::Integer(n) => n.to_string(),
         FieldValue::Decimal(d) => d.to_string(),
         FieldValue::Date(d) => d
@@ -308,7 +503,7 @@ fn field_text(field: &FieldDefinition, data: &Map<String, Value>) -> String {
             .map(|v| option_label(field, v))
             .collect::<Vec<_>>()
             .join("、"),
-        // 引用關聯資料的欄位（例如 `{customer.name}`）等 M3 一起評估
+        // 關聯目標的欄位請用關聯引用 `{relation.field}`，不會再往下一層
         FieldValue::Relation(_) | FieldValue::File(_) => String::new(),
     }
 }
@@ -374,12 +569,23 @@ mod tests {
         )
     }
 
+    fn none() -> RelatedRecords {
+        RelatedRecords::new()
+    }
+
+    fn normalize_template_(
+        template: Option<&str>,
+        fields: &[FieldDefinition],
+    ) -> Result<Option<String>, TemplateError> {
+        normalize_template(template, fields, &TargetFields::new())
+    }
+
     fn data(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
     }
 
     fn render(template: &str, fields: &[FieldDefinition], v: Value) -> String {
-        TitleRenderer::new(Some(template), fields).render(new_id(), None, &data(v))
+        TitleRenderer::new(Some(template), fields).render(new_id(), None, &data(v), &none())
     }
 
     // ---- 解析與檢查 ----
@@ -416,8 +622,17 @@ mod tests {
             ("{Name}", TemplateError::InvalidCode("Name".into())),
             ("{ name }", TemplateError::InvalidCode(" name ".into())),
             (
-                "{customer.name}",
-                TemplateError::NestedReference("customer.name".into()),
+                "{customer.region.name}",
+                TemplateError::NestedReference("customer.region.name".into()),
+            ),
+            ("{.name}", TemplateError::InvalidCode(".name".into())),
+            (
+                "{customer.}",
+                TemplateError::InvalidCode("customer.".into()),
+            ),
+            (
+                "{customer.Name}",
+                TemplateError::InvalidCode("customer.Name".into()),
             ),
         ];
         for (template, expected) in cases {
@@ -432,28 +647,28 @@ mod tests {
         inactive.is_active = false;
         let fields = [field("name", DataType::Text, 0), inactive];
 
-        assert_eq!(normalize_template(None, &fields), Ok(None));
-        assert_eq!(normalize_template(Some("  "), &fields), Ok(None));
+        assert_eq!(normalize_template_(None, &fields), Ok(None));
+        assert_eq!(normalize_template_(Some("  "), &fields), Ok(None));
         assert_eq!(
-            normalize_template(Some(" {record_no} {name} "), &fields),
+            normalize_template_(Some(" {record_no} {name} "), &fields),
             Ok(Some("{record_no} {name}".into()))
         );
         // 已停用的欄位仍是已定義的欄位
         assert_eq!(
-            normalize_template(Some("{old}"), &fields),
+            normalize_template_(Some("{old}"), &fields),
             Ok(Some("{old}".into()))
         );
         // 沒有欄位時只能用 record_no
         assert_eq!(
-            normalize_template(Some("{record_no}"), &[]),
+            normalize_template_(Some("{record_no}"), &[]),
             Ok(Some("{record_no}".into()))
         );
         assert_eq!(
-            normalize_template(Some("{name} {missing}"), &fields),
+            normalize_template_(Some("{name} {missing}"), &fields),
             Err(TemplateError::UnknownField("missing".into()))
         );
         assert_eq!(
-            normalize_template(Some("{name"), &fields),
+            normalize_template_(Some("{name"), &fields),
             Err(TemplateError::UnclosedBrace)
         );
     }
@@ -524,9 +739,12 @@ mod tests {
         let fields = [field("name", DataType::Text, 0)];
         let r = TitleRenderer::new(Some("{record_no} {name}"), &fields);
         let d = data(json!({ "name": "壓縮機" }));
-        assert_eq!(r.render(new_id(), Some("RO-001"), &d), "RO-001 壓縮機");
+        assert_eq!(
+            r.render(new_id(), Some("RO-001"), &d, &none()),
+            "RO-001 壓縮機"
+        );
         // 沒有單號時為空字串，結果去除前後空白
-        assert_eq!(r.render(new_id(), None, &d), "壓縮機");
+        assert_eq!(r.render(new_id(), None, &d, &none()), "壓縮機");
     }
 
     #[test]
@@ -634,8 +852,12 @@ mod tests {
         // 預設規則只使用 `text` 欄位，不使用結果為文字的公式欄位
         let fields = [formula("code", Some(DataType::Text))];
         let id = new_id();
-        let title =
-            TitleRenderer::new(None, &fields).render(id, None, &data(json!({ "code": "A-01" })));
+        let title = TitleRenderer::new(None, &fields).render(
+            id,
+            None,
+            &data(json!({ "code": "A-01" })),
+            &none(),
+        );
         assert_eq!(title, id.to_string()[..ID_PREFIX_LEN]);
     }
 
@@ -646,7 +868,7 @@ mod tests {
         let fields = [field("name", DataType::Text, 0)];
         let r = TitleRenderer::new(None, &fields);
         let d = data(json!({ "name": "壓縮機" }));
-        assert_eq!(r.render(new_id(), Some("RO-001"), &d), "RO-001");
+        assert_eq!(r.render(new_id(), Some("RO-001"), &d, &none()), "RO-001");
     }
 
     #[test]
@@ -662,7 +884,7 @@ mod tests {
         ];
         let r = TitleRenderer::new(None, &fields);
         let d = data(json!({ "qty": 1, "note": "n", "code": "C", "name": "壓縮機", "model": "M" }));
-        assert_eq!(r.render(new_id(), None, &d), "壓縮機");
+        assert_eq!(r.render(new_id(), None, &d, &none()), "壓縮機");
     }
 
     #[test]
@@ -673,14 +895,17 @@ mod tests {
         // 沒有文字欄位
         let fields = [field("qty", DataType::Integer, 0)];
         let r = TitleRenderer::new(None, &fields);
-        assert_eq!(r.render(id, None, &data(json!({ "qty": 1 }))), prefix);
+        assert_eq!(
+            r.render(id, None, &data(json!({ "qty": 1 })), &none()),
+            prefix
+        );
 
         // 有文字欄位但沒有值
         let fields = [field("name", DataType::Text, 0)];
         let r = TitleRenderer::new(None, &fields);
-        assert_eq!(r.render(id, None, &data(json!({}))), prefix);
+        assert_eq!(r.render(id, None, &data(json!({})), &none()), prefix);
         assert_eq!(
-            r.render(id, Some(""), &data(json!({ "name": " " }))),
+            r.render(id, Some(""), &data(json!({ "name": " " })), &none()),
             prefix
         );
         assert_eq!(prefix.len(), ID_PREFIX_LEN);
@@ -690,9 +915,273 @@ mod tests {
     fn blank_or_invalid_stored_template_uses_default() {
         let fields = [field("name", DataType::Text, 0)];
         let d = data(json!({ "name": "壓縮機" }));
-        for template in ["", "  ", "{name", "{customer.name}"] {
+        for template in ["", "  ", "{name", "{customer.region.name}"] {
             let r = TitleRenderer::new(Some(template), &fields);
-            assert_eq!(r.render(new_id(), None, &d), "壓縮機", "{template:?}");
+            assert_eq!(
+                r.render(new_id(), None, &d, &none()),
+                "壓縮機",
+                "{template:?}"
+            );
         }
+    }
+
+    // ---- 關聯引用 ----
+
+    /// 目標資料類別 `customer` 的欄位，與指向它的關聯欄位 `customer`。
+    struct RelationFixture {
+        customer_entity: Id,
+        fields: Vec<FieldDefinition>,
+        targets: TargetFields,
+    }
+
+    fn relation_fixture() -> RelationFixture {
+        let customer_entity = new_id();
+        let mut rel = field("customer", DataType::Relation, 1);
+        rel.relation_entity_id = Some(customer_entity);
+        let mut grade = field("grade", DataType::Select, 2);
+        grade.options = options(&[("a", "A 級")]);
+        let mut old = field("old", DataType::Text, 9);
+        old.is_active = false;
+        let mut credit = field("credit", DataType::Money, 3);
+        credit.decimal_places = Some(2);
+        let target_fields = vec![
+            field("short_name", DataType::Text, 0),
+            grade,
+            credit,
+            field("since", DataType::Date, 4),
+            field("vip", DataType::Boolean, 5),
+            field("parent", DataType::Relation, 6),
+            field("logo", DataType::File, 7),
+            old,
+        ];
+        RelationFixture {
+            customer_entity,
+            fields: vec![field("name", DataType::Text, 0), rel],
+            targets: TargetFields::from([(customer_entity, target_fields)]),
+        }
+    }
+
+    impl RelationFixture {
+        fn renderer(&self, template: &str) -> TitleRenderer<'_> {
+            let mut r = TitleRenderer::new(Some(template), &self.fields);
+            for id in r.target_entities() {
+                r.set_target_fields(id, self.targets[&id].clone());
+            }
+            r
+        }
+    }
+
+    #[test]
+    fn parses_relation_references() {
+        let t =
+            TitleTemplate::parse("{record_no} {customer.short_name}{customer.record_no}").unwrap();
+        assert_eq!(
+            t.parts,
+            vec![
+                Part::RecordNo,
+                Part::Literal(" ".into()),
+                Part::Relation {
+                    relation: "customer".into(),
+                    field: "short_name".into(),
+                },
+                Part::Relation {
+                    relation: "customer".into(),
+                    field: RECORD_NO.into(),
+                },
+            ]
+        );
+        assert_eq!(t.field_keys(), vec!["customer"]);
+    }
+
+    #[test]
+    fn normalize_checks_relation_references() {
+        let fx = relation_fixture();
+        let ok = |t: &str| normalize_template(Some(t), &fx.fields, &fx.targets);
+        assert_eq!(
+            ok("{record_no} {customer.short_name}"),
+            Ok(Some("{record_no} {customer.short_name}".into()))
+        );
+        // 目標的單號、已停用的目標欄位、目標的關聯欄位都是已定義的
+        for t in [
+            "{customer.record_no}",
+            "{customer.old}",
+            "{customer.parent}",
+        ] {
+            assert_eq!(ok(t), Ok(Some(t.into())), "{t}");
+        }
+        // 前半段不存在、不是關聯欄位
+        assert_eq!(
+            ok("{vendor.name}"),
+            Err(TemplateError::UnknownField("vendor".into()))
+        );
+        assert_eq!(
+            ok("{name.short_name}"),
+            Err(TemplateError::NotRelation("name".into()))
+        );
+        // 後半段不是目標資料類別的欄位（本資料類別的欄位也不算）
+        assert_eq!(
+            ok("{customer.name}"),
+            Err(TemplateError::UnknownTargetField {
+                relation: "customer".into(),
+                field: "name".into(),
+            })
+        );
+        // 兩層
+        assert_eq!(
+            ok("{customer.parent.short_name}"),
+            Err(TemplateError::NestedReference(
+                "customer.parent.short_name".into()
+            ))
+        );
+        // 找不到目標資料類別（沒有放進 targets）時，連 record_no 也不可引用
+        let no_targets = TargetFields::new();
+        for t in ["{customer.short_name}", "{customer.record_no}"] {
+            assert!(
+                matches!(
+                    normalize_template(Some(t), &fx.fields, &no_targets),
+                    Err(TemplateError::UnknownTargetField { .. })
+                ),
+                "{t}"
+            );
+        }
+        // 已停用的關聯欄位仍可被引用
+        let mut fields = fx.fields.clone();
+        fields[1].is_active = false;
+        assert!(normalize_template(Some("{customer.short_name}"), &fields, &fx.targets).is_ok());
+        for e in [
+            TemplateError::NotRelation("x".into()),
+            TemplateError::NestedReference("a.b.c".into()),
+            TemplateError::UnknownTargetField {
+                relation: "a".into(),
+                field: "b".into(),
+            },
+        ] {
+            assert!(!e.message().is_empty());
+        }
+    }
+
+    #[test]
+    fn relation_targets_and_related_ids() {
+        let fx = relation_fixture();
+        let t = TitleTemplate::parse("{customer.short_name} {name} {customer.vip}").unwrap();
+        assert_eq!(t.relation_targets(&fx.fields), vec![fx.customer_entity]);
+        // 已停用的關聯欄位：檢查時要讀取目標，產生標題時不需要
+        let mut fields = fx.fields.clone();
+        fields[1].is_active = false;
+        assert_eq!(t.relation_targets(&fields), vec![fx.customer_entity]);
+        let r = TitleRenderer::new(Some("{customer.short_name}"), &fields);
+        assert!(r.target_entities().is_empty());
+
+        let r = fx.renderer("{customer.short_name} {customer.vip}");
+        assert_eq!(r.target_entities(), vec![fx.customer_entity]);
+        let target = new_id();
+        let d = data(json!({ "customer": target.to_string() }));
+        assert_eq!(r.related_ids(&d), vec![(fx.customer_entity, target)]);
+        // 沒有值、值不是 UUID → 不需讀取
+        assert!(r.related_ids(&data(json!({}))).is_empty());
+        assert!(
+            r.related_ids(&data(json!({ "customer": "abc" })))
+                .is_empty()
+        );
+        // 沒有設定目標欄位定義 → 不需讀取
+        let r = TitleRenderer::new(Some("{customer.short_name}"), &fx.fields);
+        assert!(r.related_ids(&d).is_empty());
+        // 沒有範本、沒有關聯引用
+        assert!(
+            TitleRenderer::new(None, &fx.fields)
+                .target_entities()
+                .is_empty()
+        );
+        assert!(fx.renderer("{name}").target_entities().is_empty());
+    }
+
+    #[test]
+    fn renders_relation_references_by_target_type() {
+        let fx = relation_fixture();
+        let target = new_id();
+        let related = RelatedRecords::from([(
+            (fx.customer_entity, target),
+            RelatedRecord {
+                record_no: Some("C-001".into()),
+                data: data(json!({
+                    "short_name": "大同\n電器",
+                    "grade": "a",
+                    "credit": "50000.00",
+                    "since": "2020-01-31",
+                    "vip": true,
+                    "parent": new_id().to_string(),
+                    "logo": new_id().to_string(),
+                    "old": "停用",
+                })),
+            },
+        )]);
+        let d = data(json!({ "name": "冷氣", "customer": target.to_string() }));
+        let cases = [
+            ("{name} {customer.short_name}", "冷氣 大同 電器"),
+            ("{customer.record_no}", "C-001"),
+            ("{customer.grade}", "A 級"),
+            ("{customer.credit}", "50000.00"),
+            ("{customer.since}", "2020-01-31"),
+            ("{customer.vip}", "是"),
+            // 目標欄位是 relation、file 或已停用 → 空字串
+            (
+                "[{customer.parent}][{customer.logo}][{customer.old}]",
+                "[][][]",
+            ),
+        ];
+        for (template, expected) in cases {
+            let r = fx.renderer(template);
+            assert_eq!(
+                r.render(new_id(), None, &d, &related),
+                expected,
+                "{template}"
+            );
+        }
+    }
+
+    #[test]
+    fn relation_references_are_empty_when_unavailable() {
+        let fx = relation_fixture();
+        let target = new_id();
+        let related = RelatedRecords::from([(
+            (fx.customer_entity, target),
+            RelatedRecord {
+                record_no: None,
+                data: data(json!({ "short_name": "大同" })),
+            },
+        )]);
+        let template = "RO {customer.short_name}[{customer.record_no}]";
+        let with = data(json!({ "customer": target.to_string() }));
+        let r = fx.renderer(template);
+        assert_eq!(r.render(new_id(), None, &with, &related), "RO 大同[]");
+        // 關聯欄位沒有值
+        assert_eq!(
+            r.render(new_id(), None, &data(json!({})), &related),
+            "RO []"
+        );
+        // 找不到目標資料
+        let other = data(json!({ "customer": new_id().to_string() }));
+        assert_eq!(r.render(new_id(), None, &other, &related), "RO []");
+        // 沒有讀取目標資料
+        assert_eq!(r.render(new_id(), None, &with, &none()), "RO []");
+
+        // 關聯欄位已停用
+        let mut fields = fx.fields.clone();
+        fields[1].is_active = false;
+        let mut r = TitleRenderer::new(Some(template), &fields);
+        r.set_target_fields(fx.customer_entity, fx.targets[&fx.customer_entity].clone());
+        assert_eq!(r.render(new_id(), None, &with, &related), "RO []");
+
+        // 關聯欄位已變更為其他型態（例如文字，存值仍是原本的 id）
+        let mut fields = fx.fields.clone();
+        fields[1].data_type = DataType::Text;
+        let mut r = TitleRenderer::new(Some(template), &fields);
+        r.set_target_fields(fx.customer_entity, fx.targets[&fx.customer_entity].clone());
+        assert_eq!(r.render(new_id(), None, &with, &related), "RO []");
+
+        // 目標欄位已不存在於目標資料類別
+        let mut r = TitleRenderer::new(Some("[{customer.gone}]"), &fx.fields);
+        r.set_target_fields(fx.customer_entity, fx.targets[&fx.customer_entity].clone());
+        assert_eq!(r.render(new_id(), None, &with, &related), "[]");
     }
 }

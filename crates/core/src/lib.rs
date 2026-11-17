@@ -10,6 +10,7 @@
 //! - [`numbering`]：單號規則的解析與產生
 //! - [`record_data`]：依欄位定義驗證並正規化資料的 `data`
 //! - [`record_lines`]：明細子表的明細與主表一起存檔時的檢查（比對 id、不可重複、操作紀錄）
+//! - `record_titles`：產生資料標題時批次讀取關聯引用的目標資料
 //! - [`records`]：自訂資料類別的資料（通用資料 API）
 //! - [`recalculate`]：重新計算資料類別所有資料的公式欄位
 //! - [`relations`]：關聯欄位的檢查與回應中的關聯資訊
@@ -33,6 +34,7 @@ pub mod numbering;
 pub mod recalculate;
 pub mod record_data;
 pub mod record_lines;
+mod record_titles;
 pub mod records;
 pub mod relations;
 pub mod schema;

@@ -23,9 +23,9 @@ use serde_json::{Map, Value};
 
 use crate::CoreError;
 use crate::record_data::FieldError;
+use crate::record_titles::Titles;
 use crate::records::fields_and_table;
 use crate::schema::entity_from_row;
-use crate::title::TitleRenderer;
 
 /// 關聯的資料不存在、已刪除或屬於其他資料類別時的錯誤訊息。
 pub const MSG_RELATION_NOT_FOUND: &str = "關聯的資料不存在或已刪除";
@@ -160,8 +160,8 @@ pub async fn check_relations(
 
 /// 依 `fields`（資料所屬資料類別的欄位定義）填入每筆資料的 [`Record::relations`]。
 ///
-/// 目標資料依目標資料類別的標題規則產生標題（含已刪除的資料）；目標為系統資料類別時讀取其專屬
-/// 資料表（系統欄位與 `custom_data`）。找不到目標資料或目標資料類別時，
+/// 目標資料依目標資料類別的標題規則產生標題（含已刪除的資料；目標範本的關聯引用也讀取一層）；
+/// 目標為系統資料類別時讀取其專屬資料表（系統欄位與 `custom_data`）。找不到目標資料或目標資料類別時，
 /// `title` 為空字串、`deleted` 為 `true`。
 pub async fn attach_relations(
     conn: &mut PgConnection,
@@ -191,14 +191,18 @@ pub async fn attach_relations(
         let entity = entity_from_row(row)?;
         // 系統資料類別（storage = table）的資料在專屬資料表，系統欄位與 custom_data 合成 data（§7.1）
         let (target_fields, table) = fields_and_table(conn, &entity, table_name).await?;
-        let titles = TitleRenderer::new(entity.title_template.as_deref(), &target_fields);
         let rows = match &table {
             Some(table) => system_db::find_records_by_ids(&mut *conn, table, &ids).await?,
             None => record_db::find_records_by_ids(&mut *conn, entity_id, &ids).await?,
         };
+        // 目標範本中的關聯引用也照常讀取（只多讀一層，§8.5）
+        let titles = Titles::load(conn, &entity, &target_fields).await?;
+        let related = titles
+            .related(conn, rows.iter().filter_map(|r| r.data.as_object()))
+            .await?;
         for row in rows {
             let title = match row.data.as_object() {
-                Some(data) => titles.render(row.id, row.record_no.as_deref(), data),
+                Some(data) => titles.render(row.id, row.record_no.as_deref(), data, &related),
                 None => String::new(),
             };
             resolved.insert((entity_id, row.id), (title, row.deleted));
