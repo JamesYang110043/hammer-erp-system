@@ -1,4 +1,5 @@
-//! 自訂資料類別的資料（docs/architecture.md §6.1、§7.1、§8.5 `custom_records`、§9.4、§10）。
+//! 通用資料 API：自訂資料類別與系統資料類別的資料（docs/architecture.md §6.1、§7.1、§8.5 `custom_records`、
+//! §8.6、§9.4、§10）。依資料類別的 `storage` 讀寫 `custom_records` 或專屬資料表，在 `hammer_core::records` 分流。
 //!
 //! 讀取需要 `record.read`，寫入需要 `record.write`（在 `hammer_core::records` 檢查）。
 //! request / response 型別、端點清單、query string 格式與錯誤見 [`hammer_shared::record`]。

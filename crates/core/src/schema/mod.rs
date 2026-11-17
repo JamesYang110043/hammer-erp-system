@@ -23,7 +23,7 @@ pub mod index;
 pub mod rules;
 pub mod type_change;
 
-use hammer_db::dynamic_index::{self, ExpressionIndex};
+use hammer_db::dynamic_index::{self, ExpressionIndex, IndexTable};
 use hammer_db::record as record_db;
 use hammer_db::schema::{
     self as db, ENTITY_KEY_UNIQUE, EntityRow, EntityUpdate, FIELD_KEY_UNIQUE, FieldAttributes,
@@ -1062,7 +1062,8 @@ async fn write_field(
 /// 呼叫端已用 `FOR UPDATE` 鎖定資料類別，寫入資料時以 `FOR SHARE` 鎖定（[`crate::records`]），
 /// 所以檢查與建立之間不會有新的資料寫入。
 ///
-/// 系統資料類別（`storage = table`）的 `custom_data` 索引在 M3 處理，目前不建立。
+/// 系統資料類別（`storage = table`）的索引建立在專屬資料表的 `custom_data`（§7.5）；系統欄位
+/// （實體欄位）的索引由 migration 建立，不使用動態索引。
 async fn sync_indexes(
     tx: &mut PgTransaction<'_>,
     entity: &EntityDefinition,
@@ -1070,9 +1071,19 @@ async fn sync_indexes(
     next: &FieldDefinition,
 ) -> Result<(), CoreError> {
     let changes = index::plan_index_changes(current, next);
-    if changes.is_empty() || entity.storage != EntityStorage::CustomRecords {
+    if changes.is_empty() || next.storage != FieldStorage::Json {
         return Ok(());
     }
+    let table_name = match entity.storage {
+        EntityStorage::CustomRecords => None,
+        EntityStorage::Table => Some(system_table_name(tx, entity).await?),
+    };
+    let table = match table_name.as_deref() {
+        None => IndexTable::CustomRecords {
+            entity_id: entity.id,
+        },
+        Some(table_name) => IndexTable::System { table_name },
+    };
     for change in changes {
         match change {
             IndexChange::Drop(kind) => {
@@ -1083,14 +1094,14 @@ async fn sync_indexes(
             IndexChange::Create(kind) => {
                 let unique = kind == IndexKind::Unique;
                 if unique {
-                    ensure_no_duplicates(tx, entity.id, &next.field_key).await?;
+                    ensure_no_duplicates(tx, table, &next.field_key).await?;
                 }
                 let name = index::index_name(kind, &entity.key, &next.field_key)?;
                 dynamic_index::create_index(
                     &mut **tx,
                     &ExpressionIndex {
                         name: &name,
-                        entity_id: entity.id,
+                        table,
                         field_key: &next.field_key,
                         unique,
                     },
@@ -1103,15 +1114,36 @@ async fn sync_indexes(
     Ok(())
 }
 
+/// 系統資料類別的專屬資料表名稱（migration 寫入的 `entity_definitions.table_name`）。
+async fn system_table_name(
+    tx: &mut PgTransaction<'_>,
+    entity: &EntityDefinition,
+) -> Result<String, CoreError> {
+    db::find_entity_by_id(&mut **tx, entity.id)
+        .await?
+        .and_then(|row| row.table_name)
+        .ok_or_else(|| {
+            CoreError::Internal(format!("系統資料類別 {} 沒有設定 table_name", entity.key))
+        })
+}
+
 /// 未刪除的資料中，欄位值不可重複。有重複 → [`CoreError::DuplicateValues`]。
 async fn ensure_no_duplicates(
     tx: &mut PgTransaction<'_>,
-    entity_id: Id,
+    table: IndexTable<'_>,
     field_key: &str,
 ) -> Result<(), CoreError> {
     // 常數很小，不會溢位
     let limit = MAX_DUPLICATE_VALUES as i32;
-    let rows = dynamic_index::find_duplicate_values(&mut **tx, entity_id, field_key, limit).await?;
+    let rows = match table {
+        IndexTable::CustomRecords { entity_id } => {
+            dynamic_index::find_duplicate_values(&mut **tx, entity_id, field_key, limit).await?
+        }
+        IndexTable::System { table_name } => {
+            dynamic_index::find_duplicate_values_in_table(&mut **tx, table_name, field_key, limit)
+                .await?
+        }
+    };
     let Some(first) = rows.first() else {
         return Ok(());
     };
