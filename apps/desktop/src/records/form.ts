@@ -41,10 +41,10 @@ export function isFormSupported(field: FieldDefinition): boolean {
   return field.data_type !== 'formula';
 }
 
-/** 表單顯示的欄位：有效、設定為顯示、存在 JSON 的欄位，依 `sort_order`。 */
+/** 表單顯示的欄位：有效、設定為顯示的欄位（系統欄位與自訂欄位，§7.1），依 `sort_order`。 */
 export function formFields(fields: readonly FieldDefinition[]): FieldDefinition[] {
   return fields
-    .filter((f) => f.is_active && f.is_visible && f.storage === 'json' && isFormSupported(f))
+    .filter((f) => f.is_active && f.is_visible && isFormSupported(f))
     .sort((a, b) => a.sort_order - b.sort_order);
 }
 

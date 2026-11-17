@@ -1,5 +1,5 @@
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Form, Table, Typography } from 'antd';
+import { Button, Form, Radio, Table, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 
 import type { Attachment } from '../../api/attachments';
@@ -8,6 +8,7 @@ import { isNumericType } from '../../records/display';
 import { validateFieldValue } from '../../records/form';
 import type { FormulaCell } from '../../records/formulaPreview';
 import { LINES_FORM_KEY, LINE_ID_KEY, lineFormValues } from '../../records/lines';
+import { isExclusiveLineField, rowsToClear } from '../../records/masterData';
 import type { DetailTable } from '../../records/lines';
 import { FormulaValue } from './FieldValue';
 import { RecordFieldInput } from './RecordFieldInput';
@@ -31,6 +32,7 @@ interface Row {
  * 欄位依明細子表的欄位定義產生（沿用 {@link RecordFieldInput} 與相同的驗證規則）；
  * 可以新增、刪除列，儲存格直接編輯。伺服器回傳的列錯誤由父元件以 `form.setFields` 標示在儲存格。
  * 公式欄位唯讀，顯示父元件提供的預覽（`formulaCell`）。
+ * 聯絡人的「主要聯絡人」以單選輸入：選了一列，其他列自動取消（{@link isExclusiveLineField}）。
  */
 export function LinesTable({
   table,
@@ -116,12 +118,27 @@ export function LinesTable({
                           },
                         ]}
                       >
-                        <RecordFieldInput
-                          field={field}
-                          disabled={field.is_readonly || undefined}
-                          relation={id ? refs.relations[id]?.[field.field_key] : undefined}
-                          attachment={id ? refs.attachments[id]?.[field.field_key] : undefined}
-                        />
+                        {isExclusiveLineField(field) ? (
+                          <ExclusiveRadio
+                            label={`第 ${row.name + 1} 列${field.label}`}
+                            disabled={field.is_readonly || undefined}
+                            onSelect={() => {
+                              const values = rows.map((r) =>
+                                form.getFieldValue([...listName, r.name, field.field_key]),
+                              );
+                              for (const i of rowsToClear(values, row.name)) {
+                                form.setFieldValue([...listName, i, field.field_key], false);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <RecordFieldInput
+                            field={field}
+                            disabled={field.is_readonly || undefined}
+                            relation={id ? refs.relations[id]?.[field.field_key] : undefined}
+                            attachment={id ? refs.attachments[id]?.[field.field_key] : undefined}
+                          />
+                        )}
                       </Form.Item>
                     );
                   },
@@ -178,5 +195,42 @@ export function LinesTable({
         );
       }}
     </Form.List>
+  );
+}
+
+/**
+ * 整組明細只能有一列勾選的欄位（例如主要聯絡人）：單選按鈕，值為 `true` / `false`。
+ *
+ * 點選未選的列 → 選取並呼叫 `onSelect`（由父元件取消其他列）；再點一次已選的列 → 取消（可以沒有任何一列）。
+ */
+function ExclusiveRadio({
+  value,
+  onChange,
+  onSelect,
+  disabled,
+  id,
+  label,
+}: {
+  value?: unknown;
+  onChange?: (value: boolean) => void;
+  onSelect: () => void;
+  disabled?: boolean;
+  id?: string;
+  label: string;
+}) {
+  const checked = value === true;
+  return (
+    <Radio
+      id={id}
+      aria-label={label}
+      checked={checked}
+      disabled={disabled}
+      onClick={() => {
+        if (!checked) {
+          onSelect();
+        }
+        onChange?.(!checked);
+      }}
+    />
   );
 }

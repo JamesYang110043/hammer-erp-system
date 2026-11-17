@@ -336,6 +336,50 @@ describe('資料類別頁', () => {
     expect(row.queryByRole('button', { name: '刪除' })).not.toBeInTheDocument();
   });
 
+  it('system_entity_edit_hides_numbering_and_allows_relation_title', async () => {
+    const system = {
+      ...REPAIR,
+      id: 'system-product',
+      key: 'product',
+      label: '商品',
+      is_system: true,
+      storage: 'table' as const,
+      title_template: '{code} {name}',
+    };
+    const invoke = renderEntitiesPage({
+      list_all_entities: () => [system],
+      update_entity: () =>
+        validationError(
+          { field: 'title_template' },
+          '標題範本引用的「unit_id.nam」不是關聯資料類別的欄位',
+        ),
+    });
+    const user = userEvent.setup();
+    const row = await rowOf('product');
+    await user.click(row.getByRole('button', { name: '編輯' }));
+    const dialog = within(await screen.findByRole('dialog'));
+
+    // 系統資料類別不可設定單號規則
+    expect(dialog.queryByLabelText('單號規則')).not.toBeInTheDocument();
+    expect(dialog.getByText(/關聯欄位\.目標欄位/)).toBeInTheDocument();
+    const title = dialog.getByLabelText('標題範本');
+    await user.clear(title);
+    await user.type(title, typed('{code} {unit_id.nam}'));
+    await user.click(dialog.getByRole('button', { name: /儲\s*存/ }));
+
+    // 伺服器的錯誤顯示在欄位下方
+    expect(
+      await dialog.findByText('標題範本引用的「unit_id.nam」不是關聯資料類別的欄位'),
+    ).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith('update_entity', {
+      key: 'product',
+      req: expect.objectContaining({
+        numbering_pattern: null,
+        title_template: '{code} {unit_id.nam}',
+      }),
+    });
+  });
+
   it('reorders_entities_within_group_by_keyboard_drag', async () => {
     const invoke = renderEntitiesPage({ reorder_entities: () => [] });
     const user = userEvent.setup();

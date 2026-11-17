@@ -15,6 +15,7 @@ import { entityIcon } from './entityIcons';
 
 /**
  * 主表（主檔、單據）的明細子表：列表、新增、編輯、停用、刪除，點「欄位設定」進入明細子表的欄位定義頁。
+ * 系統主檔（客戶、廠商）的明細子表（聯絡人）由系統建立，不顯示新增、停用、刪除。
  *
  * 明細子表不出現在左側選單，只能從這裡管理（docs/architecture.md §8.5「明細子表」）。
  */
@@ -65,15 +66,18 @@ export function DetailEntitiesCard({ parent }: { parent: EntityDefinition }) {
     <Card
       title="明細子表"
       extra={
-        <Button
-          icon={<PlusOutlined />}
-          onClick={() =>
-            setFormTarget({ mode: 'create', parent, sortOrderFor: () => nextSortOrder })
-          }
-          disabled={!entities.data}
-        >
-          新增明細子表
-        </Button>
+        // 系統資料類別不可新增明細子表（§7.1）
+        !parent.is_system && (
+          <Button
+            icon={<PlusOutlined />}
+            onClick={() =>
+              setFormTarget({ mode: 'create', parent, sortOrderFor: () => nextSortOrder })
+            }
+            disabled={!entities.data}
+          >
+            新增明細子表
+          </Button>
+        )
       }
     >
       {entities.isError && (
@@ -86,6 +90,7 @@ export function DetailEntitiesCard({ parent }: { parent: EntityDefinition }) {
       )}
       <Typography.Paragraph type="secondary">
         明細子表是單據中的多筆明細（例如訂單的商品明細），在「{parent.label}」的表單中編輯。
+        {parent.is_system && '系統資料類別不可新增明細子表，可以在既有的明細子表新增自訂欄位。'}
       </Typography.Paragraph>
       <Table<EntityDefinition>
         rowKey="id"

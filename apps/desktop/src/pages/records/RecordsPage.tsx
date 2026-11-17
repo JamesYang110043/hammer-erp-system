@@ -338,7 +338,7 @@ function RecordList({
 }
 
 /**
- * 自訂資料類別的列表（需要 `record.read`），路徑 `/entities/:key`。
+ * 資料類別的列表（自訂與系統資料類別共用，需要 `record.read`），路徑 `/entities/:key`。
  *
  * 欄位依版面設定（沒有版面時依欄位定義）產生；分頁、排序與篩選在伺服器端處理。
  */
@@ -359,10 +359,10 @@ export function RecordsPage() {
     return <Card title="資料列表" loading />;
   }
   const detail = entity.data;
-  if (detail.entity.storage !== 'custom_records' || !detail.entity.is_active) {
+  if (!detail.entity.is_active) {
     return (
       <Card title={detail.entity.label}>
-        <Empty description="此資料類別尚未開放列表" />
+        <Empty description="此資料類別已停用" />
       </Card>
     );
   }

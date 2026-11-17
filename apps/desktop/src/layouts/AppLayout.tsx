@@ -17,14 +17,17 @@ import { useLogout } from '../auth/session';
 import { ChangePasswordForm } from '../components/ChangePasswordForm';
 import { StatusBar } from '../components/StatusBar';
 import { PERMISSIONS } from '../bindings';
+import type { EntityDefinition } from '../bindings';
 import {
   CONNECTION_SETTINGS_PATH,
   ENTITIES_PATH,
   ENTITY_MENU_AFTER,
   MODULES,
+  masterDataEntities,
   menuEntityGroups,
 } from '../modules';
 import { entityIcon } from '../pages/schema/entityIcons';
+import { MASTER_DATA_LABEL } from '../schema/entities';
 
 const { Header, Sider, Content, Footer } = Layout;
 
@@ -44,27 +47,43 @@ export function AppLayout() {
   // 資料類別選單需要 `record.read`；新增或修改資料類別後（invalidate `entities`）自動更新
   const canReadRecords = can(PERMISSIONS.RECORD_READ);
   const entities = useEntities({ enabled: canReadRecords });
-  // 依種類分組（主檔、單據），組內依選單排序
+  const entityItem = (e: EntityDefinition): MenuItem => ({
+    key: `${ENTITIES_PATH}/${e.key}`,
+    icon: entityIcon(e.icon),
+    label: e.label,
+  });
+  // 自訂資料類別依種類分組（主檔、單據），組內依選單排序
   const entityItems: MenuItem[] = canReadRecords
     ? menuEntityGroups(entities.data ?? []).map((g) => ({
         type: 'group',
         key: `${ENTITIES_PATH}-${g.kind}`,
         label: g.label,
-        children: g.entities.map((e) => ({
-          key: `${ENTITIES_PATH}/${e.key}`,
-          icon: entityIcon(e.icon),
-          label: e.label,
-        })),
+        children: g.entities.map(entityItem),
       }))
     : [];
+  // 系統主檔（商品、客戶、廠商…）放在選單最上方
+  const masterData = canReadRecords ? masterDataEntities(entities.data ?? []) : [];
+  const masterDataItems: MenuItem[] =
+    masterData.length > 0
+      ? [
+          {
+            type: 'group',
+            key: `${ENTITIES_PATH}-system`,
+            label: MASTER_DATA_LABEL,
+            children: masterData.map(entityItem),
+          },
+          { type: 'divider', key: `${ENTITIES_PATH}-system-divider` },
+        ]
+      : [];
 
   // 選單依權限顯示；頁面本身也有檢查（router.tsx 的 RequirePermission）
-  const menuItems: MenuItem[] = MODULES.filter((m) => !m.permission || can(m.permission)).flatMap(
-    (m) => {
+  const menuItems: MenuItem[] = [
+    ...masterDataItems,
+    ...MODULES.filter((m) => !m.permission || can(m.permission)).flatMap((m) => {
       const item: MenuItem = { key: m.path, icon: m.icon, label: m.label };
       return m.path === ENTITY_MENU_AFTER ? [item, ...entityItems] : [item];
-    },
-  );
+    }),
+  ];
 
   // `/customers/123` → `customers`；`/entities/repair` → `entities/repair`
   const [first = '', second = ''] = location.pathname.split('/').slice(1);

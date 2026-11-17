@@ -4,9 +4,7 @@ import {
   DollarOutlined,
   FileTextOutlined,
   SettingOutlined,
-  ShopOutlined,
   SwapOutlined,
-  TeamOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import type { ReactNode } from 'react';
@@ -41,8 +39,6 @@ export interface ModuleEntry {
  */
 export const MODULES: readonly ModuleEntry[] = [
   { path: 'inventory', label: '進出貨', icon: <SwapOutlined /> },
-  { path: 'customers', label: '客戶', icon: <TeamOutlined /> },
-  { path: 'suppliers', label: '廠商', icon: <ShopOutlined /> },
   { path: 'invoices', label: '發票', icon: <FileTextOutlined /> },
   { path: 'finance', label: '財務', icon: <DollarOutlined /> },
   {
@@ -86,10 +82,23 @@ export const ENTITIES_PATH = 'entities';
 export const ENTITY_MENU_AFTER = 'finance';
 
 /**
+ * 「基本資料」分組列出的資料類別：啟用中的系統主檔（docs/architecture.md §8.6 的商品、商品分類、
+ * 單位、客戶、廠商），依選單排序。
+ *
+ * 系統資料類別與自訂資料類別共用動態列表與表單（§7.1），路徑同樣是 `/entities/:key`；
+ * 明細子表（聯絡人）在主表的表單中編輯，不列出。
+ */
+export function masterDataEntities(entities: readonly EntityDefinition[]): EntityDefinition[] {
+  return groupEntities(entities.filter((e) => e.is_active && e.is_system)).flatMap((g) =>
+    g.kind === 'master' ? g.entities : [],
+  );
+}
+
+/**
  * 左側選單列出的資料類別：啟用中的自訂資料類別（`custom_records`），依種類分組（主檔、單據），
  * 組內依選單排序；沒有資料類別的組不列出。
  *
- * 明細子表從所屬的主表開啟，不放在選單；系統資料類別有各自的模組頁面（M3 起）。
+ * 明細子表從所屬的主表開啟，不放在選單；系統主檔另外列在「基本資料」（{@link masterDataEntities}）。
  */
 export function menuEntityGroups(entities: readonly EntityDefinition[]): EntityGroup[] {
   return groupEntities(

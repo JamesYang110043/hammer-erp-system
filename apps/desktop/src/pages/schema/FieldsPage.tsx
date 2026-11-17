@@ -44,7 +44,8 @@ function FieldTags({ field }: { field: FieldDefinition }) {
 /**
  * 欄位定義頁（需要 `schema.manage`）：欄位列表、拖曳排序、新增、編輯、停用、變更型態。
  *
- * 自訂的主檔與單據另外顯示明細子表（{@link DetailEntitiesCard}）；明細子表的「返回」回到所屬的主表。
+ * 自訂的主檔與單據、有明細子表的系統主檔另外顯示明細子表（{@link DetailEntitiesCard}）；
+ * 明細子表的「返回」回到所屬的主表。
  */
 export function FieldsPage() {
   const { key = '' } = useParams();
@@ -62,7 +63,14 @@ export function FieldsPage() {
     current?.kind === 'detail'
       ? allEntities.data?.find((e) => e.id === current.parent_entity_id)
       : undefined;
-  const hasDetails = current?.storage === 'custom_records' && current.kind !== 'detail';
+  // 自訂的主檔、單據可以新增明細子表；系統主檔只列出既有的明細子表（例如聯絡人，§7.1）
+  const hasDetails =
+    current !== undefined &&
+    current.kind !== 'detail' &&
+    (!current.is_system ||
+      (allEntities.data ?? []).some(
+        (e) => e.kind === 'detail' && e.parent_entity_id === current.id,
+      ));
 
   const fields = useMemo(() => entity.data?.fields ?? [], [entity.data]);
 
