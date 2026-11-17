@@ -27,7 +27,7 @@ use time::OffsetDateTime;
 use crate::CoreError;
 use crate::numbering::normalize_pattern;
 use crate::record_data::normalize_field_value;
-use crate::title::normalize_template;
+use crate::title::{TargetFields, normalize_template};
 
 use super::type_change::{self, TypeChange};
 
@@ -136,7 +136,11 @@ pub fn plan_create_entity(
         storage: EntityStorage::CustomRecords,
         parent_entity_id,
         numbering_pattern,
-        title_template: validate_title_template(req.title_template.as_deref(), &[])?,
+        title_template: validate_title_template(
+            req.title_template.as_deref(),
+            &[],
+            &TargetFields::new(),
+        )?,
         sort_order: req.sort_order,
     })
 }
@@ -171,10 +175,13 @@ pub fn validate_parent_entity(
 /// - `key` 有帶且與目前不同 → 錯誤（`key`）
 /// - 系統資料類別不可停用（`is_active`）
 /// - 單號規則依 [`normalize_pattern`] 檢查；修改後只影響之後新增的資料；明細子表不可設定
-/// - 標題範本依 [`normalize_template`] 檢查，只能引用 `fields`（資料類別目前的所有欄位，含已停用）
+/// - 標題範本依 [`normalize_template`] 檢查，只能引用 `fields`（資料類別目前的所有欄位，含已停用）；
+///   關聯引用 `{relation.field}` 的後半段只能引用 `targets`（目標資料類別的欄位定義，見
+///   [`crate::title::TitleTemplate::relation_targets`]）中的欄位
 pub fn plan_update_entity(
     current: &EntityDefinition,
     fields: &[FieldDefinition],
+    targets: &TargetFields,
     req: &UpdateEntityRequest,
 ) -> Result<EntityDefinition, CoreError> {
     if let Some(key) = req.key.as_deref()
@@ -196,7 +203,7 @@ pub fn plan_update_entity(
         label: validate_label(&req.label)?,
         icon: optional_text(req.icon.as_deref()),
         numbering_pattern,
-        title_template: validate_title_template(req.title_template.as_deref(), fields)?,
+        title_template: validate_title_template(req.title_template.as_deref(), fields, targets)?,
         sort_order: req.sort_order,
         is_active: req.is_active,
         ..current.clone()
@@ -206,8 +213,10 @@ pub fn plan_update_entity(
 fn validate_title_template(
     template: Option<&str>,
     fields: &[FieldDefinition],
+    targets: &TargetFields,
 ) -> Result<Option<String>, CoreError> {
-    normalize_template(template, fields).map_err(|e| invalid(field::TITLE_TEMPLATE, &e.message()))
+    normalize_template(template, fields, targets)
+        .map_err(|e| invalid(field::TITLE_TEMPLATE, &e.message()))
 }
 
 fn validate_numbering_pattern(pattern: Option<&str>) -> Result<Option<String>, CoreError> {
@@ -1183,6 +1192,7 @@ mod tests {
         let err = plan_update_entity(
             &current,
             &[],
+            &TargetFields::new(),
             &UpdateEntityRequest {
                 numbering_pattern: Some("RP-{000}".into()),
                 ..entity_update(&current)
@@ -1193,6 +1203,7 @@ mod tests {
         let next = plan_update_entity(
             &current,
             &[],
+            &TargetFields::new(),
             &UpdateEntityRequest {
                 label: "零件".into(),
                 ..entity_update(&current)
@@ -1208,6 +1219,7 @@ mod tests {
         let next = plan_update_entity(
             &current,
             &[],
+            &TargetFields::new(),
             &UpdateEntityRequest {
                 label: " 維修 ".into(),
                 icon: Some("tool".into()),
@@ -1236,6 +1248,7 @@ mod tests {
             plan_update_entity(
                 &current,
                 &[],
+                &TargetFields::new(),
                 &UpdateEntityRequest {
                     numbering_pattern: pattern.map(str::to_owned),
                     ..entity_update(&current)
@@ -1267,6 +1280,7 @@ mod tests {
             plan_update_entity(
                 &current,
                 &fields,
+                &TargetFields::new(),
                 &UpdateEntityRequest {
                     title_template: Some(template.to_owned()),
                     ..entity_update(&current)
@@ -1296,6 +1310,7 @@ mod tests {
         let err = plan_update_entity(
             &current,
             &[],
+            &TargetFields::new(),
             &UpdateEntityRequest {
                 key: Some("other".into()),
                 ..entity_update(&current)
@@ -1308,6 +1323,7 @@ mod tests {
         let err = plan_update_entity(
             &system,
             &[],
+            &TargetFields::new(),
             &UpdateEntityRequest {
                 is_active: false,
                 ..entity_update(&system)
@@ -1320,6 +1336,7 @@ mod tests {
             plan_update_entity(
                 &system,
                 &[],
+                &TargetFields::new(),
                 &UpdateEntityRequest {
                     label: "客戶".into(),
                     ..entity_update(&system)

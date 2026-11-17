@@ -91,9 +91,10 @@ use crate::record_lines::{
     LineError, LineFiles, LineTarget, audit_key, audit_value, duplicate_attachments,
     duplicate_line_values, match_lines, unknown_details, validation_error,
 };
+use crate::record_titles::Titles;
 use crate::relations::{attach_relations, check_relations};
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version, entity_from_row, field_from_row};
-use crate::title::TitleRenderer;
+use crate::title::{RelatedRecords, TitleRenderer};
 
 /// 資料不存在或已刪除時的錯誤訊息。
 pub const RECORD_NOT_FOUND: &str = "找不到此資料";
@@ -134,11 +135,8 @@ pub async fn list_records(
     let rows = store
         .list(&mut conn, &filter, page.limit(), page.offset())
         .await?;
-    let titles = renderer(&entity, &fields);
-    let mut items = rows
-        .into_iter()
-        .map(|row| record_from_row(row, &titles))
-        .collect::<Result<Vec<_>, _>>()?;
+    let titles = Titles::load(&mut conn, &entity, &fields).await?;
+    let mut items = titles.records(&mut conn, rows).await?;
     attach_relations(&mut conn, &fields, &mut items).await?;
     attach_files(&mut conn, &fields, &mut items).await?;
     let total = u32::try_from(total).unwrap_or(u32::MAX);
@@ -161,7 +159,10 @@ pub async fn get_record(
         .ok_or_else(record_not_found)?;
     let details = schema_db::list_detail_entities(&mut *conn, entity.id).await?;
     let details = load_details(&mut conn, &entity, details).await?;
-    let record = record_from_row(row, &renderer(&entity, &fields))?;
+    let record = Titles::load(&mut conn, &entity, &fields)
+        .await?
+        .record(&mut conn, row)
+        .await?;
     let mut record = with_relations(&mut conn, &fields, record).await?;
     record.lines = Some(fetch_lines(&mut conn, &details, id).await?);
     Ok(record)
@@ -192,7 +193,7 @@ pub async fn lookup_records(
     })?;
     let limit = query.effective_limit() as usize;
     let terms = query.terms();
-    let titles = renderer(&entity, &fields);
+    let titles = Titles::load(&mut conn, &entity, &fields).await?;
 
     let mut items = Vec::new();
     let mut before = None;
@@ -202,11 +203,15 @@ pub async fn lookup_records(
             .await?;
         let exhausted = (rows.len() as i64) < BATCH;
         before = rows.last().map(|r| r.id);
+        // 關聯引用的目標資料每批一次讀取
+        let related = titles
+            .related(&mut conn, rows.iter().filter_map(|r| r.data.as_object()))
+            .await?;
         for row in rows {
             let Some(data) = row.data.as_object() else {
                 continue;
             };
-            let title = titles.render(row.id, row.record_no.as_deref(), data);
+            let title = titles.render(row.id, row.record_no.as_deref(), data, &related);
             if title_matches(&title, &terms) {
                 items.push(LookupItem { id: row.id, title });
                 if items.len() >= limit {
@@ -375,7 +380,10 @@ pub async fn update_record(
         && formula_errors == current.formula_errors
         && lines.iter().all(|d| !d.changed())
     {
-        let record = record_from_row(current, &renderer(&entity, &fields))?;
+        let record = Titles::load(&mut tx, &entity, &fields)
+            .await?
+            .record(&mut tx, current)
+            .await?;
         let mut record = with_relations(&mut tx, &fields, record).await?;
         record.lines = Some(fetch_lines(&mut tx, &details, id).await?);
         commit(tx).await?;
@@ -1080,21 +1088,21 @@ fn custom_data_of(table: &SystemTable, data: &Value) -> Value {
     Value::Object(map)
 }
 
-/// 資料類別的標題產生器。
-fn renderer<'a>(entity: &EntityDefinition, fields: &'a [FieldDefinition]) -> TitleRenderer<'a> {
-    TitleRenderer::new(entity.title_template.as_deref(), fields)
-}
-
-/// 資料列轉成 API 回應，`title` 由 `titles` 產生；`relations`、`attachments` 為空，由
-/// [`attach_relations`]、[`attach_files`] 填入。`data` 不是 JSON 物件時回傳 [`CoreError::Internal`]。
-pub fn record_from_row(row: RecordRow, titles: &TitleRenderer<'_>) -> Result<Record, CoreError> {
+/// 資料列轉成 API 回應，`title` 由 `titles` 產生（`related` 為關聯引用的目標資料，見
+/// [`crate::title`]）；`relations`、`attachments` 為空，由 [`attach_relations`]、[`attach_files`]
+/// 填入。`data` 不是 JSON 物件時回傳 [`CoreError::Internal`]。
+pub fn record_from_row(
+    row: RecordRow,
+    titles: &TitleRenderer<'_>,
+    related: &RelatedRecords,
+) -> Result<Record, CoreError> {
     let Value::Object(data) = row.data else {
         return Err(CoreError::Internal(
             "custom_records.data 不是 JSON 物件".into(),
         ));
     };
     Ok(Record {
-        title: titles.render(row.id, row.record_no.as_deref(), &data),
+        title: titles.render(row.id, row.record_no.as_deref(), &data, related),
         id: row.id,
         record_no: row.record_no,
         data,
@@ -1241,7 +1249,10 @@ async fn fetch_record(
         .find(tx, entity.id, id)
         .await?
         .ok_or_else(|| CoreError::Internal("寫入後找不到資料".into()))?;
-    let record = record_from_row(row, &renderer(entity, fields))?;
+    let record = Titles::load(tx, entity, fields)
+        .await?
+        .record(tx, row)
+        .await?;
     let mut record = with_relations(tx, fields, record).await?;
     record.lines = Some(fetch_lines(tx, details, id).await?);
     Ok(record)
@@ -2043,11 +2054,9 @@ async fn fetch_lines(
         if !detail.entity.is_active {
             continue;
         }
-        let titles = renderer(&detail.entity, &detail.fields);
-        let mut lines = rows
-            .into_iter()
-            .map(|r| record_from_row(r.into_record_row(), &titles))
-            .collect::<Result<Vec<_>, _>>()?;
+        let titles = Titles::load(conn, &detail.entity, &detail.fields).await?;
+        let rows = rows.into_iter().map(|r| r.into_record_row()).collect();
+        let mut lines = titles.records(conn, rows).await?;
         attach_relations(conn, &detail.fields, &mut lines).await?;
         attach_files(conn, &detail.fields, &mut lines).await?;
         out.insert(detail.entity.key.clone(), lines);
@@ -2599,7 +2608,7 @@ mod tests {
             version: 3,
         };
         let titles = TitleRenderer::new(None, &[]);
-        let r = record_from_row(row.clone(), &titles).unwrap();
+        let r = record_from_row(row.clone(), &titles, &RelatedRecords::new()).unwrap();
         assert_eq!(r.data["qty"], 1);
         assert_eq!(r.record_no.as_deref(), Some("RO-001"));
         assert_eq!(r.title, "RO-001");
@@ -2610,7 +2619,7 @@ mod tests {
             ..row
         };
         assert!(matches!(
-            record_from_row(bad, &titles),
+            record_from_row(bad, &titles, &RelatedRecords::new()),
             Err(CoreError::Internal(_))
         ));
     }

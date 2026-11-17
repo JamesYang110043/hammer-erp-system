@@ -45,6 +45,7 @@ use time::OffsetDateTime;
 use crate::CoreError;
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
+use crate::title::{TargetFields, TitleTemplate};
 use index::{DuplicateValue, IndexChange, IndexKind};
 use rules::field;
 use type_change::StoredRecord;
@@ -427,7 +428,8 @@ pub async fn update_entity(
     let current = lock_entity(&mut tx, key).await?;
     ensure_version(current.version, req.version)?;
     let fields = load_fields(&mut tx, current.id).await?;
-    let next = rules::plan_update_entity(&current, &fields, req)?;
+    let targets = load_title_targets(&mut tx, req.title_template.as_deref(), &fields).await?;
+    let next = rules::plan_update_entity(&current, &fields, &targets, req)?;
     if current.kind == EntityKind::Detail && current.is_active && !next.is_active {
         ensure_entities_not_referenced_by_formulas(&mut tx, &[current.id]).await?;
     }
@@ -1279,6 +1281,25 @@ async fn fetch_field(
         .await?
         .ok_or_else(|| CoreError::Internal("寫入後找不到欄位".into()))?;
     field_from_row(row)
+}
+
+/// 檢查標題範本的關聯引用需要的目標資料類別欄位定義（含已停用）。範本語法不合法時不讀取
+/// （由 [`rules::plan_update_entity`] 回報錯誤）；目標資料類別不存在（已刪除）時不放入。
+async fn load_title_targets(
+    conn: &mut hammer_db::sqlx::PgConnection,
+    template: Option<&str>,
+    fields: &[FieldDefinition],
+) -> Result<TargetFields, CoreError> {
+    let mut targets = TargetFields::new();
+    let Some(Ok(parsed)) = template.map(|t| TitleTemplate::parse(t.trim())) else {
+        return Ok(targets);
+    };
+    for id in parsed.relation_targets(fields) {
+        if db::find_entity_by_id(&mut *conn, id).await?.is_some() {
+            targets.insert(id, load_fields(conn, id).await?);
+        }
+    }
+    Ok(targets)
 }
 
 async fn load_fields(
