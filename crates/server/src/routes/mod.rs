@@ -16,6 +16,7 @@
 pub mod attachments;
 pub mod audit_logs;
 pub mod auth;
+pub mod currencies;
 pub mod entities;
 pub mod health;
 pub mod layouts;
@@ -101,6 +102,22 @@ fn protected_routes() -> Router<AppState> {
         .route("/users/{id}/reset-password", post(users::reset_password))
         .route("/users/{id}/unlock", post(users::unlock))
         .route("/audit-logs", get(audit_logs::list))
+        .route(
+            "/currencies",
+            get(currencies::list_currencies).post(currencies::create_currency),
+        )
+        .route("/currencies/{code}", patch(currencies::update_currency))
+        .route(
+            "/exchange-rates",
+            get(currencies::list_exchange_rates).post(currencies::create_exchange_rate),
+        )
+        // 固定路徑 `effective` 優先於 `{id}`（匯率 id 是 uuid，不會衝突）
+        .route("/exchange-rates/effective", get(currencies::effective_rate))
+        .route(
+            "/exchange-rates/{id}",
+            patch(currencies::update_exchange_rate).delete(currencies::delete_exchange_rate),
+        )
+        .route("/tax-rates", get(currencies::list_tax_rates))
         .route("/entities", get(entities::list).post(entities::create))
         // 固定路徑 `order` 優先於 `{key}`。`order` 也是合法的資料類別代碼，
         // 所以同一路徑的 GET、PATCH、DELETE 轉給單一資料類別的端點

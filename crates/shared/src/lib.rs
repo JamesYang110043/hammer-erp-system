@@ -7,8 +7,10 @@ pub mod attachment;
 pub mod audit;
 pub mod auth;
 pub mod constants;
+pub mod currency;
 pub mod decimal;
 pub mod error;
+pub mod exchange_rate;
 pub mod health;
 pub mod id;
 pub mod layout;
@@ -18,6 +20,7 @@ pub mod record;
 pub mod role;
 pub mod schema;
 pub mod setup;
+pub mod tax_rate;
 pub mod time;
 pub mod user;
 

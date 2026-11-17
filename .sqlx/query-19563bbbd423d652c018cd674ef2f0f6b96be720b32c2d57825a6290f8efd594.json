@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE exchange_rates\n        SET rate = $3, updated_by = $4, version = version + 1\n        WHERE id = $1 AND version = $2 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Numeric",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "19563bbbd423d652c018cd674ef2f0f6b96be720b32c2d57825a6290f8efd594"
+}

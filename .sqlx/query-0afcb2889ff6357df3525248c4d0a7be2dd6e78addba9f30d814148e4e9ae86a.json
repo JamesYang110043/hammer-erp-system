@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO currencies (id, code, name, symbol, decimal_places, created_by, updated_by)\n        VALUES ($1, $2, $3, $4, $5, $6, $6)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Int2",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0afcb2889ff6357df3525248c4d0a7be2dd6e78addba9f30d814148e4e9ae86a"
+}
