@@ -10,6 +10,9 @@
 //! - 選擇器：[`list_records_before`]（排除 `is_active = false`）
 //! - 唯一性：[`value_taken`]
 //! - 關聯：[`lock_existing_records`]（關聯欄位指向系統資料類別時，檢查並鎖定目標資料）
+//! - 明細（系統明細子表，例如 `customer_contacts`，[`SystemDetailTable`]）：[`list_lines`]、
+//!   [`list_lines_for_update`]、[`insert_line`]、[`update_line`]、[`soft_delete_lines`]、
+//!   [`soft_delete_child_records`]、[`line_value_taken`]；格式與 [`crate::record`] 的明細相同（[`LineRow`]）
 //!
 //! # 安全
 //!
@@ -37,7 +40,7 @@ use uuid::Uuid;
 
 use crate::DbError;
 use crate::dynamic_index::is_safe_identifier;
-use crate::record::{RecordListFilter, RecordRow, Source, push_conditions, push_order};
+use crate::record::{LineRow, RecordListFilter, RecordRow, Source, push_conditions, push_order};
 
 /// 選擇器排除停用資料時使用的實體欄位（§7.1）。
 pub const IS_ACTIVE_COLUMN: &str = "is_active";
@@ -232,8 +235,22 @@ pub async fn insert_record<'e>(
 }
 
 fn insert_query(table: &SystemTable, new: &NewSystemRecord<'_>) -> QueryBuilder<Postgres> {
+    insert_query_with_parent(table, new, None)
+}
+
+/// 明細的父資料：`(父資料欄位, 主表資料 id, sort_order)`。
+type LineParent<'a> = (&'a str, Uuid, i32);
+
+fn insert_query_with_parent(
+    table: &SystemTable,
+    new: &NewSystemRecord<'_>,
+    parent: Option<LineParent<'_>>,
+) -> QueryBuilder<Postgres> {
     let mut qb = QueryBuilder::new("INSERT INTO \"");
     qb.push(&table.name).push("\" (id");
+    if let Some((column, _, _)) = parent {
+        qb.push(", \"").push(column).push("\", sort_order");
+    }
     for c in &table.columns {
         qb.push(", \"").push(&c.name).push("\"");
     }
@@ -241,6 +258,12 @@ fn insert_query(table: &SystemTable, new: &NewSystemRecord<'_>) -> QueryBuilder<
         ", custom_data, formula_errors, created_at, created_by, updated_at, updated_by) SELECT ",
     )
     .push_bind(new.id);
+    if let Some((_, parent_id, sort_order)) = parent {
+        qb.push(", ")
+            .push_bind(parent_id)
+            .push(", ")
+            .push_bind(sort_order);
+    }
     for c in &table.columns {
         qb.push(", ");
         SystemTable::push_column_value(&mut qb, c);
@@ -290,18 +313,8 @@ pub async fn update_record<'e>(
 }
 
 fn update_query(table: &SystemTable, update: &SystemRecordUpdate<'_>) -> QueryBuilder<Postgres> {
-    let mut qb = QueryBuilder::new("UPDATE \"");
-    qb.push(&table.name).push("\" SET ");
-    for c in &table.columns {
-        qb.push("\"").push(&c.name).push("\" = ");
-        SystemTable::push_column_value(&mut qb, c);
-        qb.push(", ");
-    }
-    qb.push("custom_data = ")
-        .push_bind(update.custom_data)
-        .push(", formula_errors = ")
-        .push_bind(update.formula_errors)
-        .push(", updated_by = ")
+    let mut qb = set_columns(table, update.custom_data, update.formula_errors);
+    qb.push(", updated_by = ")
         .push_bind(update.updated_by)
         .push(", version = version + 1 FROM (SELECT ")
         .push_bind(update.data)
@@ -310,6 +323,27 @@ fn update_query(table: &SystemTable, update: &SystemRecordUpdate<'_>) -> QueryBu
         .push(" AND version = ")
         .push_bind(update.version)
         .push(" AND deleted_at IS NULL");
+    qb
+}
+
+/// `UPDATE "<table>" SET <實體欄位> = …, custom_data = …, formula_errors = …`；實體欄位的值從子查詢
+/// `v.d` 取出，呼叫端接著加上 `FROM (SELECT <data>::jsonb AS d) AS v` 與條件。
+fn set_columns(
+    table: &SystemTable,
+    custom_data: &Value,
+    formula_errors: Option<&Value>,
+) -> QueryBuilder<Postgres> {
+    let mut qb = QueryBuilder::new("UPDATE \"");
+    qb.push(&table.name).push("\" SET ");
+    for c in &table.columns {
+        qb.push("\"").push(&c.name).push("\" = ");
+        SystemTable::push_column_value(&mut qb, c);
+        qb.push(", ");
+    }
+    qb.push("custom_data = ")
+        .push_bind(custom_data)
+        .push(", formula_errors = ")
+        .push_bind(formula_errors);
     qb
 }
 
@@ -430,6 +464,18 @@ fn value_taken_query(
         .push("\" WHERE id <> ")
         .push_bind(exclude_id)
         .push(" AND deleted_at IS NULL AND ");
+    push_value_equals(&mut qb, table, field_key, value);
+    qb.push(")");
+    qb
+}
+
+/// `field_key` 的值等於 `value`：系統欄位以 `lower(<欄位>)` 比較，自訂欄位比較 `custom_data -> field_key`。
+fn push_value_equals(
+    qb: &mut QueryBuilder<Postgres>,
+    table: &SystemTable,
+    field_key: &str,
+    value: &Value,
+) {
     match table.column(field_key) {
         Some(c) => {
             qb.push("lower(\"")
@@ -445,8 +491,6 @@ fn value_taken_query(
                 .push_bind(value);
         }
     }
-    qb.push(")");
-    qb
 }
 
 /// `ids` 中在資料表 `table_name` 存在且未刪除的 id，並以 `FOR SHARE` 鎖定這些列，避免在寫入關聯的
@@ -472,6 +516,274 @@ fn lock_existing_query(table_name: &str, ids: &[Uuid]) -> Result<QueryBuilder<Po
         .push_bind(ids.to_vec())
         .push(") AND deleted_at IS NULL ORDER BY id FOR SHARE");
     Ok(qb)
+}
+
+// ---------------------------------------------------------------------------
+// 明細（系統明細子表）
+// ---------------------------------------------------------------------------
+
+/// 系統明細子表的專屬資料表（例如 `customer_contacts`）：[`SystemTable`] 加上指向主表資料的父資料欄位
+/// （例如 `customer_id`）。明細的順序存在 `sort_order`（§7.1）。只能由 [`SystemDetailTable::new`] 建立。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemDetailTable {
+    table: SystemTable,
+    parent_column: String,
+}
+
+impl SystemDetailTable {
+    /// `parent_column` 不符合 [`is_safe_identifier`] → [`DbError::UnsafeIdentifier`]。
+    pub fn new(table: SystemTable, parent_column: impl Into<String>) -> Result<Self, DbError> {
+        let parent_column = parent_column.into();
+        if !is_safe_identifier(&parent_column) {
+            return Err(DbError::UnsafeIdentifier(parent_column));
+        }
+        Ok(Self {
+            table,
+            parent_column,
+        })
+    }
+
+    /// 資料表與系統欄位。
+    pub fn table(&self) -> &SystemTable {
+        &self.table
+    }
+
+    /// 父資料欄位名稱。
+    pub fn parent_column(&self) -> &str {
+        &self.parent_column
+    }
+}
+
+/// 主表資料 `parent_id` 的未刪除明細，依 `sort_order`、`id` 排序。`entity_id` 為明細子表。
+pub async fn list_lines<'e>(
+    executor: impl PgExecutor<'e>,
+    detail: &SystemDetailTable,
+    parent_id: Uuid,
+) -> Result<Vec<LineRow>, DbError> {
+    let mut qb = lines_query(detail, parent_id, false);
+    let rows = qb
+        .build_query_as::<LineRecord>()
+        .fetch_all(executor)
+        .await?;
+    Ok(rows.into_iter().map(LineRow::from).collect())
+}
+
+/// 同 [`list_lines`]，並鎖定這些列（`FOR UPDATE`）。必須在 transaction 內呼叫。
+pub async fn list_lines_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    detail: &SystemDetailTable,
+    parent_id: Uuid,
+) -> Result<Vec<LineRow>, DbError> {
+    let mut qb = lines_query(detail, parent_id, true);
+    let rows = qb
+        .build_query_as::<LineRecord>()
+        .fetch_all(executor)
+        .await?;
+    Ok(rows.into_iter().map(LineRow::from).collect())
+}
+
+/// [`LineRow`] 的查詢結果（`sqlx::FromRow`）。
+#[derive(sqlx::FromRow)]
+struct LineRecord {
+    id: Uuid,
+    entity_id: Uuid,
+    parent_record_id: Uuid,
+    sort_order: i32,
+    data: Value,
+    formula_errors: Option<Value>,
+    created_at: OffsetDateTime,
+    created_by: Option<Uuid>,
+    updated_at: OffsetDateTime,
+    updated_by: Option<Uuid>,
+    version: i32,
+}
+
+impl From<LineRecord> for LineRow {
+    fn from(r: LineRecord) -> Self {
+        Self {
+            id: r.id,
+            entity_id: r.entity_id,
+            parent_record_id: r.parent_record_id,
+            sort_order: r.sort_order,
+            data: r.data,
+            formula_errors: r.formula_errors,
+            created_at: r.created_at,
+            created_by: r.created_by,
+            updated_at: r.updated_at,
+            updated_by: r.updated_by,
+            version: r.version,
+        }
+    }
+}
+
+fn lines_query(
+    detail: &SystemDetailTable,
+    parent_id: Uuid,
+    for_update: bool,
+) -> QueryBuilder<Postgres> {
+    let table = &detail.table;
+    let mut qb = QueryBuilder::new("SELECT id, ");
+    qb.push_bind(table.entity_id)
+        .push("::uuid AS entity_id, \"")
+        .push(&detail.parent_column)
+        .push("\" AS parent_record_id, sort_order, ");
+    table.push_data(&mut qb);
+    qb.push(
+        " AS data, formula_errors, created_at, created_by, updated_at, updated_by, version \
+         FROM \"",
+    )
+    .push(&table.name)
+    .push("\" WHERE \"")
+    .push(&detail.parent_column)
+    .push("\" = ")
+    .push_bind(parent_id)
+    .push(" AND deleted_at IS NULL ORDER BY sort_order, id");
+    if for_update {
+        qb.push(" FOR UPDATE");
+    }
+    qb
+}
+
+/// 新增一列明細（屬於主表資料 `parent_id`、順序為 `sort_order`）。違反唯一索引時回傳違反 UNIQUE 限制的
+/// [`DbError::Sqlx`]。
+pub async fn insert_line<'e>(
+    executor: impl PgExecutor<'e>,
+    detail: &SystemDetailTable,
+    new: &NewSystemRecord<'_>,
+    parent_id: Uuid,
+    sort_order: i32,
+) -> Result<(), DbError> {
+    insert_query_with_parent(
+        &detail.table,
+        new,
+        Some((&detail.parent_column, parent_id, sort_order)),
+    )
+    .build()
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// 修改一列明細所需的資料。
+#[derive(Debug, Clone)]
+pub struct SystemLineUpdate<'a> {
+    pub id: Uuid,
+    pub sort_order: i32,
+    /// 完整的資料（JSON 物件），所有實體欄位依此取代。
+    pub data: &'a Value,
+    /// 自訂欄位（JSON 物件），整個取代 `custom_data`。
+    pub custom_data: &'a Value,
+    pub formula_errors: Option<&'a Value>,
+    pub updated_by: Uuid,
+}
+
+/// 取代明細的實體欄位、`custom_data`、`formula_errors` 與 `sort_order` 並遞增 `version`。明細的樂觀鎖定
+/// 由主表的 `version` 負責，這裡不檢查版本；呼叫前必須已用 [`list_lines_for_update`] 鎖定。回傳影響的筆數。
+pub async fn update_line<'e>(
+    executor: impl PgExecutor<'e>,
+    detail: &SystemDetailTable,
+    update: &SystemLineUpdate<'_>,
+) -> Result<u64, DbError> {
+    let result = update_line_query(detail, update)
+        .build()
+        .execute(executor)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+fn update_line_query(
+    detail: &SystemDetailTable,
+    update: &SystemLineUpdate<'_>,
+) -> QueryBuilder<Postgres> {
+    let mut qb = set_columns(&detail.table, update.custom_data, update.formula_errors);
+    qb.push(", sort_order = ")
+        .push_bind(update.sort_order)
+        .push(", updated_by = ")
+        .push_bind(update.updated_by)
+        .push(", version = version + 1 FROM (SELECT ")
+        .push_bind(update.data)
+        .push("::jsonb AS d) AS v WHERE id = ")
+        .push_bind(update.id)
+        .push(" AND deleted_at IS NULL");
+    qb
+}
+
+/// 軟刪除多筆明細並遞增 `version`。回傳影響的筆數。
+pub async fn soft_delete_lines<'e>(
+    executor: impl PgExecutor<'e>,
+    detail: &SystemDetailTable,
+    ids: &[Uuid],
+    deleted_at: OffsetDateTime,
+    deleted_by: Uuid,
+) -> Result<u64, DbError> {
+    let mut qb = soft_delete_query(&detail.table, deleted_at, deleted_by);
+    qb.push(" WHERE id = ANY(")
+        .push_bind(ids.to_vec())
+        .push(") AND deleted_at IS NULL");
+    Ok(qb.build().execute(executor).await?.rows_affected())
+}
+
+/// 軟刪除主表資料 `parent_id` 的所有未刪除明細。回傳影響的筆數。
+pub async fn soft_delete_child_records<'e>(
+    executor: impl PgExecutor<'e>,
+    detail: &SystemDetailTable,
+    parent_id: Uuid,
+    deleted_at: OffsetDateTime,
+    deleted_by: Uuid,
+) -> Result<u64, DbError> {
+    let mut qb = soft_delete_query(&detail.table, deleted_at, deleted_by);
+    qb.push(" WHERE \"")
+        .push(&detail.parent_column)
+        .push("\" = ")
+        .push_bind(parent_id)
+        .push(" AND deleted_at IS NULL");
+    Ok(qb.build().execute(executor).await?.rows_affected())
+}
+
+fn soft_delete_query(
+    table: &SystemTable,
+    deleted_at: OffsetDateTime,
+    deleted_by: Uuid,
+) -> QueryBuilder<Postgres> {
+    let mut qb = QueryBuilder::new("UPDATE \"");
+    qb.push(&table.name)
+        .push("\" SET deleted_at = ")
+        .push_bind(deleted_at)
+        .push(", updated_by = ")
+        .push_bind(deleted_by)
+        .push(", version = version + 1");
+    qb
+}
+
+/// **不屬於**主表資料 `parent_id` 的未刪除明細，是否有在 `field_key` 有相同的值（比較方式同
+/// [`value_taken`]）。用於明細違反「不可重複」時找出重複的欄位。
+pub async fn line_value_taken<'e>(
+    executor: impl PgExecutor<'e>,
+    detail: &SystemDetailTable,
+    parent_id: Uuid,
+    field_key: &str,
+    value: &Value,
+) -> Result<bool, DbError> {
+    let mut qb = line_value_taken_query(detail, parent_id, field_key, value);
+    Ok(qb.build_query_scalar::<bool>().fetch_one(executor).await?)
+}
+
+fn line_value_taken_query(
+    detail: &SystemDetailTable,
+    parent_id: Uuid,
+    field_key: &str,
+    value: &Value,
+) -> QueryBuilder<Postgres> {
+    let mut qb = QueryBuilder::new("SELECT EXISTS (SELECT 1 FROM \"");
+    qb.push(&detail.table.name)
+        .push("\" WHERE \"")
+        .push(&detail.parent_column)
+        .push("\" <> ")
+        .push_bind(parent_id)
+        .push(" AND deleted_at IS NULL AND ");
+    push_value_equals(&mut qb, &detail.table, field_key, value);
+    qb.push(")");
+    qb
 }
 
 #[cfg(test)]
@@ -675,5 +987,105 @@ mod tests {
             .as_str()
             .to_owned();
         assert!(sql.ends_with("AND custom_data -> $2 = $3)"), "{sql}");
+    }
+
+    fn contacts() -> SystemDetailTable {
+        let table = SystemTable::new(
+            Uuid::nil(),
+            "customer_contacts",
+            vec![
+                SystemColumn {
+                    name: "name".into(),
+                    column_type: ColumnType::Text,
+                },
+                SystemColumn {
+                    name: "is_primary".into(),
+                    column_type: ColumnType::Boolean,
+                },
+            ],
+        )
+        .unwrap();
+        SystemDetailTable::new(table, "customer_id").unwrap()
+    }
+
+    #[test]
+    fn detail_rejects_unsafe_parent_column() {
+        let table = SystemTable::new(Uuid::nil(), "customer_contacts", vec![]).unwrap();
+        assert!(matches!(
+            SystemDetailTable::new(table, "customer_id\" --"),
+            Err(DbError::UnsafeIdentifier(_))
+        ));
+    }
+
+    #[test]
+    fn lines_select_parent_and_sort_order() {
+        let sql = lines_query(&contacts(), Uuid::nil(), true)
+            .sql()
+            .as_str()
+            .to_owned();
+        assert_eq!(
+            sql,
+            "SELECT id, $1::uuid AS entity_id, \"customer_id\" AS parent_record_id, sort_order, \
+             (custom_data || jsonb_strip_nulls(jsonb_build_object('name', \"name\", \
+             'is_primary', \"is_primary\"))) AS data, formula_errors, created_at, created_by, \
+             updated_at, updated_by, version FROM \"customer_contacts\" \
+             WHERE \"customer_id\" = $2 AND deleted_at IS NULL ORDER BY sort_order, id FOR UPDATE"
+        );
+    }
+
+    #[test]
+    fn insert_and_update_line_write_parent_and_sort_order() {
+        let data = serde_json::json!({});
+        let new = NewSystemRecord {
+            id: Uuid::nil(),
+            data: &data,
+            custom_data: &data,
+            formula_errors: None,
+            created_by: Uuid::nil(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        let detail = contacts();
+        assert_eq!(
+            insert_query_with_parent(
+                detail.table(),
+                &new,
+                Some((detail.parent_column(), Uuid::nil(), 2))
+            )
+            .sql()
+            .as_str(),
+            "INSERT INTO \"customer_contacts\" (id, \"customer_id\", sort_order, \"name\", \
+             \"is_primary\", custom_data, formula_errors, created_at, created_by, updated_at, \
+             updated_by) SELECT $1, $2, $3, (v.d ->> 'name'), (v.d ->> 'is_primary')::boolean, \
+             $4, $5, $6, $7, $8, $9 FROM (SELECT $10::jsonb AS d) AS v"
+        );
+        let update = SystemLineUpdate {
+            id: Uuid::nil(),
+            sort_order: 1,
+            data: &data,
+            custom_data: &data,
+            formula_errors: None,
+            updated_by: Uuid::nil(),
+        };
+        assert_eq!(
+            update_line_query(&detail, &update).sql().as_str(),
+            "UPDATE \"customer_contacts\" SET \"name\" = (v.d ->> 'name'), \
+             \"is_primary\" = (v.d ->> 'is_primary')::boolean, custom_data = $1, \
+             formula_errors = $2, sort_order = $3, updated_by = $4, version = version + 1 \
+             FROM (SELECT $5::jsonb AS d) AS v WHERE id = $6 AND deleted_at IS NULL"
+        );
+    }
+
+    #[test]
+    fn line_value_taken_excludes_same_parent() {
+        let value = serde_json::json!("x");
+        let sql = line_value_taken_query(&contacts(), Uuid::nil(), "region", &value)
+            .sql()
+            .as_str()
+            .to_owned();
+        assert_eq!(
+            sql,
+            "SELECT EXISTS (SELECT 1 FROM \"customer_contacts\" WHERE \"customer_id\" <> $1 \
+             AND deleted_at IS NULL AND custom_data -> $2 = $3)"
+        );
     }
 }

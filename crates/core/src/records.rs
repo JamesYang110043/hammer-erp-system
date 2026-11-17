@@ -11,8 +11,9 @@
 //! - `custom_records`：所有欄位存在 `custom_records.data`（`hammer_db::record`）
 //! - `table`（系統資料類別，§7.1）：系統欄位（`storage = column`）存在專屬資料表的實體欄位，其他欄位存在
 //!   `custom_data`（`hammer_db::system_record`）。request 與回應的 `data` 同時包含兩者，驗證、篩選與
-//!   排序、樂觀鎖定、操作紀錄、標題都與自訂資料類別相同；沒有單號。系統資料類別的明細（聯絡人）在 #108
-//!   處理，目前不讀寫明細（request 帶 `lines` 時與不存在的明細子表相同）
+//!   排序、樂觀鎖定、操作紀錄、標題都與自訂資料類別相同；沒有單號。系統明細子表（聯絡人）的明細存在
+//!   明細子表的專屬資料表（[`LineStore`]），父資料欄位為 `<主表代碼>_id`（例如 `customer_id`），規則與
+//!   自訂明細子表相同
 //!
 //! 寫入都在單一 transaction 內完成，並寫入一筆 `audit_logs`：`entity_key` 為資料類別代碼，
 //! `before_data` / `after_data` 只包含有變動的欄位（[`AuditDiff`]）。修改沒有任何變動時不寫入。
@@ -59,7 +60,8 @@ use hammer_db::schema as schema_db;
 use hammer_db::sqlx::postgres::PgQueryResult;
 use hammer_db::sqlx::{PgConnection, PgPool, PgTransaction};
 use hammer_db::system_record::{
-    self as system_db, ColumnType, NewSystemRecord, SystemColumn, SystemRecordUpdate, SystemTable,
+    self as system_db, ColumnType, NewSystemRecord, SystemColumn, SystemDetailTable,
+    SystemLineUpdate, SystemRecordUpdate, SystemTable,
 };
 use hammer_shared::pagination::{Page, PageRequest};
 use hammer_shared::record::{
@@ -157,12 +159,8 @@ pub async fn get_record(
         .find(&mut conn, entity.id, id)
         .await?
         .ok_or_else(record_not_found)?;
-    let details = match store {
-        Store::CustomRecords => schema_db::list_detail_entities(&mut *conn, entity.id).await?,
-        // 系統明細子表在 #108 處理
-        Store::Table(_) => Vec::new(),
-    };
-    let details = load_details(&mut conn, details).await?;
+    let details = schema_db::list_detail_entities(&mut *conn, entity.id).await?;
+    let details = load_details(&mut conn, &entity, details).await?;
     let record = record_from_row(row, &renderer(&entity, &fields))?;
     let mut record = with_relations(&mut conn, &fields, record).await?;
     record.lines = Some(fetch_lines(&mut conn, &details, id).await?);
@@ -247,13 +245,14 @@ pub async fn create_record(
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
     let (entity, fields, store) = load_target_for_write(&mut tx, entity_key).await?;
-    let details = store_details_for_write(&mut tx, &entity, &store).await?;
+    let details = load_details_for_write(&mut tx, &entity).await?;
     let formulas = formulas_of(&fields, &details);
     let master = normalize_record_data(&fields, &req.data, WriteMode::Create);
     let master = system_rules(&store, &entity.key, master, None);
     let mut line_errors = Vec::new();
     let mut lines =
         prepare_lines(&mut tx, &details, &req.lines, None, false, &mut line_errors).await?;
+    line_errors.extend(system_line_rules(&lines));
     let mut data = validation_error(master, line_errors)?;
     check_relations(&mut tx, &fields, &data, None).await?;
     if let Store::Table(_) = store {
@@ -351,7 +350,7 @@ pub async fn update_record(
     let current = lock_record(&mut tx, &store, entity.id, id).await?;
     ensure_version(current.version, req.version)?;
 
-    let details = store_details_for_write(&mut tx, &entity, &store).await?;
+    let details = load_details_for_write(&mut tx, &entity).await?;
     let formulas = formulas_of(&fields, &details);
     let existing = data_object(&current.data)?;
     let master = normalize_record_data(&fields, &req.data, WriteMode::Update { existing });
@@ -368,6 +367,7 @@ pub async fn update_record(
         &mut line_errors,
     )
     .await?;
+    line_errors.extend(system_line_rules(&lines));
     let mut data = validation_error(master, line_errors)?;
     let formula_errors = compute_formulas(&mut tx, &formulas, &mut data, &mut lines, now).await?;
     let formula_errors = errors_to_json(&formula_errors);
@@ -465,32 +465,24 @@ pub async fn delete_record(
     if let Store::Table(_) = store {
         master_data::check_delete(&mut tx, &entity.key, id).await?;
     }
-    let (details, lines) = match store {
-        Store::CustomRecords => (
-            schema_db::list_detail_entities_for_share(&mut *tx, entity.id).await?,
-            db::list_lines(&mut *tx, id).await?,
-        ),
-        // 系統明細子表在 #108 處理
-        Store::Table(_) => (Vec::new(), Vec::new()),
-    };
+    // 含已停用的明細子表
+    let details = load_details_for_write(&mut tx, &entity).await?;
+    let lines = detail_lines(&mut tx, &details, id).await?;
 
     ensure_version_matched(
         store
             .soft_delete(&mut tx, id, version, now, ctx.user_id)
             .await?,
     )?;
-    if !lines.is_empty() {
-        db::soft_delete_child_records(&mut *tx, id, now, ctx.user_id).await?;
-    }
+    soft_delete_detail_lines(&mut tx, &details, &lines, id, now, ctx.user_id).await?;
 
     // 操作紀錄包含所有明細（含已停用的明細子表）
     let mut before = current.data.clone();
     if let Value::Object(map) = &mut before {
-        for detail in &details {
-            let rows: Vec<&LineRow> = lines.iter().filter(|r| r.entity_id == detail.id).collect();
+        for (detail, rows) in details.iter().zip(&lines) {
             if !rows.is_empty() {
                 map.insert(
-                    audit_key(&detail.key),
+                    audit_key(&detail.entity.key),
                     audit_value(rows.iter().map(|r| (r.id, &r.data))),
                 );
             }
@@ -795,6 +787,20 @@ async fn load_fields_of(
     if !entity.is_active || entity.kind == EntityKind::Detail {
         return Err(CoreError::NotFound(ENTITY_NOT_FOUND.into()));
     }
+    let (fields, table) = fields_and_table(conn, &entity, table_name).await?;
+    let store = match table {
+        None => Store::CustomRecords,
+        Some(table) => Store::Table(table),
+    };
+    Ok((entity, fields, store))
+}
+
+/// 資料類別的所有欄位定義（含已停用）；系統資料類別（`storage = table`）另外回傳專屬資料表與系統欄位。
+async fn fields_and_table(
+    conn: &mut PgConnection,
+    entity: &EntityDefinition,
+    table_name: Option<String>,
+) -> Result<(Vec<FieldDefinition>, Option<SystemTable>), CoreError> {
     let rows = schema_db::list_fields(&mut *conn, entity.id).await?;
     let columns: Vec<(String, Option<String>)> = rows
         .iter()
@@ -805,16 +811,16 @@ async fn load_fields_of(
         .into_iter()
         .map(field_from_row)
         .collect::<Result<Vec<_>, _>>()?;
-    let store = match entity.storage {
-        EntityStorage::CustomRecords => Store::CustomRecords,
+    let table = match entity.storage {
+        EntityStorage::CustomRecords => None,
         EntityStorage::Table => {
             let table_name = table_name.ok_or_else(|| {
                 CoreError::Internal(format!("系統資料類別 {} 沒有設定 table_name", entity.key))
             })?;
-            Store::Table(system_table(entity.id, &table_name, &fields, &columns)?)
+            Some(system_table(entity.id, &table_name, &fields, &columns)?)
         }
     };
-    Ok((entity, fields, store))
+    Ok((fields, table))
 }
 
 /// 系統資料類別的資料表與系統欄位。`columns` 為 `storage = column` 的欄位 `(field_key, column_name)`；
@@ -1257,22 +1263,46 @@ async fn commit(tx: PgTransaction<'_>) -> Result<(), CoreError> {
 pub(crate) struct Detail {
     pub(crate) entity: EntityDefinition,
     pub(crate) fields: Vec<FieldDefinition>,
+    /// 明細的存放位置。
+    store: LineStore,
 }
 
-/// 載入明細子表的欄位定義。
+/// 明細的存放位置（§7.1、§8.5 `custom_records`「明細子表」）。
+enum LineStore {
+    /// 自訂明細子表：`custom_records`（`parent_record_id` 指向主表資料）。
+    CustomRecords,
+    /// 系統明細子表：專屬資料表（例如 `customer_contacts`），父資料欄位為 `<主表代碼>_id`。
+    Table(SystemDetailTable),
+}
+
+/// 系統明細子表指向主表資料的欄位名稱（§7.1：`customer_id` / `supplier_id`）。
+fn parent_column(master_key: &str) -> String {
+    format!("{master_key}_id")
+}
+
+/// 載入主表 `master` 的明細子表的欄位定義與存放位置。
 async fn load_details(
     conn: &mut PgConnection,
+    master: &EntityDefinition,
     rows: Vec<schema_db::EntityRow>,
 ) -> Result<Vec<Detail>, CoreError> {
     let mut details = Vec::with_capacity(rows.len());
     for row in rows {
+        let table_name = row.table_name.clone();
         let entity = entity_from_row(row)?;
-        let fields = schema_db::list_fields(&mut *conn, entity.id)
-            .await?
-            .into_iter()
-            .map(field_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
-        details.push(Detail { entity, fields });
+        let (fields, table) = fields_and_table(conn, &entity, table_name).await?;
+        let store = match table {
+            None => LineStore::CustomRecords,
+            Some(table) => LineStore::Table(
+                SystemDetailTable::new(table, parent_column(&master.key))
+                    .map_err(|e| CoreError::Internal(e.to_string()))?,
+            ),
+        };
+        details.push(Detail {
+            entity,
+            fields,
+            store,
+        });
     }
     Ok(details)
 }
@@ -1283,19 +1313,66 @@ pub(crate) async fn load_details_for_write(
     master: &EntityDefinition,
 ) -> Result<Vec<Detail>, CoreError> {
     let rows = schema_db::list_detail_entities_for_share(&mut **tx, master.id).await?;
-    load_details(tx, rows).await
+    load_details(tx, master, rows).await
 }
 
-/// 同 [`load_details_for_write`]；系統資料類別的明細子表在 #108 處理，目前視為沒有明細子表。
-async fn store_details_for_write(
-    tx: &mut PgTransaction<'_>,
-    master: &EntityDefinition,
-    store: &Store,
-) -> Result<Vec<Detail>, CoreError> {
-    match store {
-        Store::CustomRecords => load_details_for_write(tx, master).await,
-        Store::Table(_) => Ok(Vec::new()),
+/// 主表資料 `parent_id` 每個明細子表（`details`，含已停用）的未刪除明細，與 `details` 的順序相同，
+/// 每個明細子表內依 `sort_order`、`id` 排序。
+async fn detail_lines(
+    conn: &mut PgConnection,
+    details: &[Detail],
+    parent_id: Id,
+) -> Result<Vec<Vec<LineRow>>, CoreError> {
+    // 自訂明細子表的明細都在 custom_records，一次讀出
+    let custom = if details
+        .iter()
+        .any(|d| matches!(d.store, LineStore::CustomRecords))
+    {
+        db::list_lines(&mut *conn, parent_id).await?
+    } else {
+        Vec::new()
+    };
+    let mut out = Vec::with_capacity(details.len());
+    for detail in details {
+        let rows = match &detail.store {
+            LineStore::CustomRecords => custom
+                .iter()
+                .filter(|r| r.entity_id == detail.entity.id)
+                .cloned()
+                .collect(),
+            LineStore::Table(table) => system_db::list_lines(&mut *conn, table, parent_id).await?,
+        };
+        out.push(rows);
     }
+    Ok(out)
+}
+
+/// 軟刪除主表資料 `parent_id` 的所有明細（刪除主表時）。`lines` 為 [`detail_lines`] 的結果。
+async fn soft_delete_detail_lines(
+    tx: &mut PgTransaction<'_>,
+    details: &[Detail],
+    lines: &[Vec<LineRow>],
+    parent_id: Id,
+    now: OffsetDateTime,
+    deleted_by: Id,
+) -> Result<(), CoreError> {
+    let mut custom = false;
+    for (detail, rows) in details.iter().zip(lines) {
+        if rows.is_empty() {
+            continue;
+        }
+        match &detail.store {
+            LineStore::CustomRecords => custom = true,
+            LineStore::Table(table) => {
+                system_db::soft_delete_child_records(&mut **tx, table, parent_id, now, deleted_by)
+                    .await?;
+            }
+        }
+    }
+    if custom {
+        db::soft_delete_child_records(&mut **tx, parent_id, now, deleted_by).await?;
+    }
+    Ok(())
 }
 
 /// 一列明細的寫入方式。
@@ -1415,9 +1492,14 @@ async fn prepare_lines<'d>(
             continue;
         };
         let existing = match parent_id {
-            Some(parent_id) => {
-                db::list_lines_for_update(&mut **tx, detail.entity.id, parent_id).await?
-            }
+            Some(parent_id) => match &detail.store {
+                LineStore::CustomRecords => {
+                    db::list_lines_for_update(&mut **tx, detail.entity.id, parent_id).await?
+                }
+                LineStore::Table(table) => {
+                    system_db::list_lines_for_update(&mut **tx, table, parent_id).await?
+                }
+            },
             None => Vec::new(),
         };
         let unchanged: Vec<LineInput>;
@@ -1502,10 +1584,16 @@ async fn prepare_line(
         Some(existing) => WriteMode::Update { existing },
         None => WriteMode::Create,
     };
-    let data = match normalize_record_data(&detail.fields, &line.data, mode) {
+    let mut data = match normalize_record_data(&detail.fields, &line.data, mode) {
         Ok(data) => data,
         Err(errors) => return Ok(Err(errors)),
     };
+    if let LineStore::Table(_) = detail.store {
+        let errors = master_data::check_data(&detail.entity.key, &mut data, existing);
+        if !errors.is_empty() {
+            return Ok(Err(errors));
+        }
+    }
     match check_relations(tx, &detail.fields, &data, existing).await {
         Ok(()) => {}
         Err(CoreError::InvalidFields(errors)) => return Ok(Err(errors)),
@@ -1516,6 +1604,23 @@ async fn prepare_line(
         Err(CoreError::InvalidFields(errors)) => Ok(Err(errors)),
         Err(e) => Err(e),
     }
+}
+
+/// 系統明細子表的業務規則（[`master_data::check_lines`]，例如主要聯絡人最多一位）。只檢查通過欄位驗證的
+/// 明細；自訂明細子表不檢查。
+fn system_line_rules(details: &[DetailWrite<'_>]) -> Vec<LineError> {
+    details
+        .iter()
+        .filter(|d| matches!(d.detail.store, LineStore::Table(_)))
+        .flat_map(|d| {
+            let rows: Vec<(usize, &Map<String, Value>)> = d
+                .lines
+                .iter()
+                .filter_map(|l| Some((l.index, l.data.as_object()?)))
+                .collect();
+            master_data::check_lines(&d.detail.entity.key, &rows)
+        })
+        .collect()
 }
 
 /// 主表與有效明細子表的公式欄位（[`Formulas`]）。
@@ -1606,14 +1711,32 @@ async fn write_lines(
 ) -> Result<(), DbError> {
     for detail in details {
         if !detail.removed.is_empty() {
-            db::soft_delete_lines(&mut **tx, &detail.removed, now, ctx.user_id).await?;
+            match &detail.detail.store {
+                LineStore::CustomRecords => {
+                    db::soft_delete_lines(&mut **tx, &detail.removed, now, ctx.user_id).await?;
+                }
+                LineStore::Table(table) => {
+                    system_db::soft_delete_lines(
+                        &mut **tx,
+                        table,
+                        &detail.removed,
+                        now,
+                        ctx.user_id,
+                    )
+                    .await?;
+                }
+            }
         }
     }
     for detail in details {
         for line in &detail.lines {
-            match line.action() {
-                LineAction::Unchanged => {}
-                LineAction::Update => {
+            let table = match &detail.detail.store {
+                LineStore::CustomRecords => None,
+                LineStore::Table(table) => Some(table),
+            };
+            match (line.action(), table) {
+                (LineAction::Unchanged, _) => {}
+                (LineAction::Update, None) => {
                     // 已由 list_lines_for_update 鎖定
                     db::update_line(
                         &mut **tx,
@@ -1625,7 +1748,41 @@ async fn write_lines(
                     )
                     .await?;
                 }
-                LineAction::Insert => {
+                (LineAction::Update, Some(table)) => {
+                    let custom_data = custom_data_of(table.table(), &line.data);
+                    system_db::update_line(
+                        &mut **tx,
+                        table,
+                        &SystemLineUpdate {
+                            id: line.id,
+                            sort_order: line.sort_order,
+                            data: &line.data,
+                            custom_data: &custom_data,
+                            formula_errors: line.formula_errors.as_ref(),
+                            updated_by: ctx.user_id,
+                        },
+                    )
+                    .await?;
+                }
+                (LineAction::Insert, Some(table)) => {
+                    let custom_data = custom_data_of(table.table(), &line.data);
+                    system_db::insert_line(
+                        &mut **tx,
+                        table,
+                        &NewSystemRecord {
+                            id: line.id,
+                            data: &line.data,
+                            custom_data: &custom_data,
+                            formula_errors: line.formula_errors.as_ref(),
+                            created_by: ctx.user_id,
+                            created_at: now,
+                        },
+                        parent_id,
+                        line.sort_order,
+                    )
+                    .await?;
+                }
+                (LineAction::Insert, None) => {
                     db::insert_record(
                         &mut **tx,
                         &NewRecord {
@@ -1701,15 +1858,23 @@ async fn line_write_error(
                 let Some(value) = line.data.get(&field.field_key) else {
                     continue;
                 };
-                match db::line_value_taken(
-                    pool,
-                    detail.detail.entity.id,
-                    parent_id,
-                    &field.field_key,
-                    value,
-                )
-                .await
-                {
+                let taken = match &detail.detail.store {
+                    LineStore::CustomRecords => {
+                        db::line_value_taken(
+                            pool,
+                            detail.detail.entity.id,
+                            parent_id,
+                            &field.field_key,
+                            value,
+                        )
+                        .await
+                    }
+                    LineStore::Table(table) => {
+                        system_db::line_value_taken(pool, table, parent_id, &field.field_key, value)
+                            .await
+                    }
+                };
+                match taken {
                     Ok(true) => errors.push(LineError::field(
                         key,
                         line.index,
@@ -1738,14 +1903,16 @@ async fn fetch_lines(
     details: &[Detail],
     parent_id: Id,
 ) -> Result<BTreeMap<String, Vec<Record>>, CoreError> {
-    let rows = db::list_lines(&mut *conn, parent_id).await?;
+    let rows = detail_lines(conn, details, parent_id).await?;
     let mut out = BTreeMap::new();
-    for detail in details.iter().filter(|d| d.entity.is_active) {
+    for (detail, rows) in details.iter().zip(rows) {
+        if !detail.entity.is_active {
+            continue;
+        }
         let titles = renderer(&detail.entity, &detail.fields);
         let mut lines = rows
-            .iter()
-            .filter(|r| r.entity_id == detail.entity.id)
-            .map(|r| record_from_row(r.clone().into_record_row(), &titles))
+            .into_iter()
+            .map(|r| record_from_row(r.into_record_row(), &titles))
             .collect::<Result<Vec<_>, _>>()?;
         attach_relations(conn, &detail.fields, &mut lines).await?;
         attach_files(conn, &detail.fields, &mut lines).await?;

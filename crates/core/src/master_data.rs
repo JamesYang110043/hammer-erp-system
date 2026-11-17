@@ -9,8 +9,11 @@
 //!   `code` 去除前後空白後儲存
 //! - [`check_references`]：需要查詢資料庫的規則——廠商的預設幣別必須有效、商品分類的上層分類不可形成循環
 //! - [`check_delete`]：還有未刪除商品使用的單位、分類，以及有子分類的分類不能刪除
+//! - [`check_lines`]（純邏輯）：系統明細子表（聯絡人）一起存檔的所有明細之間的規則——同一個客戶或廠商
+//!   最多一位主要聯絡人（`is_primary = true`）。聯絡人每一列的系統欄位限制也由 [`check_data`] 檢查
 //!
-//! 錯誤一律 `422 VALIDATION`：欄位的錯誤為 [`CoreError::InvalidFields`]（`details.fields`），
+//! 錯誤一律 `422 VALIDATION`：欄位的錯誤為 [`CoreError::InvalidFields`]（`details.fields`），明細的錯誤
+//! 為 [`LineError`]（`details.lines`，由 [`crate::records`] 合併），
 //! 刪除被擋下為 [`CoreError::RecordInUse`]（`details.fields` 為空，另有使用中的數量）。
 //!
 //! 修改資料時只檢查值有變動的欄位，避免規則加上之前存入的資料在修改其他欄位時被擋下（與
@@ -29,6 +32,7 @@ use serde_json::{Map, Value};
 
 use crate::CoreError;
 use crate::record_data::FieldError;
+use crate::record_lines::LineError;
 
 /// 單位的資料類別代碼。
 pub const UNIT: &str = "unit";
@@ -40,6 +44,12 @@ pub const PRODUCT: &str = "product";
 pub const CUSTOMER: &str = "customer";
 /// 廠商的資料類別代碼。
 pub const SUPPLIER: &str = "supplier";
+/// 客戶聯絡人的明細子表代碼。
+pub const CUSTOMER_CONTACT: &str = "customer_contact";
+/// 廠商聯絡人的明細子表代碼。
+pub const SUPPLIER_CONTACT: &str = "supplier_contact";
+/// 聯絡人的「主要聯絡人」欄位。
+pub const IS_PRIMARY: &str = "is_primary";
 
 /// 商品 `product_type` 的選項（§8.6）。
 pub const PRODUCT_TYPES: &[&str] = &["goods", "service"];
@@ -55,6 +65,8 @@ pub const MSG_NEGATIVE: &str = "不可小於 0";
 pub const MSG_TAX_ID: &str = "統一編號必須是 8 位數字";
 pub const MSG_CURRENCY: &str = "不是有效的幣別";
 pub const MSG_CATEGORY_CYCLE: &str = "上層分類不可是自己或自己的下層分類";
+pub const MSG_CUSTOMER_PRIMARY: &str = "每個客戶最多只能有一位主要聯絡人";
+pub const MSG_SUPPLIER_PRIMARY: &str = "每個廠商最多只能有一位主要聯絡人";
 
 /// 有 `code` 欄位的資料類別（§7.2）。
 const WITH_CODE: &[&str] = &[UNIT, PRODUCT, CUSTOMER, SUPPLIER];
@@ -100,9 +112,33 @@ pub fn check_data(
                 check.required("default_currency_code");
             }
         }
+        CUSTOMER_CONTACT | SUPPLIER_CONTACT => {
+            check.required("name");
+            check.required(IS_PRIMARY);
+        }
         _ => {}
     }
     check.errors
+}
+
+/// 檢查系統明細子表 `detail_key` 一起存檔的明細（`(在 request 陣列中的位置, 正規化後的資料)`，依順序）
+/// 之間的規則，回傳所有錯誤：
+///
+/// - 聯絡人：`is_primary = true` 最多一列；第二列起的每一列回傳錯誤（`field_key = is_primary`，§7.2）
+///
+/// 其他明細子表不檢查。
+pub fn check_lines(detail_key: &str, lines: &[(usize, &Map<String, Value>)]) -> Vec<LineError> {
+    let message = match detail_key {
+        CUSTOMER_CONTACT => MSG_CUSTOMER_PRIMARY,
+        SUPPLIER_CONTACT => MSG_SUPPLIER_PRIMARY,
+        _ => return Vec::new(),
+    };
+    lines
+        .iter()
+        .filter(|(_, data)| data.get(IS_PRIMARY) == Some(&Value::Bool(true)))
+        .skip(1)
+        .map(|(index, _)| LineError::field(detail_key, *index, IS_PRIMARY, message))
+        .collect()
 }
 
 /// `code` 去除前後空白；去除後為空時移除（之後由必填檢查擋下）。
@@ -524,6 +560,56 @@ mod tests {
     fn other_entities_are_not_checked() {
         let mut data = map(json!({ "tax_id": "x", "credit_limit": "-1" }));
         assert!(check_data("repair_order", &mut data, None).is_empty());
+    }
+
+    #[test]
+    fn contact_name_and_is_primary_are_required() {
+        for detail in [CUSTOMER_CONTACT, SUPPLIER_CONTACT] {
+            let mut data = map(json!({ "name": "王小明", "is_primary": false }));
+            assert!(check_data(detail, &mut data, None).is_empty(), "{detail}");
+            let mut data = map(json!({ "title": "經理" }));
+            assert_eq!(
+                keys(&check_data(detail, &mut data, None)),
+                ["name", IS_PRIMARY]
+            );
+        }
+    }
+
+    fn line_indexes(errors: &[LineError]) -> Vec<Option<usize>> {
+        errors.iter().map(|e| e.index).collect()
+    }
+
+    #[test]
+    fn at_most_one_primary_contact() {
+        let a = map(json!({ "name": "A", "is_primary": true }));
+        let b = map(json!({ "name": "B", "is_primary": false }));
+        let c = map(json!({ "name": "C", "is_primary": true }));
+        let d = map(json!({ "name": "D" }));
+
+        // 沒有或只有一位主要聯絡人
+        assert!(check_lines(CUSTOMER_CONTACT, &[]).is_empty());
+        assert!(check_lines(CUSTOMER_CONTACT, &[(0, &b), (1, &d)]).is_empty());
+        assert!(check_lines(CUSTOMER_CONTACT, &[(0, &a), (1, &b), (2, &d)]).is_empty());
+
+        // 兩位：指出第二列（index 為 request 陣列中的位置，不是過濾後的位置）
+        let errors = check_lines(CUSTOMER_CONTACT, &[(0, &a), (1, &b), (3, &c)]);
+        assert_eq!(line_indexes(&errors), [Some(3)]);
+        for e in &errors {
+            assert_eq!(e.detail_key, CUSTOMER_CONTACT);
+            assert_eq!(e.field_key.as_deref(), Some(IS_PRIMARY));
+            assert_eq!(e.message, MSG_CUSTOMER_PRIMARY);
+        }
+
+        // 三位：第二列起都指出
+        let errors = check_lines(SUPPLIER_CONTACT, &[(0, &a), (1, &c), (2, &a)]);
+        assert_eq!(line_indexes(&errors), [Some(1), Some(2)]);
+        assert_eq!(errors[0].message, MSG_SUPPLIER_PRIMARY);
+    }
+
+    #[test]
+    fn other_details_are_not_checked_for_primary() {
+        let a = map(json!({ "is_primary": true }));
+        assert!(check_lines("parts", &[(0, &a), (1, &a)]).is_empty());
     }
 
     #[test]
