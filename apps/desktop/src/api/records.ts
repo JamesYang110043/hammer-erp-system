@@ -30,6 +30,39 @@ export function useRecords(entityKey: string, query: RecordListQuery) {
   });
 }
 
+/** 每頁筆數的上限（伺服器 `RecordListQuery` 的上限）。 */
+export const MAX_PAGE_SIZE = 200;
+
+/**
+ * 一個資料類別的全部未刪除資料（逐頁取得），給筆數不多、需要整份資料的選擇器使用
+ * （例如商品分類的階層路徑）。`enabled` 為 `false` 時不查詢。
+ *
+ * 放在 {@link recordsKey} 底下：新增、修改、刪除資料後一起重新取得。
+ */
+export function useAllRecords(entityKey: string, enabled = true) {
+  return useQuery({
+    queryKey: [...recordsKey(entityKey), 'all'],
+    queryFn: async () => {
+      const items: DataRecord[] = [];
+      for (let page = 1; ; page += 1) {
+        const result = await unwrap(
+          commands.listRecords(entityKey, {
+            page,
+            page_size: MAX_PAGE_SIZE,
+            sort: null,
+            filters: [],
+          }),
+        );
+        items.push(...result.items);
+        if (result.items.length === 0 || items.length >= result.total) {
+          return items;
+        }
+      }
+    },
+    enabled,
+  });
+}
+
 /**
  * 單筆資料（表單使用）。
  *

@@ -18,7 +18,7 @@ import {
   hasDefaultValue,
   isPropApplicable,
   isPropEditable,
-  isPropVisible,
+  lockedReason,
 } from '../../schema/fieldSettings';
 import type { FieldProp } from '../../schema/fieldSettings';
 import { keyRule } from '../../schema/keyRules';
@@ -42,7 +42,7 @@ const SWITCHES: { prop: FieldProp & keyof FieldFormValues; label: string; extra?
  *
  * - 依資料型態顯示對應的設定（{@link TypeSettingsFields}）
  * - 編輯時欄位代碼與資料型態不可修改（型態另有「變更型態」）
- * - 系統欄位只顯示可以修改的屬性（docs/architecture.md §7.2）
+ * - 系統欄位（docs/architecture.md §7.2）顯示所有屬性，不可修改的停用並說明原因（{@link lockedReason}）
  * - 公式欄位顯示公式設定（{@link FormulaSettings}），不顯示不可重複、預設值、必填（§7.3）；
  *   公式有語法錯誤時停用儲存
  */
@@ -74,9 +74,9 @@ export function FieldFormModal({
   const syntax = useFormulaSyntax(isFormula ? formula : undefined);
   const pending = createField.isPending || updateField.isPending;
 
-  const visible = (prop: FieldProp) =>
-    isPropVisible(field, prop) && isPropApplicable(dataType, prop);
+  const visible = (prop: FieldProp) => isPropApplicable(dataType, prop);
   const editable = (prop: FieldProp) => isPropEditable(field, prop);
+  const locked = (prop: FieldProp) => lockedReason(field, prop);
 
   const close = () => {
     setError(undefined);
@@ -152,7 +152,7 @@ export function FieldFormModal({
             extra={
               editable('field_key')
                 ? '小寫英文字母開頭，只能使用小寫英文字母、數字與底線；建立後不可修改'
-                : undefined
+                : locked('field_key')
             }
           >
             <Input autoComplete="off" disabled={!editable('field_key')} />
@@ -161,14 +161,11 @@ export function FieldFormModal({
             label="顯示名稱"
             name="label"
             rules={[{ required: true, whitespace: true, message: '請輸入顯示名稱' }]}
+            extra={locked('label')}
           >
-            <Input autoComplete="off" />
+            <Input autoComplete="off" disabled={!editable('label')} />
           </Form.Item>
-          <Form.Item
-            label="資料型態"
-            name="data_type"
-            extra={field && !field.is_system ? '要變更型態請使用欄位列表的「變更型態」' : undefined}
-          >
+          <Form.Item label="資料型態" name="data_type" extra={locked('data_type')}>
             {/* 選項不多，不使用虛擬捲動（全部選項都在 DOM 中） */}
             <Select options={typeOptions} disabled={!editable('data_type')} virtual={false} />
           </Form.Item>
@@ -182,6 +179,9 @@ export function FieldFormModal({
               disabled={!editable('type_settings')}
             />
           )}
+          {visible('type_settings') && locked('type_settings') && (
+            <Typography.Paragraph type="secondary">{locked('type_settings')}</Typography.Paragraph>
+          )}
           {visible('type_settings') && (
             <TypeSettingsFields
               dataType={dataType}
@@ -192,7 +192,7 @@ export function FieldFormModal({
           )}
 
           {visible('default_value') && hasDefaultValue(dataType) && (
-            <Form.Item label="預設值" name="default_value">
+            <Form.Item label="預設值" name="default_value" extra={locked('default_value')}>
               <DefaultValueInput
                 dataType={dataType}
                 options={options}
@@ -210,6 +210,7 @@ export function FieldFormModal({
                 name={s.prop}
                 valuePropName="checked"
                 tooltip={s.extra}
+                extra={locked(s.prop)}
               >
                 <Switch disabled={!editable(s.prop)} />
               </Form.Item>
@@ -217,13 +218,17 @@ export function FieldFormModal({
           </div>
 
           {visible('column_width') && (
-            <Form.Item label="欄寬" name="column_width" extra="列表的欄寬（px），留空為自動">
-              <InputNumber min={1} precision={0} />
+            <Form.Item
+              label="欄寬"
+              name="column_width"
+              extra={locked('column_width') ?? '列表的欄寬（px），留空為自動'}
+            >
+              <InputNumber min={1} precision={0} disabled={!editable('column_width')} />
             </Form.Item>
           )}
           {visible('help_text') && (
-            <Form.Item label="說明文字" name="help_text">
-              <Input.TextArea rows={2} />
+            <Form.Item label="說明文字" name="help_text" extra={locked('help_text')}>
+              <Input.TextArea rows={2} disabled={!editable('help_text')} />
             </Form.Item>
           )}
 

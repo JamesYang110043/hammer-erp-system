@@ -454,10 +454,10 @@ export function RecordFormPage() {
     return <Card title="資料" loading />;
   }
   const detail = entity.data;
-  if (detail.entity.storage !== 'custom_records' || !detail.entity.is_active) {
+  if (!detail.entity.is_active) {
     return (
       <Card title={detail.entity.label}>
-        <Empty description="此資料類別尚未開放輸入" />
+        <Empty description="此資料類別已停用" />
       </Card>
     );
   }

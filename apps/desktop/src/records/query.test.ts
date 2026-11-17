@@ -26,10 +26,11 @@ describe('filterOps', () => {
 });
 
 describe('isQueryable', () => {
-  it('requires_active_json_supported_field', () => {
+  it('requires_active_supported_field', () => {
     expect(isQueryable(fieldDef())).toBe(true);
     expect(isQueryable(fieldDef({ is_active: false }))).toBe(false);
-    expect(isQueryable(fieldDef({ storage: 'column' }))).toBe(false);
+    // 系統欄位（實體欄位）也可以篩選（§7.1）
+    expect(isQueryable(fieldDef({ is_system: true, storage: 'column' }))).toBe(true);
     expect(isQueryable(fieldDef({ data_type: 'formula' }))).toBe(false);
     expect(isQueryable(fieldDef({ data_type: 'relation' }))).toBe(true);
     expect(isQueryable(fieldDef({ data_type: 'file' }))).toBe(true);

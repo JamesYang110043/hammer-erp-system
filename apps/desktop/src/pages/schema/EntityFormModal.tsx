@@ -99,7 +99,9 @@ export function EntityFormModal({
     const common = {
       label: values.label.trim(),
       icon: values.icon ?? null,
-      numbering_pattern: isDetail ? null : blankToNull(values.numbering_pattern),
+      // 系統資料類別不可設定單號規則（§7.1）
+      numbering_pattern:
+        isDetail || editing?.is_system ? null : blankToNull(values.numbering_pattern),
       title_template: blankToNull(values.title_template),
     };
     if (editing) {
@@ -226,7 +228,7 @@ export function EntityFormModal({
             />
           </Form.Item>
         )}
-        {!isDetail && (
+        {!isDetail && !editing?.is_system && (
           <Form.Item
             label="單號規則"
             name="numbering_pattern"
@@ -241,7 +243,7 @@ export function EntityFormModal({
           name="title_template"
           extra={
             editing
-              ? '關聯欄位與選擇器顯示的文字，{} 內可寫 record_no（單號）或欄位代碼，例如 {record_no} {name}；空白使用預設規則'
+              ? '關聯欄位與選擇器顯示的文字，{} 內可寫 record_no（單號）、欄位代碼，或「關聯欄位.目標欄位」引用關聯資料的欄位，例如 {record_no} {customer_id.name}；空白使用預設規則'
               : '關聯欄位與選擇器顯示的文字；新的資料類別只能引用 {record_no}（單號），新增欄位後再回來設定；空白使用預設規則'
           }
         >

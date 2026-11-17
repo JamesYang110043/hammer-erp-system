@@ -2,7 +2,11 @@ import { Checkbox, DatePicker, Input, Select } from 'antd';
 import type { Dayjs } from 'dayjs';
 
 import type { Attachment } from '../../api/attachments';
+import { useEntities } from '../../api/schema';
 import type { FieldDefinition, RelationRef } from '../../bindings';
+import { CATEGORY_ENTITY_KEY, isCurrencyField } from '../../records/masterData';
+import { CategorySelect } from './CategorySelect';
+import { CurrencySelect } from './CurrencySelect';
 import { FileInput } from './FileInput';
 import { RelationSelect } from './RelationSelect';
 
@@ -20,8 +24,10 @@ import { RelationSelect } from './RelationSelect';
  * | `boolean` | 勾選框 |
  * | `select` | 下拉單選 |
  * | `multi_select` | 下拉多選 |
- * | `relation` | 可搜尋的下拉選單（{@link RelationSelect}） |
+ * | `relation` | 可搜尋的下拉選單（{@link RelationSelect}）；指向商品分類時顯示階層路徑（{@link CategorySelect}） |
  * | `file` | 上傳、下載、移除（{@link FileInput}） |
+ *
+ * `ui_widget = currency` 的文字欄位以幣別選單輸入（{@link CurrencySelect}）。
  */
 export function RecordFieldInput({
   field,
@@ -45,6 +51,10 @@ export function RecordFieldInput({
   const common = { id, disabled, 'aria-label': field.label };
   const text = typeof value === 'string' ? value : '';
   const options = (field.options ?? []).map((o) => ({ value: o.value, label: o.label }));
+
+  if (isCurrencyField(field)) {
+    return <CurrencySelect {...common} value={text || undefined} onChange={(v) => onChange?.(v)} />;
+  }
 
   switch (field.data_type) {
     case 'long_text':
@@ -131,7 +141,7 @@ export function RecordFieldInput({
       );
     case 'relation':
       return (
-        <RelationSelect
+        <RelationInput
           {...common}
           field={field}
           initial={relation}
@@ -158,4 +168,24 @@ export function RecordFieldInput({
         />
       );
   }
+}
+
+/** 關聯欄位：指向商品分類時用 {@link CategorySelect}，其他用 {@link RelationSelect}。 */
+function RelationInput(props: Parameters<typeof RelationSelect>[0]) {
+  const entities = useEntities();
+  const target = entities.data?.find((e) => e.id === props.field.relation_entity_id);
+  if (target?.key === CATEGORY_ENTITY_KEY) {
+    return (
+      <CategorySelect
+        id={props.id}
+        aria-label={props['aria-label']}
+        disabled={props.disabled}
+        style={props.style}
+        initial={props.initial}
+        value={props.value}
+        onChange={props.onChange}
+      />
+    );
+  }
+  return <RelationSelect {...props} />;
 }

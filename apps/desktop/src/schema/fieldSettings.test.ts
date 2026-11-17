@@ -8,7 +8,7 @@ import {
   canDeactivate,
   hasDefaultValue,
   isPropEditable,
-  isPropVisible,
+  lockedReason,
   isRelationTarget,
   typeSettings,
 } from './fieldSettings';
@@ -82,19 +82,29 @@ describe('isPropEditable', () => {
     expect(isPropEditable(optional, 'is_required')).toBe(true);
   });
 
-  it('system_field_hides_locked_props', () => {
-    const visible = ALL_PROPS.filter((p) => isPropVisible(SYSTEM_FIELD, p));
-    expect(visible).toEqual([
+  it('system_field_locked_props_have_reasons', () => {
+    const locked = ALL_PROPS.filter((p) => lockedReason(SYSTEM_FIELD, p) !== undefined);
+    expect(locked).toEqual([
       'field_key',
       'data_type',
-      'label',
+      // 原本必填，不可取消
       'is_required',
-      'is_visible',
-      'default_value',
-      'column_width',
-      'help_text',
+      'is_readonly',
+      'is_searchable',
+      'is_unique',
+      'type_settings',
     ]);
-    expect(ALL_PROPS.every((p) => isPropVisible(CUSTOM_FIELD, p))).toBe(true);
+    expect(lockedReason(SYSTEM_FIELD, 'data_type')).toBe('系統欄位不可變更型態');
+    expect(lockedReason(SYSTEM_FIELD, 'is_required')).toBe('系統規定必填，不可取消');
+    expect(lockedReason(SYSTEM_FIELD, 'is_unique')).toBe('系統欄位不可修改此屬性');
+    // 原本非必填的系統欄位可以設為必填
+    expect(lockedReason({ ...SYSTEM_FIELD, is_required: false }, 'is_required')).toBeUndefined();
+    // 自訂欄位只有代碼與型態（另有「變更型態」）不可在表單修改；新增時全部可以設定
+    expect(ALL_PROPS.filter((p) => lockedReason(CUSTOM_FIELD, p) !== undefined)).toEqual([
+      'field_key',
+      'data_type',
+    ]);
+    expect(ALL_PROPS.every((p) => lockedReason(undefined, p) === undefined)).toBe(true);
   });
 });
 
@@ -121,11 +131,12 @@ describe('relation and file settings', () => {
     expect(hasDefaultValue('file')).toBe(false);
   });
 
-  it('relation_target_must_be_active_custom_master_or_document', () => {
+  it('relation_target_must_be_active_master_or_document', () => {
     expect(isRelationTarget(REPAIR)).toBe(true);
     expect(isRelationTarget({ ...REPAIR, kind: 'document' })).toBe(true);
     expect(isRelationTarget({ ...REPAIR, kind: 'detail' })).toBe(false);
     expect(isRelationTarget({ ...REPAIR, is_active: false })).toBe(false);
-    expect(isRelationTarget({ ...REPAIR, storage: 'table' })).toBe(false);
+    // 系統資料類別（商品、客戶…）也可以
+    expect(isRelationTarget({ ...REPAIR, is_system: true, storage: 'table' })).toBe(true);
   });
 });

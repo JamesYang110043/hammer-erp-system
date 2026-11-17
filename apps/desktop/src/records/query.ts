@@ -46,18 +46,13 @@ export function queryType(field: FieldDefinition): DataType | undefined {
 }
 
 /**
- * 可以篩選的欄位：有效、存在 JSON、目前支援的型態（公式欄位依結果型態）。
+ * 可以篩選的欄位：有效、目前支援的型態（公式欄位依結果型態）；系統欄位與自訂欄位都可以（§7.1）。
  *
  * 與伺服器 `hammer_core::records::queryable_field` 的規則相同；以伺服器檢查為準。
  */
 export function isQueryable(field: FieldDefinition): boolean {
   const type = queryType(field);
-  return (
-    field.is_active &&
-    field.storage === 'json' &&
-    type !== undefined &&
-    VALUE_DATA_TYPES.includes(type)
-  );
+  return field.is_active && type !== undefined && VALUE_DATA_TYPES.includes(type);
 }
 
 /** 可以排序的欄位：可以篩選的欄位中，`relation`、`file` 以外的型態（docs/architecture.md §10）。 */

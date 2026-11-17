@@ -51,9 +51,10 @@ describe('formFields', () => {
       fieldDef({ field_key: 'rel', data_type: 'relation', sort_order: 3 }),
       fieldDef({ field_key: 'doc', data_type: 'file', sort_order: 4 }),
       fieldDef({ field_key: 'calc', data_type: 'formula' }),
-      fieldDef({ field_key: 'sys', storage: 'column' }),
+      // 系統欄位與自訂欄位一起顯示（§7.1）
+      fieldDef({ field_key: 'sys', is_system: true, storage: 'column', sort_order: 0 }),
     ];
-    expect(formFields(fields).map((f) => f.field_key)).toEqual(['a', 'b', 'rel', 'doc']);
+    expect(formFields(fields).map((f) => f.field_key)).toEqual(['sys', 'a', 'b', 'rel', 'doc']);
   });
 });
 

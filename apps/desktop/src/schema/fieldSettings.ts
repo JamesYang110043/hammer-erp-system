@@ -178,14 +178,33 @@ export function isPropEditable(field: FieldDefinition | undefined, prop: FieldPr
 }
 
 /**
- * 系統欄位的表單是否顯示這個屬性：可以修改的屬性，加上不可修改但需要辨識欄位的代碼與型態。
- * 自訂欄位全部顯示。
+ * 屬性不可修改的原因（顯示在表單上）；可以修改時為 `undefined`。`field` 為 `undefined` 代表新增欄位。
+ *
+ * 系統欄位的所有屬性都顯示，不可修改的屬性停用並說明原因（§7.2）。
  */
-export function isPropVisible(field: FieldDefinition | undefined, prop: FieldProp): boolean {
-  if (!field?.is_system) {
-    return true;
+export function lockedReason(
+  field: FieldDefinition | undefined,
+  prop: FieldProp,
+): string | undefined {
+  if (isPropEditable(field, prop) || !field) {
+    return undefined;
   }
-  return prop === 'field_key' || prop === 'data_type' || SYSTEM_EDITABLE.has(prop);
+  if (prop === 'field_key') {
+    return '欄位代碼建立後不可修改';
+  }
+  if (!field.is_system) {
+    return prop === 'data_type' ? '要變更型態請使用欄位列表的「變更型態」' : undefined;
+  }
+  switch (prop) {
+    case 'data_type':
+      return '系統欄位不可變更型態';
+    case 'is_required':
+      return '系統規定必填，不可取消';
+    case 'type_settings':
+      return '系統欄位的型態設定由系統規定，不可修改';
+    default:
+      return '系統欄位不可修改此屬性';
+  }
 }
 
 /**
@@ -209,13 +228,10 @@ export function canDeactivate(field: FieldDefinition): boolean {
 }
 
 /**
- * 關聯欄位可以指向的資料類別：自訂、有效、主檔或單據（不含明細子表），與伺服器
- * `hammer_core::schema::rules::validate_relation_target` 相同；以伺服器檢查為準。
+ * 關聯欄位可以指向的資料類別：有效的主檔或單據（不含明細子表），自訂與系統資料類別都可以
+ * （系統資料類別例如商品、客戶，§7.1），與伺服器 `hammer_core::schema::rules::validate_relation_target`
+ * 相同；以伺服器檢查為準。
  */
 export function isRelationTarget(entity: EntityDefinition): boolean {
-  return (
-    entity.storage === 'custom_records' &&
-    entity.is_active &&
-    (entity.kind === 'master' || entity.kind === 'document')
-  );
+  return entity.is_active && (entity.kind === 'master' || entity.kind === 'document');
 }

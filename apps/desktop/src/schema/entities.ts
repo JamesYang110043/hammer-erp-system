@@ -11,6 +11,9 @@ export const KIND_LABELS: Record<EntityKind, string> = {
   detail: '明細子表',
 };
 
+/** 系統主檔（商品、客戶等，docs/architecture.md §8.6）在選單與選項中的分組名稱。 */
+export const MASTER_DATA_LABEL = '基本資料';
+
 /** 選單與管理畫面的分組順序（明細子表從所屬的主表管理，不分組顯示）。 */
 export const MENU_KINDS = ['master', 'document'] as const satisfies readonly EntityKind[];
 export type MenuKind = (typeof MENU_KINDS)[number];

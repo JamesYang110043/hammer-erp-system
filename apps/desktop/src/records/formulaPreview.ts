@@ -19,10 +19,10 @@ import type { LineFormValues } from './lines';
 
 export type { FormulaPreview, FormulaPreviewRequest };
 
-/** 表單與明細顯示的公式欄位：有效、設定為顯示、存在 JSON，依 `sort_order`。 */
+/** 表單與明細顯示的公式欄位：有效、設定為顯示，依 `sort_order`。 */
 export function formulaFields(fields: readonly FieldDefinition[]): FieldDefinition[] {
   return fields
-    .filter((f) => f.is_active && f.is_visible && f.storage === 'json' && f.data_type === 'formula')
+    .filter((f) => f.is_active && f.is_visible && f.data_type === 'formula')
     .sort((a, b) => a.sort_order - b.sort_order);
 }
 
@@ -47,7 +47,8 @@ export function snapshotData(
   const shownKeys = new Set(shown.map((f) => f.field_key));
   const data: RecordData = {};
   for (const field of fields) {
-    if (!field.is_active || field.storage !== 'json' || field.data_type === 'formula') {
+    // 系統欄位也放入：公式可以引用系統欄位（§7.1）
+    if (!field.is_active || field.data_type === 'formula') {
       continue;
     }
     const key = field.field_key;

@@ -56,6 +56,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::unlock_user,
             commands::delete_user,
             commands::list_audit_logs,
+            commands::list_currencies,
             commands::list_entities,
             commands::list_all_entities,
             commands::get_entity,

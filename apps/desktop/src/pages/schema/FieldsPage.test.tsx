@@ -266,7 +266,7 @@ describe('欄位定義頁', () => {
     expect(await dialog.findByTitle('設備')).toBeInTheDocument();
   });
 
-  it('system_field_key_and_type_are_not_editable', async () => {
+  it('system_field_locked_props_are_disabled_with_reasons', async () => {
     const invoke = renderFieldsPage({
       update_field: () => ({ ...SYSTEM_FIELD, label: '編號', version: 3 }),
     });
@@ -280,12 +280,16 @@ describe('欄位定義頁', () => {
     expect(dialog.getByLabelText('資料型態')).toBeDisabled();
     // 原本必填，不可取消
     expect(dialog.getByLabelText('必填')).toBeDisabled();
-    // 不可修改的屬性不顯示
-    expect(dialog.queryByLabelText('唯讀')).not.toBeInTheDocument();
-    expect(dialog.queryByLabelText('可搜尋')).not.toBeInTheDocument();
-    expect(dialog.queryByLabelText('不可重複')).not.toBeInTheDocument();
-    expect(dialog.queryByLabelText('字元數上限')).not.toBeInTheDocument();
-    expect(dialog.queryByLabelText('格式規則')).not.toBeInTheDocument();
+    expect(dialog.getByText('系統欄位不可變更型態')).toBeInTheDocument();
+    expect(dialog.getByText('系統規定必填，不可取消')).toBeInTheDocument();
+    // 不可修改的屬性顯示但停用，並說明原因
+    expect(dialog.getByLabelText('唯讀')).toBeDisabled();
+    expect(dialog.getByLabelText('可搜尋')).toBeDisabled();
+    expect(dialog.getByLabelText('不可重複')).toBeDisabled();
+    expect(dialog.getAllByText('系統欄位不可修改此屬性')).toHaveLength(3);
+    expect(dialog.getByLabelText('字元數上限')).toBeDisabled();
+    expect(dialog.getByLabelText('格式規則')).toBeDisabled();
+    expect(dialog.getByText('系統欄位的型態設定由系統規定，不可修改')).toBeInTheDocument();
     // 可以修改的屬性
     expect(dialog.getByLabelText('顯示名稱')).toBeEnabled();
     expect(dialog.getByLabelText('顯示')).toBeEnabled();
@@ -569,6 +573,115 @@ describe('明細子表', () => {
     expect(screen.queryByText('新增明細子表')).not.toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: '回到「維修單」' }));
     await waitFor(() => expect(window.location.hash).toBe('#/schema/repair'));
+  });
+});
+
+describe('系統資料類別', () => {
+  const CUSTOMER = {
+    ...REPAIR,
+    id: 'entity-customer',
+    key: 'customer',
+    label: '客戶',
+    is_system: true,
+    storage: 'table' as const,
+  };
+  const CONTACTS = {
+    ...CUSTOMER,
+    id: 'entity-customer-contact',
+    key: 'customer_contact',
+    label: '客戶聯絡人',
+    kind: 'detail' as const,
+    parent_entity_id: CUSTOMER.id,
+  };
+  const CODE = fieldDef({
+    entity_id: CUSTOMER.id,
+    field_key: 'code',
+    label: '客戶編號',
+    is_system: true,
+    storage: 'column',
+    is_required: true,
+    is_unique: true,
+  });
+
+  it('system_master_lists_contacts_without_create_or_delete', async () => {
+    window.location.hash = '#/schema/customer';
+    mockCommands({
+      ...startupCommands(ADMIN),
+      list_all_entities: () => [CUSTOMER, CONTACTS],
+      get_entity: () => ({ entity: CUSTOMER, fields: [CODE] }),
+    });
+    renderWithProviders(<App />);
+
+    // 系統欄位：沒有停用、變更型態
+    const row = await rowOf('code');
+    expect(row.getByRole('button', { name: '編輯' })).toBeInTheDocument();
+    expect(row.queryByRole('button', { name: '停用' })).not.toBeInTheDocument();
+    expect(row.queryByRole('button', { name: '變更型態' })).not.toBeInTheDocument();
+
+    // 系統明細子表：可以進入欄位設定，不可新增明細子表，也不可停用、刪除
+    const card = within(
+      (
+        await screen.findByText(
+          'customer_contact',
+          { selector: 'td code' },
+          { timeout: PAGE_LOAD_TIMEOUT },
+        )
+      ).closest('.ant-card')! as HTMLElement,
+    );
+    expect(card.queryByRole('button', { name: /新增明細子表/ })).not.toBeInTheDocument();
+    expect(card.getByText(/系統資料類別不可新增明細子表/)).toBeInTheDocument();
+    expect(card.getByRole('button', { name: '欄位設定' })).toBeInTheDocument();
+    expect(card.queryByRole('button', { name: '停用' })).not.toBeInTheDocument();
+    expect(card.queryByRole('button', { name: '刪除' })).not.toBeInTheDocument();
+  });
+
+  it('system_master_without_details_has_no_detail_section', async () => {
+    const UNIT = { ...CUSTOMER, id: 'entity-unit', key: 'unit', label: '單位' };
+    window.location.hash = '#/schema/unit';
+    mockCommands({
+      ...startupCommands(ADMIN),
+      list_all_entities: () => [UNIT],
+      get_entity: () => ({ entity: UNIT, fields: [CODE] }),
+    });
+    renderWithProviders(<App />);
+    await rowOf('code');
+    expect(screen.queryByText('明細子表')).not.toBeInTheDocument();
+  });
+
+  it('relation_can_target_system_entities', async () => {
+    const PRODUCT = { ...CUSTOMER, id: 'entity-product', key: 'product', label: '商品' };
+    const EQUIPMENT = { ...REPAIR, id: 'entity-equipment', key: 'equipment', label: '設備' };
+    const invoke = renderFieldsPage({
+      list_entities: () => [REPAIR, EQUIPMENT, PRODUCT, CONTACTS],
+      create_field: () =>
+        fieldDef({
+          field_key: 'product_id',
+          data_type: 'relation',
+          relation_entity_id: PRODUCT.id,
+        }),
+    });
+    const { user, dialog } = await openNewFieldDialog();
+    await user.type(dialog.getByLabelText('欄位代碼'), 'product_id');
+    await user.type(dialog.getByLabelText('顯示名稱'), '商品');
+    await chooseOption(user, '資料型態', '關聯');
+
+    await user.click(screen.getByLabelText('關聯的資料類別'));
+    // 分成基本資料與自訂資料類別兩組；系統明細子表不能當作目標
+    await waitFor(() =>
+      expect(
+        Array.from(document.querySelectorAll('.ant-select-item-group')).map((g) => g.textContent),
+      ).toEqual(['基本資料', '自訂資料類別']),
+    );
+    expect(screen.queryByTitle('客戶聯絡人')).not.toBeInTheDocument();
+    await user.click((await screen.findAllByTitle('商品')).at(-1)!);
+    await user.click(dialog.getByRole('button', { name: /儲\s*存/ }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('create_field', {
+        key: 'repair',
+        req: expect.objectContaining({ data_type: 'relation', relation_entity_id: PRODUCT.id }),
+      }),
+    );
   });
 });
 

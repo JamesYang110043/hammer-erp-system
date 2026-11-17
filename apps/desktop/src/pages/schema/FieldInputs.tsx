@@ -2,7 +2,8 @@ import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, DatePicker, Form, Input, InputNumber, Select, Space } from 'antd';
 
 import { useEntities } from '../../api/schema';
-import type { DataType } from '../../bindings';
+import type { DataType, EntityDefinition } from '../../bindings';
+import { MASTER_DATA_LABEL } from '../../schema/entities';
 import type { OptionFormValue } from '../../schema/fieldForm';
 import { MAX_DECIMAL_PLACES, isRelationTarget, typeSettings } from '../../schema/fieldSettings';
 
@@ -96,12 +97,27 @@ function RelationTargetField({ disabled }: { disabled: boolean }) {
         placeholder="選擇資料類別"
         showSearch
         optionFilterProp="label"
-        options={(entities.data ?? [])
-          .filter(isRelationTarget)
-          .map((e) => ({ value: e.id, label: e.label }))}
+        options={relationTargetOptions(entities.data ?? [])}
       />
     </Form.Item>
   );
+}
+
+/**
+ * 關聯的資料類別選項：分成「基本資料」（系統資料類別，例如商品、客戶）與「自訂資料類別」兩組，
+ * 沒有資料類別的組不列出。
+ */
+function relationTargetOptions(entities: readonly EntityDefinition[]) {
+  const targets = entities.filter(isRelationTarget);
+  return [
+    { label: MASTER_DATA_LABEL, system: true },
+    { label: '自訂資料類別', system: false },
+  ].flatMap(({ label, system }) => {
+    const options = targets
+      .filter((e) => e.is_system === system)
+      .map((e) => ({ value: e.id, label: e.label }));
+    return options.length > 0 ? [{ label, title: label, options }] : [];
+  });
 }
 
 /** 下拉選項的清單（值、名稱、顏色）。 */

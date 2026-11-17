@@ -7,6 +7,7 @@ use hammer_shared::Id;
 use hammer_shared::attachment::Attachment;
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
+use hammer_shared::currency::{Currency, CurrencyListQuery};
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
     ViewLayout,
@@ -203,6 +204,15 @@ impl AppState {
         query: &ListEntitiesQuery,
     ) -> Result<Vec<EntityDefinition>, ClientError> {
         self.with_token(async |client, url, token| client.list_entities(url, token, query).await)
+            .await
+    }
+
+    /// 幣別列表。
+    pub async fn list_currencies(
+        &self,
+        query: &CurrencyListQuery,
+    ) -> Result<Vec<Currency>, ClientError> {
+        self.with_token(async |client, url, token| client.list_currencies(url, token, query).await)
             .await
     }
 
