@@ -649,8 +649,8 @@ async fn drop_entity_indexes(
 /// 新增自訂欄位（`storage = json`）。設定必須與型態相符（[`rules::validate_field_config`]）。
 /// 「可搜尋」、「不可重複」時建立對應的索引（§7.5）。
 ///
-/// `relation` 欄位的目標資料類別必須符合 [`rules::validate_relation_target`]（自訂、有效、
-/// `master` 或 `document`），否則 [`CoreError::InvalidField`]（`relation_entity_id`）。
+/// `relation` 欄位的目標資料類別必須符合 [`rules::validate_relation_target`]（有效、
+/// `master` 或 `document`，自訂或系統資料類別），否則 [`CoreError::InvalidField`]（`relation_entity_id`）。
 ///
 /// `formula` 欄位依 [`formula::validate_formula`] 檢查公式（不合法 → [`CoreError::InvalidFormula`]），
 /// 並寫入 `formula_deps`。
