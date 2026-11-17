@@ -356,16 +356,12 @@ async fn relation_target_must_be_active_custom_master_or_document(pool: PgPool) 
         create_field_raw(&pool, &admin, REPAIR, relation_field("x", detail_id)).await;
     assert_invalid(status, &body, "relation_entity_id");
 
-    // 系統資料類別（M3）
-    let system_id = new_id();
-    sqlx::query(
-        "INSERT INTO entity_definitions (id, key, label, kind, is_system, storage, table_name) \
-         VALUES ($1, 'customer', '客戶', 'master', true, 'table', 'customers')",
-    )
-    .bind(system_id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    // 系統資料類別（migration 寫入，§8.6）
+    let system_id: Id =
+        sqlx::query_scalar("SELECT id FROM entity_definitions WHERE key = 'customer'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let (status, body) =
         create_field_raw(&pool, &admin, REPAIR, relation_field("x", system_id)).await;
     assert_invalid(status, &body, "relation_entity_id");

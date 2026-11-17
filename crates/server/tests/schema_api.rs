@@ -253,7 +253,8 @@ async fn audit_logs(pool: &PgPool, record_id: Id) -> Vec<AuditRow> {
 async fn count(pool: &PgPool, table: &str) -> i64 {
     let sql = match table {
         "schema_change_logs" => "SELECT count(*) FROM schema_change_logs",
-        "field_definitions" => "SELECT count(*) FROM field_definitions",
+        // migration 寫入的系統欄位（§8.6、§8.7）不計
+        "field_definitions" => "SELECT count(*) FROM field_definitions WHERE NOT is_system",
         other => panic!("未支援的資料表：{other}"),
     };
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
@@ -294,7 +295,7 @@ async fn editor_and_viewer_can_read_but_not_write(pool: PgPool) {
         let (status, body) = call(&pool, Method::GET, "/api/v1/entities", &token, None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let list: Vec<EntityDefinition> = serde_json::from_value(body).unwrap();
-        assert_eq!(list.len(), 1);
+        assert_eq!(list.iter().filter(|e| !e.is_system).count(), 1);
         let detail = get_entity(&pool, &token, "repair_order").await;
         assert_eq!(detail.fields.len(), 1);
 
@@ -495,7 +496,8 @@ async fn every_change_writes_schema_change_logs(pool: PgPool) {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(change_logs(&pool, entity.id).await[2].action, "deactivate");
     let (_, body) = call(&pool, Method::GET, "/api/v1/entities", &token, None).await;
-    assert_eq!(body, json!([]));
+    let list: Vec<EntityDefinition> = serde_json::from_value(body).unwrap();
+    assert!(list.iter().all(|e| e.is_system), "{list:?}");
     assert!(
         !get_entity(&pool, &token, "repair_order")
             .await
