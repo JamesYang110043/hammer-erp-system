@@ -9,6 +9,7 @@
 //! - 列表：[`list_records`]、[`count_records`]（條件格式與 [`crate::record::RecordListFilter`] 相同）
 //! - 選擇器：[`list_records_before`]（排除 `is_active = false`）
 //! - 唯一性：[`value_taken`]
+//! - 關聯：[`lock_existing_records`]（關聯欄位指向系統資料類別時，檢查並鎖定目標資料）
 //!
 //! # 安全
 //!
@@ -448,6 +449,31 @@ fn value_taken_query(
     qb
 }
 
+/// `ids` 中在資料表 `table_name` 存在且未刪除的 id，並以 `FOR SHARE` 鎖定這些列，避免在寫入關聯的
+/// transaction 結束前被刪除（與 [`crate::record::lock_existing_records`] 相同）。必須在 transaction 內呼叫。
+///
+/// `table_name` 不符合 [`is_safe_identifier`] → [`DbError::UnsafeIdentifier`]。
+pub async fn lock_existing_records<'e>(
+    executor: impl PgExecutor<'e>,
+    table_name: &str,
+    ids: &[Uuid],
+) -> Result<Vec<Uuid>, DbError> {
+    let mut qb = lock_existing_query(table_name, ids)?;
+    Ok(qb.build_query_scalar::<Uuid>().fetch_all(executor).await?)
+}
+
+fn lock_existing_query(table_name: &str, ids: &[Uuid]) -> Result<QueryBuilder<Postgres>, DbError> {
+    if !is_safe_identifier(table_name) {
+        return Err(DbError::UnsafeIdentifier(table_name.to_owned()));
+    }
+    let mut qb = QueryBuilder::new("SELECT id FROM \"");
+    qb.push(table_name)
+        .push("\" WHERE id = ANY(")
+        .push_bind(ids.to_vec())
+        .push(") AND deleted_at IS NULL ORDER BY id FOR SHARE");
+    Ok(qb)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +517,19 @@ mod tests {
                 }],
             ),
             Err(DbError::UnsafeIdentifier(s)) if s == "code') --"
+        ));
+    }
+
+    #[test]
+    fn lock_existing_checks_table_name() {
+        let qb = lock_existing_query("units", &[Uuid::nil()]).unwrap();
+        assert_eq!(
+            qb.sql().as_str(),
+            "SELECT id FROM \"units\" WHERE id = ANY($1) AND deleted_at IS NULL ORDER BY id FOR SHARE"
+        );
+        assert!(matches!(
+            lock_existing_query("units; --", &[]),
+            Err(DbError::UnsafeIdentifier(_))
         ));
     }
 

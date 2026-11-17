@@ -242,12 +242,24 @@ desktop(src-tauri) ──▶ shared, formula
 | `parent_id`（商品分類） | 指向未刪除的商品分類；不可指向自己或自己的下層分類（會形成循環） |
 | `product_type`、`tax_type` | 一律必填；選項固定（§8.6），不可新增、修改或移除選項 |
 | `default_currency_code`（廠商） | 一律必填，預設 `TWD`；值必須是有效（`is_active`）的幣別代碼。修改資料時只在值有變動時檢查，所以幣別停用後既有資料可以保留原值 |
+| `tax_id`（客戶、廠商） | 有填時必須是 8 位數字（ASCII `0`–`9`）；不驗證檢查碼。可以不填 |
 | `payment_terms_days` | 0 以上的整數 |
 | `credit_limit`、`default_sale_price`、`safety_stock` | 0 以上 |
 | `is_primary`（聯絡人） | 同一個客戶（廠商）最多一位主要聯絡人：存檔時檢查整組明細中 `is_primary = true` 最多一列（`422`，`details.lines` 指出第二列） |
 | `is_active` | 必填，預設 `true` |
 
-上表中「一律必填」「0 以上」等限制由 migration 寫入欄位定義（`is_required`、`validation`），因為這些屬性不可修改，所以限制固定；`code` 的不分大小寫唯一、`parent_id` 的循環、`default_currency_code` 的幣別檢查、`is_primary` 的檢查另外寫在 `hammer_core`。
+上表中「一律必填」「0 以上」等限制由 migration 寫入欄位定義（`is_required`、`validation`），因為這些屬性不可修改，所以限制固定；`hammer_core::master_data` 另外再檢查一次，不依賴欄位定義的內容。`code` 的不分大小寫唯一、`tax_id` 的格式、`parent_id` 的循環、`default_currency_code` 的幣別檢查、`is_primary` 的檢查另外寫在 `hammer_core`。修改資料時這些規則只檢查值有變動的欄位。
+
+**刪除限制**（`hammer_core::master_data`，伺服器端檢查）：
+
+| 資料類別 | 不能刪除的情況 |
+|---|---|
+| 單位 | 還有未刪除的商品使用（`unit_id`） |
+| 商品分類 | 還有未刪除的商品使用（`category_id`），或還有未刪除的子分類（`parent_id`） |
+
+- 違反時 `422 VALIDATION`，`details` 為 `{ "fields": [], "in_use_count": 3, "child_count": 1 }`（只列出大於 0 的數量），訊息例如「此單位還有 3 筆商品使用中，無法刪除」。
+- 新增、修改商品或分類時以 `FOR SHARE` 鎖定所指的單位、分類（關聯檢查），刪除時先 `FOR UPDATE` 鎖定要刪除的資料再計數，所以計數後不會再有新的使用者。
+- 客戶、廠商被單據引用時的限制在 M4 定義。
 
 ### 7.3 欄位資料型態
 
@@ -918,7 +930,7 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 | code | TEXT | `text` | 客戶編號 | 必填、唯一、`max_length 50` |
 | name | TEXT | `text` | 公司名稱 | 必填、可搜尋 |
 | short_name | TEXT | `text` | 簡稱 | 可搜尋 |
-| tax_id | TEXT | `text` | 統一編號 | 可搜尋；不限制格式（國外客戶沒有統一編號） |
+| tax_id | TEXT | `text` | 統一編號 | 可搜尋；有填時必須是 8 位數字（§7.2，不驗證檢查碼）；可以不填（國外客戶沒有統一編號） |
 | phone | TEXT | `text` | 電話 | |
 | fax | TEXT | `text` | 傳真 | |
 | email | TEXT | `text` | Email | |
