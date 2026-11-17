@@ -193,7 +193,7 @@ desktop(src-tauri) ──▶ shared, formula
 | 例子 | 客戶、商品（M3）；訂單、進貨單（M4） | 管理者自建的「維修單」 |
 | `entity_definitions` | `is_system = true`、`storage = table`，由 migration 建立 | `is_system = false`、`storage = custom_records` |
 | 儲存 | 專屬資料表：系統欄位是實體欄位（`storage = column`），自訂欄位存在 `custom_data` JSONB | 通用資料表 `custom_records.data` JSONB |
-| 資料 API 與畫面 | 通用資料 API（`/api/v1/entities/{key}/records`）與桌面的動態列表、表單；M4 的過帳、作廢等動作另有專屬端點（§10） | 通用資料 API 與動態列表、表單 |
+| 資料 API 與畫面 | 通用資料 API（`/api/v1/entities/{key}/records`）與桌面的動態列表、表單；系統單據的過帳、作廢另有專屬端點（下方「系統單據」、§10「單據動作」） | 通用資料 API 與動態列表、表單 |
 | 可否刪除資料類別 | 不可，也不可停用 | 可（軟刪除） |
 | 影響庫存與財務 | 依系統邏輯 | 第一版不影響（D8） |
 
@@ -202,11 +202,32 @@ desktop(src-tauri) ──▶ shared, formula
 - 列表、單筆、新增、修改、刪除、選擇器（`lookup`）、篩選與排序、`view_layouts`、操作紀錄都與自訂資料類別相同；權限一樣是 `record.read` / `record.write`。差別只在 `hammer_core` 依 `storage` 把資料讀寫到專屬資料表。
 - request 與回應的 `data` 以 `field_key` 為鍵，同時包含系統欄位與自訂欄位，客戶端不需要區分；伺服器把系統欄位寫入實體欄位，其餘寫入 `custom_data`。值的格式一律依 §7.3（例如 `NUMERIC` 欄位讀出時是補齊 `decimal_places` 的字串）。
 - 系統欄位的 `field_key` 與 `column_name` 相同（例如 `unit_id`）。外鍵也是欄位（`relation`，§7.3）；`id`、明細的父資料欄位（`customer_id` / `supplier_id`）與 `sort_order`、共通欄位、`custom_data`、`formula_errors` 不是欄位；request 帶到時與其他未定義的欄位相同（`422`）。
-- 系統資料類別在 M3 沒有單號：`record_no` 為 `null`，`numbering_pattern` 不可設定（`422`，`details.field = numbering_pattern`）；單據的單號在 M4 處理。
+- 主檔類的系統資料類別（M3）沒有單號：`record_no` 為 `null`，`numbering_pattern` 不可設定（`422`，`details.field = numbering_pattern`）；系統單據的單號見下方「系統單據」。
 - 系統明細子表（`customer_contact`、`supplier_contact`）與自訂明細子表的規則相同（§8.5 `custom_records`「明細子表」、§10「主表與明細」）：只能透過主表存取，以 `lines.<明細子表代碼>` 整組取代。順序存在明細資料表的 `sort_order`，父資料存在 `customer_id` / `supplier_id`。
 - 管理者可以在系統資料類別（含系統明細子表）新增自訂欄位（含公式、關聯、附件欄位），規則與自訂資料類別相同；不可新增系統欄位，也不可在系統資料類別下建立新的明細子表。
 - 公式欄位的計算結果存在 `custom_data`，錯誤存在該資料表的 `formula_errors`（§7.6「存檔時計算」）；公式可以引用系統欄位（依其 `data_type` 讀取）。
 - 系統資料表的 `is_active` 欄位（商品、客戶、廠商）是一般的 `boolean` 系統欄位：選擇器（`lookup`）不列出 `is_active = false` 的資料；寫入關聯欄位時不檢查，既有資料仍可指向已停用的資料。
+
+**系統單據**（M4 起；`kind = document` 的系統資料類別，例如 `stock_adjustment`、M4b 的進貨單、M4c 的出貨單）：除了上述規則，另外依照以下規則。邏輯在 `hammer_core::documents`，型別在 `hammer_shared::document`。管理者自建的 `document` 資料類別（自訂資料類別）不適用，沒有狀態與過帳（§8.5）。
+
+- **單號**：
+  - 單據的主表一律有 `record_no TEXT NOT NULL` 欄位，取代各單據自己的單號欄位（`order_no`、`receipt_no`、`shipment_no`、`adjustment_no` 等都不再使用）；唯一索引 `(record_no)` 包含已刪除的資料。單據明細沒有單號。
+  - 新增時依 `entity_definitions.numbering_pattern` 取號，規則與自訂資料類別相同（§8.4「單號規則」「取號」「規則」）：以建立當下的 Asia/Taipei 日期產生（不是單據日期）、不可由客戶端指定或修改、已刪除資料的單號不重複使用、規則修改後與既有單號重複時新增失敗（`422`）。
+  - 每張單據的預設單號規則由 migration 寫入（盤點調整單為 `ADJ{yyyyMM}-{0000}`，M4b、M4c 的單據在各自的設計中定義）。管理者可以修改（`PATCH /api/v1/entities/{key}`，需要 `schema.manage`），**不可清空**（`422`，`details.field = numbering_pattern`）。主檔類的系統資料類別（M3）仍不可設定單號規則。
+  - 回應的 `record_no`、標題範本的 `{record_no}`、列表依 `record_no` 排序與篩選（§10）都與自訂資料類別相同。
+- **系統維護的欄位**：由伺服器寫入，使用者不能輸入。
+  - `status`（狀態）與金額合計（例如 M4b、M4c 的 `subtotal`、`tax_amount`、`total`）是系統欄位（`field_definitions` 有定義，`is_readonly = true`）：出現在 `data`，可以篩選、排序、被公式與標題範本引用。管理者可以修改顯示名稱等（§7.2），但不可設為必填、不可設定預設值（`422`，`details.field` 為該屬性）。
+  - `posted_at`、`posted_by`、`voided_at`、`voided_by`，以及明細上過帳時寫入的 `lot_id` 等，**不是**欄位（與共通欄位相同）：不出現在 `data`；主表的這四個值放在回應的 `document` 物件（`{ "posted_at", "posted_by", "voided_at", "voided_by" }`，非單據的資料為 `null`）。
+  - request 的 `data` 帶了系統維護的欄位（`status`、金額合計）時**一律忽略**，不回傳錯誤（與公式欄位相同，§7.6）；帶了不是欄位的鍵（`posted_at`、`lot_id` 等）時與其他未定義的欄位相同（`422`）。
+  - 金額合計在每次存檔時由伺服器依明細重新計算（`hammer_core`，不使用公式引擎）；過帳時寫入的值（例如成本）在過帳的 transaction 內寫入。新增時 `status = draft`。
+- **單據明細**是系統明細子表（`kind = detail`、`storage = table`），規則與 §7.1 上方的系統明細子表相同：只能透過主表存取，以 `lines.<明細子表代碼>` 整組取代；順序存在 `sort_order`（取代原本設計的 `line_no`），父資料欄位 `<主表單數>_id`（例如 `stock_adjustment_id`）不是欄位。明細的 id 在單據過帳後就固定（批號、批號扣除、異動都以明細 id 指向來源）。
+- **狀態限制**（狀態流程見 §8.2）：
+  - 只有 `draft` 可以修改、刪除（通用資料 API 的 `PATCH`、`DELETE`）。其他狀態 → `422 INVALID_STATUS`，`details` 為 `{ "status": "posted" }`，訊息「已過帳的單據不可修改」「已作廢的單據不可刪除」等。主表、明細、自訂欄位都不可修改。
+  - 檢查順序：權限 → 資料存在（`404`）→ `version`（`409 CONFLICT`）→ 狀態（`422 INVALID_STATUS`）→ 內容驗證（`422 VALIDATION`）。
+  - 刪除草稿與其他資料相同（軟刪除，明細一起刪除，單號不再使用）。
+  - 過帳、作廢使用專屬端點（§10「單據動作」），需要 `record.post`。
+  - 「重新計算」（§7.6）不受狀態限制：已過帳、已作廢的單據的公式欄位也會重算（公式只寫入 `custom_data`，不影響庫存與金額）。
+- **操作紀錄**：新增、修改、刪除與其他資料相同；過帳、作廢的 `action` 為 `post`、`void`，diff 記錄 `status` 與過帳時寫入的欄位（含明細，鍵為 `lines.<明細子表代碼>`）；`posted_at` 等不是欄位的值不記錄（`audit_logs` 本身有時間與操作者）。
 
 ### 7.2 欄位的兩個層級
 
@@ -259,7 +280,20 @@ desktop(src-tauri) ──▶ shared, formula
 
 - 違反時 `422 VALIDATION`，`details` 為 `{ "fields": [], "in_use_count": 3, "child_count": 1 }`（只列出大於 0 的數量），訊息例如「此單位還有 3 筆商品使用中，無法刪除」。
 - 新增、修改商品或分類時以 `FOR SHARE` 鎖定所指的單位、分類（關聯檢查），刪除時先 `FOR UPDATE` 鎖定要刪除的資料再計數，所以計數後不會再有新的使用者。
-- 客戶、廠商被單據引用時的限制在 M4 定義。
+- 客戶、廠商被單據引用時的限制在 M4b、M4c 定義。
+
+**商品被庫存引用時的限制**（M4a 起，`hammer_core::master_data`；「有庫存異動」= `inventory_transactions` 中有該商品的資料，不論來源單據之後是否作廢）：
+
+| 操作 | 規則 |
+|---|---|
+| 刪除商品 | 有庫存異動時不可刪除：`422 VALIDATION`，`details` 為 `{ "fields": [], "transaction_count": 12 }`，訊息「此商品已有庫存異動，無法刪除，請改為停用」 |
+| `product_type`：`goods` → `service` | 有庫存異動時不可修改：`422 VALIDATION`，`details.fields` 指出 `product_type`，訊息「此商品已有庫存異動，無法改為服務」 |
+| `product_type`：`service` → `goods` | 可以（服務沒有庫存異動） |
+| `unit_id` | 有庫存異動時不可修改（既有數量會變成不同單位）：`422 VALIDATION`，`details.fields` 指出 `unit_id` |
+
+- 刪除與修改時先以 `FOR UPDATE` 鎖定商品再檢查；過帳以 `FOR SHARE` 鎖定商品（§8.10「鎖定順序」），兩者互斥。
+- 只被**草稿**單據的明細引用（還沒有異動）時不限制：刪除商品後草稿的明細保留原值（與關聯欄位相同，§7.3），過帳時檢查失敗（「商品已刪除」）；改類型或單位後同樣在過帳時重新檢查。
+- M4b、M4c 的採購單、訂單等不產生異動的單據引用商品時的限制，在各自的設計中定義。
 
 ### 7.3 欄位資料型態
 
@@ -479,6 +513,9 @@ customers ─┬─< sales_orders ────< sales_order_lines               
            └─< shipments ───────< shipment_lines ─< lot_allocations >─┘
                                                                   │
 products ─────────────────────────────────────< inventory_transactions
+
+stock_adjustments ─< stock_adjustment_lines ─┬─0..1── inventory_lots（盤盈：新批號）
+                                             └─< lot_allocations（盤虧）
 ```
 
 ---
@@ -581,7 +618,7 @@ products ───────────────────────�
 - 已刪除資料的單號不重複使用（流水號只增不減；唯一索引包含已刪除的資料）。
 - 修改規則後產生的單號與既有單號重複時（例如 `{yy}-{000}` 改成 `26-{000}`），新增失敗並回傳 `422 VALIDATION`，需要調整規則。
 - 列表可依 `record_no` 排序（文字排序）與篩選（`eq`、`contains`），見 §10。
-- 第一版自訂資料類別沒有作廢狀態；系統資料類別的單號在 M4 處理。
+- 第一版自訂資料類別沒有作廢狀態；系統單據的單號見 §7.1「系統單據」（存在單據資料表的 `record_no`，預設規則不可清空）。
 
 #### `attachments`
 | 欄位 | 型態 | 說明 |
@@ -619,7 +656,7 @@ products ───────────────────────�
 | storage | TEXT | `table`（系統資料表）/ `custom_records` |
 | table_name | TEXT | storage = table 時，對應的資料表 |
 | parent_entity_id | UUID FK → self | 明細子表所屬的主表（`kind = detail` 時必填，其他為空）；管理者建立的明細子表，主表必須是有效的自訂 `master` 或 `document`，不可是另一個明細子表（系統明細子表由 migration 建立，§8.6）；建立後不可更換 |
-| numbering_pattern | TEXT | 單號規則；明細子表不可設定 |
+| numbering_pattern | TEXT | 單號規則；明細子表、主檔類的系統資料類別不可設定；系統單據必須設定（不可清空，§7.1） |
 | title_template | TEXT | 資料標題範本，例如 `{record_no} {name}`；規則見下方 |
 | sort_order | INTEGER | 選單排序 |
 | is_active | BOOLEAN | |
@@ -656,7 +693,7 @@ products ───────────────────────�
 
 **資料類別管理**（邏輯在 `hammer_core::schema`，型別與端點在 `hammer_shared::schema`；寫入都需要 `schema.manage`，每個有變動的資料類別寫入一筆 `schema_change_logs` 與 `audit_logs`）：
 
-- `kind`：`master`（主檔）、`document`（單據）、`detail`（明細子表）。`document` 的行為與 `master` 相同（可設定單號規則、可有明細子表、可作為關聯目標），差別只在選單分組顯示。
+- `kind`：`master`（主檔）、`document`（單據）、`detail`（明細子表）。`document` 的行為與 `master` 相同（可設定單號規則、可有明細子表、可作為關聯目標），差別只在選單分組顯示。系統單據（`is_system = true` 的 `document`）另有狀態、過帳與作廢（§7.1「系統單據」）。
 - 列表（`GET /api/v1/entities`）：預設只列出啟用中的資料類別（選單用，需要登入）；`?include_inactive=true` 含已停用的（管理畫面用，需要 `schema.manage`）。已刪除的一律不列出。
 - 修改（`PATCH /api/v1/entities/{key}`）：名稱、圖示、單號規則、標題範本、選單排序、是否啟用。停用後不出現在選單，資料 API 回傳 `404`；改回啟用即恢復。系統資料類別不可停用。
 - 選單排序：`PUT /api/v1/entities/order` 一次調整多筆 `sort_order`，只需列出要調整的資料類別；任一筆版本不符整批不寫入。`order` 也是合法的代碼，同一路徑的 GET / PATCH / DELETE 轉給該資料類別。
@@ -973,11 +1010,13 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 
 ### 8.8 進貨模組
 
+> 本節與 §8.9 的資料表在 M4b、M4c 的設計中補齊完整欄位定義；單號、明細順序、狀態等共通規則以 §7.1「系統單據」為準，庫存相關以 §8.10 為準。
+
 #### `purchase_orders`（採購單）
 | 欄位 | 型態 | 說明 |
 |---|---|---|
 | id | UUID PK | |
-| order_no | TEXT UNIQUE | |
+| record_no | TEXT NOT NULL | 單號（§7.1「系統單據」） |
 | supplier_id | UUID FK | |
 | order_date | DATE | |
 | expected_date | DATE | 預計到貨日 |
@@ -995,7 +1034,7 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 |---|---|---|
 | id | UUID PK | |
 | purchase_order_id | UUID FK | |
-| line_no | INTEGER | |
+| sort_order | INTEGER | 明細順序（§7.1「系統單據」） |
 | product_id | UUID FK | |
 | qty | NUMERIC(18,4) | |
 | unit_price | NUMERIC(18,4) | 單據幣別 |
@@ -1009,7 +1048,7 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 | 欄位 | 型態 | 說明 |
 |---|---|---|
 | id | UUID PK | |
-| receipt_no | TEXT UNIQUE | |
+| record_no | TEXT NOT NULL | 單號（§7.1「系統單據」） |
 | supplier_id | UUID FK | |
 | purchase_order_id | UUID FK，可為空 | 可以不經採購單直接進貨 |
 | receipt_date | DATE | |
@@ -1028,13 +1067,13 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 |---|---|---|
 | id | UUID PK | |
 | goods_receipt_id | UUID FK | |
-| line_no | INTEGER | |
+| sort_order | INTEGER | 明細順序（§7.1「系統單據」） |
 | purchase_order_line_id | UUID FK，可為空 | |
 | product_id | UUID FK | |
 | qty | NUMERIC(18,4) | |
 | unit_price | NUMERIC(18,4) | 單據幣別 |
 | amount | NUMERIC(18,4) | |
-| unit_cost_twd | NUMERIC(18,4) | = unit_price × exchange_rate（⏳ 進口成本分攤待討論） |
+| unit_cost_twd | NUMERIC(18,4) | = unit_price × exchange_rate，四捨五入到 4 位小數；第一版不分攤進口費用（§13 Q3） |
 | lot_no | TEXT | 使用者輸入；留空時依規則自動產生 |
 | lot_id | UUID FK → inventory_lots | 過帳後回填 |
 | notes | TEXT | |
@@ -1042,7 +1081,7 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 | ＋共通欄位 | | |
 
 #### `purchase_returns` / `purchase_return_lines`（進貨退回）
-- 表頭欄位比照 `goods_receipts`（`receipt_no` 改為 `return_no`，並加上 `goods_receipt_id`）。
+- 表頭欄位比照 `goods_receipts`（加上 `goods_receipt_id`）。
 - 明細必須指定 `lot_id`，因為是退回特定批號。過帳時透過 `lot_allocations` 扣減該批號的庫存。
 
 ---
@@ -1055,7 +1094,7 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 | 欄位 | 型態 | 說明 |
 |---|---|---|
 | id | UUID PK | |
-| order_no | TEXT UNIQUE | |
+| record_no | TEXT NOT NULL | 單號（§7.1「系統單據」） |
 | customer_id | UUID FK | |
 | order_date | DATE | |
 | delivery_date | DATE | 預計交貨日 |
@@ -1071,7 +1110,7 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 |---|---|---|
 | id | UUID PK | |
 | sales_order_id | UUID FK | |
-| line_no | INTEGER | |
+| sort_order | INTEGER | 明細順序（§7.1「系統單據」） |
 | product_id | UUID FK | |
 | qty | NUMERIC(18,4) | |
 | unit_price | NUMERIC(18,4) | |
@@ -1086,7 +1125,7 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 | 欄位 | 型態 | 說明 |
 |---|---|---|
 | id | UUID PK | |
-| shipment_no | TEXT UNIQUE | |
+| record_no | TEXT NOT NULL | 單號（§7.1「系統單據」） |
 | customer_id | UUID FK | |
 | sales_order_id | UUID FK，可為空 | |
 | ship_date | DATE | |
@@ -1105,7 +1144,7 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 |---|---|---|
 | id | UUID PK | |
 | shipment_id | UUID FK | |
-| line_no | INTEGER | |
+| sort_order | INTEGER | 明細順序（§7.1「系統單據」） |
 | sales_order_line_id | UUID FK，可為空 | |
 | product_id | UUID FK | |
 | qty | NUMERIC(18,4) | |
@@ -1125,67 +1164,231 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 
 ### 8.10 庫存模組
 
+> M4a 定案。邏輯在 `hammer_core::inventory`（庫存）、`hammer_core::stock_adjustments`（盤點與調整單），型別在 `hammer_shared::inventory`、`hammer_shared::document`。
+
+**共同規則**：
+
+- 只有 `product_type = goods` 的商品有批號與庫存異動；`service` 的商品不產生批號、批號扣除、異動，也不出現在庫存查詢。單據過帳時，`service` 商品的明細一律跳過庫存處理。盤點調整單不可使用 `service` 商品（見下方存檔時的檢查）；進貨單、出貨單等是否可以有 `service` 商品的明細（例如運費、安裝費），在 M4b、M4c 的設計中定義。
+- 三張表都不是資料類別：沒有自訂欄位、版面，不使用通用資料 API，只能透過單據的過帳、作廢寫入，透過下方「庫存查詢 API」讀取。
+- 數量、單位成本為 `NUMERIC(18,4)`，API 中為補齊 4 位小數的字串（§7.3）；金額（`stock_value_twd`）為 `NUMERIC(18,2)` 的字串。計算一律用 `rust_decimal`，四捨五入使用 `MidpointAwayFromZero`（與公式的 `ROUND` 相同）。
+- `source_type`、`ref_doc_type` 等「來源類型」的值為資料類別代碼（單據的主表或明細子表代碼）。M4a 的 migration 只列出盤點調整單的代碼，M4b、M4c 的 migration 修改 `CHECK` 加上各自的代碼。
+
 #### `inventory_lots`（批號）
 | 欄位 | 型態 | 說明 |
 |---|---|---|
-| id | UUID PK | |
-| product_id | UUID FK | |
-| lot_no | TEXT | UNIQUE (product_id, lot_no) |
-| received_at | TIMESTAMPTZ | 先進先出的排序依據 |
-| source_type | TEXT | `goods_receipt` / `adjustment`（期初或盤盈） |
-| source_line_id | UUID | |
-| qty_in | NUMERIC(18,4) | 原始入庫數量 |
-| qty_remaining | NUMERIC(18,4) | CHECK (qty_remaining >= 0) |
-| unit_cost_twd | NUMERIC(18,4) | |
-| ＋共通欄位 | | |
+| id | UUID PRIMARY KEY | |
+| product_id | UUID NOT NULL FK → products | 必須是 `goods` |
+| lot_no | TEXT NOT NULL | 批號；規則見下方「批號」 |
+| received_date | DATE NOT NULL | 入庫日期 = 來源單據的單據日期（進貨日、調整日期）；先進先出的排序依據 |
+| source_type | TEXT NOT NULL CHECK | 產生此批號的單據明細子表代碼：`stock_adjustment_line`（M4b 加上 `goods_receipt_line`） |
+| source_doc_id | UUID NOT NULL | 來源單據（主表）的 id |
+| source_line_id | UUID NOT NULL | 來源明細的 id；UNIQUE (source_type, source_line_id)，一列明細最多產生一個批號 |
+| qty_in | NUMERIC(18,4) NOT NULL CHECK (qty_in > 0) | 原始入庫數量，建立後不變 |
+| qty_remaining | NUMERIC(18,4) NOT NULL CHECK (qty_remaining >= 0) | 目前數量；可能大於 `qty_in`（盤盈加回、銷貨退回） |
+| unit_cost_twd | NUMERIC(18,4) NOT NULL CHECK (unit_cost_twd >= 0) | 台幣單位成本，建立後不變 |
+| ＋共通欄位 | | `version` 在每次異動時 + 1，但不用於檢查（一律以 `FOR UPDATE` 鎖定後修改） |
 
-索引：`(product_id, received_at) WHERE qty_remaining > 0`，供先進先出查詢使用。
+- 索引：
+  - 唯一：`(product_id, lower(lot_no)) WHERE deleted_at IS NULL`（同一商品的批號不分大小寫不可重複；批號被刪除後可以再使用）
+  - 先進先出：`(product_id, received_date, id) WHERE qty_remaining > 0 AND deleted_at IS NULL`
+  - `(source_doc_id)`；`set_updated_at` trigger
+- 軟刪除只發生在作廢產生它的單據時（見下方「作廢」）；刪除時 `qty_remaining` 一併設為 0。
+- 先進先出的順序：`received_date, id`（同一天依建立順序，uuid v7）。
+
+**批號**（`lot_no`）：
+
+- 去除前後空白後儲存；不可有控制字元，最長 50 字元。
+- 由使用者在單據明細輸入（盤點調整單的 `lot_no`、M4b 進貨單的 `lot_no`）。去除空白後是空字串時，**過帳時**自動產生：`{單號}-{明細序號}`，明細序號是該列在單據明細中的位置（`sort_order + 1`），至少 2 位、不足補零，例如 `ADJ202611-0003-01`、`ADJ202611-0003-12`。自動產生的批號寫回明細的 `lot_no`。
+- 單號不可重複，所以自動產生的批號不會彼此重複；與使用者先前手動輸入的批號重複時，與手動輸入的重複相同處理（下一點）。
+- 重複的檢查：存檔時檢查（與同商品未刪除的批號、與同一張單據的其他明細）；過帳時由唯一索引再擋一次（存檔後才建立的批號）。重複 → `422 VALIDATION`，明細的 `lot_no`，訊息「批號已存在」。
+- 建立後不可修改。
 
 #### `lot_allocations`（批號扣除明細）
 | 欄位 | 型態 | 說明 |
 |---|---|---|
-| id | UUID PK | |
-| source_type | TEXT | `shipment_line` / `purchase_return_line` / `adjustment_line` |
-| source_line_id | UUID | |
-| lot_id | UUID FK → inventory_lots | |
-| qty | NUMERIC(18,4) | |
-| unit_cost_twd | NUMERIC(18,4) | 扣除當下該批號的成本 |
-| created_at | TIMESTAMPTZ | |
+| id | UUID PRIMARY KEY | |
+| source_type | TEXT NOT NULL CHECK | 扣除庫存的單據明細子表代碼：`stock_adjustment_line`（M4b 加上 `purchase_return_line`、M4c 加上 `shipment_line`） |
+| source_doc_id | UUID NOT NULL | 單據（主表）的 id |
+| source_line_id | UUID NOT NULL | 明細的 id |
+| lot_id | UUID NOT NULL FK → inventory_lots | |
+| qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | 從該批號扣除的數量 |
+| unit_cost_twd | NUMERIC(18,4) NOT NULL | 扣除當下該批號的成本（= 批號的 `unit_cost_twd`） |
+| created_at | TIMESTAMPTZ NOT NULL DEFAULT now() | |
+| created_by | UUID FK → users | |
+
+- 索引：`(source_type, source_line_id)`、`(lot_id)`。
+- 只新增，不修改也不刪除。作廢單據時依它把數量加回原批號，紀錄保留（成本的歷史）。
+- 一列明細可以有多筆（先進先出跨多個批號）。
 
 #### `inventory_transactions`（庫存異動流水帳）
 | 欄位 | 型態 | 說明 |
 |---|---|---|
-| id | UUID PK | |
-| txn_at | TIMESTAMPTZ | |
-| txn_type | TEXT | `receipt` / `shipment` / `sales_return` / `purchase_return` / `adjustment` / `void_reversal` |
-| product_id | UUID FK | |
-| lot_id | UUID FK | |
-| qty_change | NUMERIC(18,4) | 入庫為正、出庫為負 |
-| unit_cost_twd | NUMERIC(18,4) | |
-| ref_doc_type / ref_doc_id / ref_line_id | | 來源單據 |
-| created_by | UUID FK | |
+| id | UUID PRIMARY KEY | |
+| txn_at | TIMESTAMPTZ NOT NULL DEFAULT now() | 過帳或作廢的時間 |
+| txn_date | DATE NOT NULL | 業務日期：過帳時為單據日期；作廢時為作廢當天（Asia/Taipei） |
+| txn_type | TEXT NOT NULL CHECK | `receipt` / `shipment` / `sales_return` / `purchase_return` / `adjustment` / `void_reversal`（M4a 起就列出全部值） |
+| product_id | UUID NOT NULL FK → products | |
+| lot_id | UUID NOT NULL FK → inventory_lots | 每一筆異動都屬於一個批號 |
+| qty_change | NUMERIC(18,4) NOT NULL CHECK (qty_change <> 0) | 入庫為正、出庫為負 |
+| unit_cost_twd | NUMERIC(18,4) NOT NULL | 該批號的成本 |
+| ref_doc_type | TEXT NOT NULL CHECK | 來源單據的主表代碼：`stock_adjustment`（M4b、M4c 加上各自的單據） |
+| ref_doc_id | UUID NOT NULL | 來源單據 id |
+| ref_line_id | UUID NOT NULL | 來源明細 id |
+| created_by | UUID FK → users | |
 
-> 流水帳只新增，不修改也不刪除。作廢單據時新增反向異動。
+- 索引：`(product_id, txn_date, id)`、`(lot_id, ref_doc_type, ref_doc_id)`、`(ref_doc_type, ref_doc_id)`。
+- 只新增，不修改也不刪除（沒有共通欄位）。作廢單據時新增 `txn_type = void_reversal` 的反向異動，`ref_*` 仍指向被作廢的單據與明細。
+- 一張單據的作廢是全有或全無，所以「某張單據對某個批號的異動是否還有效」= 該單據對該批號的異動中**沒有** `void_reversal`。
 
-#### `stock_adjustments` / `stock_adjustment_lines`（盤點與調整單）
-| 欄位（明細） | 型態 | 說明 |
-|---|---|---|
-| product_id | UUID FK | |
-| lot_id | UUID FK，可為空 | 盤盈時可新增批號 |
-| qty_before / qty_after | NUMERIC(18,4) | |
-| unit_cost_twd | NUMERIC(18,4) | 新批號的成本 |
-| reason | TEXT | |
+#### `stock_adjustments`（盤點與調整單，系統單據 `stock_adjustment`）
 
-表頭欄位：`adjustment_no`、`adjustment_date`、`status`、`notes`、`custom_data`，加上共通欄位。期初庫存也用這張單據輸入。
+依照 §7.1「系統單據」與 §8.6「系統資料表的共同規則」（欄位順序、`custom_data`、`formula_errors`、共通欄位、trigger、`field_definitions` 的寫法都相同）。用途：盤點差異、報廢等一般調整、**期初庫存**。
+
+M4a 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`storage = table`、`is_active = true`、`icon` 為 `NULL`，id 為 migration 中固定的 UUID）：
+
+| key | label | kind | table_name | 主表 | numbering_pattern | title_template | sort_order |
+|---|---|---|---|---|---|---|---|
+| `stock_adjustment` | 盤點調整單 | document | `stock_adjustments` | | `ADJ{yyyyMM}-{0000}` | `{record_no}` | 100 |
+| `stock_adjustment_line` | 盤點調整明細 | detail | `stock_adjustment_lines` | `stock_adjustment` | | `{product_id.code} {product_id.name} {lot_no}` | 0 |
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| record_no | TEXT NOT NULL | （單號，不是欄位） | | §7.1「系統單據」；唯一索引 `(record_no)`（含已刪除） |
+| adjustment_date | DATE NOT NULL | `date` | 調整日期 | 必填；新批號的 `received_date`、異動的 `txn_date`。桌面程式新增時預設今天 |
+| adjustment_type | TEXT NOT NULL CHECK | `select` | 類型 | 必填、預設 `count`；選項 `opening`（期初庫存）/ `count`（盤點）/ `adjustment`（一般調整） |
+| status | TEXT NOT NULL DEFAULT 'draft' CHECK | `select` | 狀態 | 系統維護（§7.1）；選項 `draft`（草稿）/ `posted`（已過帳）/ `void`（已作廢） |
+| notes | TEXT | `long_text` | 備註 | |
+| posted_at / posted_by | TIMESTAMPTZ / UUID FK → users | （不是欄位） | | 過帳時間與人員 |
+| voided_at / voided_by | TIMESTAMPTZ / UUID FK → users | （不是欄位） | | 作廢時間與人員 |
+
+- `CHECK ((status = 'draft') = (posted_at IS NULL))`、`CHECK ((status = 'void') = (voided_at IS NOT NULL))`、`CHECK ((posted_at IS NULL) = (posted_by IS NULL))`、`CHECK ((voided_at IS NULL) = (voided_by IS NULL))`。
+- 索引：`(adjustment_date, id)`、`(status)`。
+
+#### `stock_adjustment_lines`（明細子表 `stock_adjustment_line`）
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| stock_adjustment_id | UUID NOT NULL FK → stock_adjustments | （不是欄位） | | 所屬單據 |
+| sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序 |
+| product_id | UUID NOT NULL FK → products | `relation` | 商品 | 必填、→ `product`；必須是 `goods` |
+| line_type | TEXT NOT NULL CHECK | `select` | 調整方式 | 必填、預設 `gain_new`；選項 `gain_new`（盤盈：新批號）/ `gain_existing`（盤盈：加回既有批號）/ `loss`（盤虧：扣指定批號） |
+| lot_no | TEXT | `text` | 批號 | `max_length 50`；`gain_new` 可留空（過帳時自動產生），`gain_existing`、`loss` 必填 |
+| qty | NUMERIC(18,4) NOT NULL | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0（`hammer_core` 另外檢查）；一律為正數，增減由 `line_type` 決定 |
+| unit_cost_twd | NUMERIC(18,4) | `money` | 單位成本 | 小數 4、`min 0`；`gain_new` 必填；`gain_existing`、`loss` 不可填，過帳時由系統寫入該批號的成本 |
+| reason | TEXT | `text` | 原因 | 例如 盤點差異、報廢 |
+| lot_id | UUID FK → inventory_lots | （不是欄位） | | 過帳時寫入：`gain_new` 為新建的批號，其他為指定的批號 |
+
+- 索引：`(stock_adjustment_id, sort_order, id) WHERE deleted_at IS NULL`、`(product_id)`、`(lot_id)`。
+
+**存檔時的檢查**（草稿的新增與修改；`hammer_core::stock_adjustments`，違反時 `422 VALIDATION`，明細錯誤依 §10「主表與明細」的格式）：
+
+| 檢查 | 錯誤位置與訊息 |
+|---|---|
+| 商品是 `goods` | `product_id`「服務類商品沒有庫存」 |
+| `qty > 0` | `qty`「數量必須大於 0」 |
+| `gain_new`：`unit_cost_twd` 有值；`lot_no` 有值時不可與該商品未刪除的批號重複 | `unit_cost_twd`「必填」；`lot_no`「批號已存在」 |
+| `gain_existing`、`loss`：`lot_no` 必填，必須是該商品未刪除的批號；`unit_cost_twd` 不可填 | `lot_no`「找不到此批號」；`unit_cost_twd`「既有批號的成本不可修改」 |
+| 同一張單據中，同一商品的同一批號（不分大小寫）只能出現一次（`gain_new` 留空的批號不比對） | 第二列的 `lot_no`「批號重複」 |
+| `adjustment_type = opening` 時只能使用 `gain_new` | `line_type`「期初庫存只能新增批號」 |
+
+- 存檔時**不檢查**庫存是否足夠（過帳時檢查），所以草稿可以先輸入盤虧。
+- 系統維護的欄位、`lot_id` 由伺服器寫入；明細 request 帶到 `lot_id` 時與其他未定義的欄位相同（`422`）。
+
+**過帳**（`POST /api/v1/entities/stock_adjustment/records/{id}/post`，§10「單據動作」）：
+
+1. 依「鎖定順序」鎖定單據（`FOR UPDATE`）；檢查 `version`、`status = draft`。
+2. 依目前的資料重新執行全部存檔時的檢查（商品可能在存檔後被刪除或改類型、批號可能已被作廢刪除），並檢查至少有一列明細（`details.lines` 的 `index`、`field_key` 為 `null`，訊息「至少要有一筆明細」）；商品已刪除時為 `product_id`「商品已刪除」。
+3. 鎖定商品（`FOR SHARE`）、指定的批號（`FOR UPDATE`）。
+4. 依 `sort_order` 處理每一列：
+   - `gain_new`：`lot_no` 留空時自動產生；新增 `inventory_lots`（`qty_in = qty_remaining = qty`、`unit_cost_twd` 為明細的成本、`received_date = adjustment_date`）；新增異動（`adjustment`、`+qty`）。
+   - `gain_existing`：該批號 `qty_remaining += qty`；新增異動（`adjustment`、`+qty`、批號的成本）；明細的 `unit_cost_twd` 寫入批號的成本。
+   - `loss`：`qty ≤ qty_remaining`，不足時記下短缺並繼續檢查其他列；足夠時新增 `lot_allocations`、`qty_remaining -= qty`、新增異動（`adjustment`、`−qty`）；明細的 `unit_cost_twd` 寫入批號的成本。
+   - 寫入明細的 `lot_id`；明細有變動（`lot_no`、`unit_cost_twd`、`lot_id`）時明細的 `version` + 1。
+5. 有任何短缺 → 整張單據 rollback，回傳 `422 STOCK_INSUFFICIENT`，列出**所有**短缺（§10）。
+6. `status = posted`、`posted_at`、`posted_by`，`version` + 1；寫入操作紀錄（`post`）。
+
+**作廢**（`POST /api/v1/entities/stock_adjustment/records/{id}/void`）：
+
+1. 鎖定單據；檢查 `version`、`status = posted`。
+2. 鎖定商品（`FOR SHARE`）、各明細的 `lot_id`（`FOR UPDATE`）。
+3. 依 `sort_order` 處理每一列，異動一律為 `void_reversal`、`txn_date` 為作廢當天：
+   - `gain_new`：該批號必須沒有**其他單據的有效異動**（`inventory_transactions` 中 `lot_id` 相同、來源是其他單據、且該單據對此批號沒有 `void_reversal` 的異動），否則記下並繼續檢查；可以時新增異動（`−qty_remaining`，此時等於 `qty`）、批號軟刪除。
+   - `gain_existing`：該批號 `qty_remaining ≥ qty`，不足時記下短缺；足夠時 `qty_remaining -= qty`、新增異動（`−qty`）。
+   - `loss`：依該列的 `lot_allocations` 把數量加回原批號，新增異動（`+qty`、扣除時的成本）。
+4. 有批號被其他單據使用 → rollback，`422 LOT_IN_USE`；有短缺 → rollback，`422 STOCK_INSUFFICIENT`（兩者都有時回傳 `LOT_IN_USE`）。
+5. `status = void`、`voided_at`、`voided_by`，`version` + 1；寫入操作紀錄（`void`）。作廢後不可再過帳，要重做時另開新單據。
+
+**期初庫存**：開始使用系統時，以 `adjustment_type = opening` 的盤點調整單輸入，每一個批號一列（`gain_new`，填入批號、數量、台幣單位成本）。不限制只能有一張、也不限制日期；調整日期建議填開始使用系統的前一天，讓期初批號在先進先出中排在最前面。
+
+**鎖定順序**（所有會鎖定庫存的操作都遵守，避免並行過帳 deadlock；`hammer_core::inventory` 提供共用的鎖定函式）：
+
+1. 單據主表（`FOR UPDATE`）。同一個操作需要鎖多張單據時（例如 M4b 進貨過帳同時更新採購單），先鎖本張單據，其他單據依 `id` 由小到大。
+2. 商品：單據所有明細的 `product_id` 去除重複後依 `id` 由小到大 `FOR SHARE`（避免過帳期間商品被刪除或改類型、單位，見 §7.2）。
+3. 批號：一次查詢鎖定，`ORDER BY product_id, id FOR UPDATE`。範圍為指定的批號（`lot_id`、或依 `product_id` + `lot_no` 找到的批號），加上先進先出模式的商品所有 `qty_remaining > 0` 且未刪除的批號。
+4. 其他單據的明細（例如採購單明細的 `received_qty`），依 `id` 由小到大。
+5. 之後才新增 `inventory_lots`、`lot_allocations`、`inventory_transactions`（新增不會與其他 transaction 互相等待；批號重複由唯一索引擋下）。
+
+- 鎖定後才讀取 `qty_remaining` 與做先進先出計算，不使用鎖定前讀到的值。
+- 商品的刪除與修改先以 `FOR UPDATE` 鎖定商品再檢查庫存（§7.2），與過帳的 `FOR SHARE` 互斥，所以檢查後不會再有新的異動。
 
 #### `v_stock_balances`（檢視表）
 ```sql
-SELECT product_id, SUM(qty_remaining) AS qty_on_hand,
+SELECT product_id,
+       SUM(qty_remaining)                 AS qty_on_hand,
        SUM(qty_remaining * unit_cost_twd) AS stock_value_twd
 FROM inventory_lots
 WHERE deleted_at IS NULL
 GROUP BY product_id;
 ```
+
+- 只包含有批號的商品；沒有批號的 `goods` 商品在查詢 API 中庫存為 0。
+- `stock_value_twd` 在 API 回傳時四捨五入到 2 位小數。
+
+#### 庫存查詢 API
+
+都需要 `record.read`；分頁、錯誤格式依 §10。商品不存在或已刪除 → `404`。
+
+**商品庫存** `GET /api/v1/inventory/balances`
+
+| 參數 | 說明 |
+|---|---|
+| `q` | 料號或品名包含（不分大小寫；以空白分隔的每個詞都要出現在料號或品名中） |
+| `category_id` | 商品分類（只比對該分類本身，不含下層分類） |
+| `in_stock` | `true`：只列出 `qty_on_hand > 0`；`false`：只列出庫存為 0；省略：全部 |
+| `below_safety_stock` | `true`：只列出有設定 `safety_stock` 且 `qty_on_hand < safety_stock` |
+| `include_inactive` | 預設 `true`（停用的商品可能還有庫存）；`false` 時排除 `is_active = false` |
+| `page`、`page_size` | §10 |
+
+- 範圍：未刪除、`product_type = goods` 的商品（`products LEFT JOIN v_stock_balances`）。排序：`lower(code), id`。
+- 項目：`{ "product_id", "code", "name", "spec", "unit_name", "is_active", "qty_on_hand": "12.0000", "stock_value_twd": "3450.00", "safety_stock": "10.0000" | null, "below_safety_stock": false }`。
+
+**商品的批號** `GET /api/v1/inventory/products/{product_id}/lots`
+
+| 參數 | 說明 |
+|---|---|
+| `include_empty` | 預設 `false`：只列出 `qty_remaining > 0`；`true`：含已用完的批號 |
+| `q` | 批號包含（不分大小寫） |
+| `page`、`page_size` | §10 |
+
+- 範圍：該商品未刪除的批號；依先進先出順序（`received_date, id`）排序。商品是 `service` 時回傳空列表。
+- 項目：`{ "id", "lot_no", "received_date", "source_type", "source_doc_id", "source_record_no", "qty_in", "qty_remaining", "unit_cost_twd" }`（`source_record_no` 為來源單據的單號）。
+- 桌面程式的批號選擇（盤點調整單的 `lot_no`、M4c 手動指定批號）使用此端點。
+
+**異動流水帳** `GET /api/v1/inventory/transactions`
+
+| 參數 | 說明 |
+|---|---|
+| `product_id` | 商品 |
+| `lot_id` | 批號 |
+| `date_from`、`date_to` | `txn_date` 區間，含開始、含結束（與匯率列表相同） |
+| `txn_type` | 異動類型 |
+| `ref_doc_type`、`ref_doc_id` | 來源單據 |
+| `page`、`page_size` | §10 |
+
+- 排序：`txn_date DESC, id DESC`（新到舊）。
+- 項目：`{ "id", "txn_at", "txn_date", "txn_type", "product_id", "product_code", "product_name", "lot_id", "lot_no", "qty_change", "unit_cost_twd", "ref_doc_type", "ref_doc_id", "ref_record_no", "ref_line_id", "created_by", "created_by_name" }`。
+- 不回傳累計餘額（分頁下無法正確計算）；需要時另以商品庫存查詢目前數量。
+- 參數格式錯誤（日期、uuid、`txn_type` 不在選項中）→ `422 VALIDATION`，`details.field` 為參數名稱。
 
 ---
 
@@ -1206,6 +1409,8 @@ GROUP BY product_id;
 ---
 
 ## 9. 核心業務流程
+
+> 過帳、作廢的共通規則（端點、權限、錯誤碼）見 §10「單據動作」；鎖定一律依 §8.10「鎖定順序」；盤點調整單的完整流程見 §8.10。
 
 ### 9.1 進貨過帳
 
@@ -1245,7 +1450,8 @@ GROUP BY product_id;
 | 單據 | 作廢條件 | 作廢動作 |
 |---|---|---|
 | 出貨單 | 隨時（⏳ 已開發票時的限制，等發票模組再定） | 依 lot_allocations 把數量加回原批號，新增反向異動 |
-| 進貨單 | 該批號沒有被扣過（qty_remaining = qty_in） | 刪除批號（軟刪除），新增反向異動；已被扣用時拒絕，提示先處理後續單據 |
+| 進貨單 | 產生的批號沒有其他單據的有效異動（§8.10「作廢」；此時 qty_remaining = qty_in） | 刪除批號（軟刪除），新增反向異動；已被使用時拒絕（`LOT_IN_USE`），提示先作廢後續單據 |
+| 盤點調整單 | 新批號沒有其他單據的有效異動；加回既有批號的數量還在 | 依 §8.10「作廢」反向處理 |
 | 退貨單 | 隨時 | 反向處理 |
 
 ### 9.4 樂觀鎖定
@@ -1262,8 +1468,8 @@ GROUP BY product_id;
 - 客戶端在 `X-Client-Version` 標頭帶上版本號。版本低於伺服器要求時回傳 `426`，介面提示更新。
 - **通用資料 API**：`/api/v1/entities/{entity_key}/records`（列表、單筆、新增、修改、刪除、`lookup`）。自訂資料類別與系統資料類別（M3 起的 `unit`、`product_category`、`product`、`customer`、`supplier` 與其明細子表）都使用這組端點，行為相同（§7.1「系統資料類別共用通用資料 API」）。
 - **專屬端點**，只用於以下兩種情況：
-  - 系統資料類別在一般新增、修改、刪除以外的動作：M4 單據的過帳、作廢等（例如 `POST /api/v1/entities/shipment/records/{id}/post`；路徑在 M4 定案），這些動作有自己的權限（`record.post`）與規則。單據的一般新增、修改仍使用通用資料 API。
-  - 不是資料類別的資料：幣別 `/api/v1/currencies`、匯率 `/api/v1/exchange-rates`、稅別 `/api/v1/tax-rates`（§8.6）。它們沒有自訂欄位、版面、關聯，也不出現在 `GET /api/v1/entities`。
+  - 系統資料類別在一般新增、修改、刪除以外的動作：系統單據的過帳、作廢（見下方「單據動作」），這些動作有自己的權限（`record.post`）與規則。單據的一般新增、修改、刪除仍使用通用資料 API。
+  - 不是資料類別的資料：幣別 `/api/v1/currencies`、匯率 `/api/v1/exchange-rates`、稅別 `/api/v1/tax-rates`（§8.6）、庫存查詢 `/api/v1/inventory/…`（§8.10）。它們沒有自訂欄位、版面、關聯，也不出現在 `GET /api/v1/entities`。
 - 重新計算公式：`POST /api/v1/entities/{entity_key}/recalculate`（需要 `schema.manage`，無 request body），回應 `{ "processed": 120, "changed": 37, "with_errors": 2 }`（型別 `hammer_shared::schema::RecalculateResult`；規則見 §7.6「重新計算」）。
 - 錯誤格式統一：
   ```json
@@ -1311,6 +1517,28 @@ GROUP BY product_id;
     ```
     `fields` 為主表的欄位錯誤（可能為空）；`index` 為該列在 request 陣列中的位置（從 0 開始），不屬於某一列（明細子表不存在）時為 `null`；`field_key` 不屬於某個欄位（`id` 不存在或重複）時為 `null`。只有主表錯誤時維持原本的 `{ "fields": [ … ] }`。
 
+- 單據動作（系統單據的過帳、作廢；規則見 §7.1「系統單據」，各單據的處理見 §8.10、§9；型別在 `hammer_shared::document`，邏輯在 `hammer_core::documents` 依資料類別分派）：
+  | 動作 | 端點 | 前一個狀態 → 之後 |
+  |---|---|---|
+  | 過帳 | `POST /api/v1/entities/{entity_key}/records/{id}/post` | `draft` → `posted` |
+  | 作廢 | `POST /api/v1/entities/{entity_key}/records/{id}/void` | `posted` → `void` |
+  - 權限：`record.post`（管理者、可編輯者）。
+  - request：`{ "version": 3 }`（`DocumentActionRequest`；樂觀鎖定，§9.4）。不接受其他內容；要修改單據請先用通用資料 API 存檔再過帳。
+  - 回應：`200`，內容與單筆查詢相同（含 `lines`、`document`），`version` 已 + 1。
+  - 不支援此動作的資料類別（主檔、自訂資料類別、明細子表、不存在的代碼）、資料不存在或已刪除 → `404 NOT_FOUND`。
+  - 檢查順序：權限（`403`）→ 資料存在（`404`）→ `version`（`409 CONFLICT`）→ 狀態（`422 INVALID_STATUS`）→ 內容與庫存（`422 VALIDATION` / `STOCK_INSUFFICIENT` / `LOT_IN_USE`）。任何錯誤都整張 rollback，單據維持原狀態。
+  - 過帳時重新驗證整張單據（存檔後被參照的資料可能已改變），格式與存檔相同（`VALIDATION`，`details` 為 `{ "fields", "lines" }`）。
+  - 單據相關的錯誤碼（`hammer_shared::error::ErrorCode`，HTTP 都是 `422`）：
+
+    | code | 用途 | `details` |
+    |---|---|---|
+    | `INVALID_STATUS` | 單據狀態不允許此操作（修改、刪除非草稿；過帳非草稿；作廢非已過帳） | `{ "status": "posted" }`（目前狀態） |
+    | `STOCK_INSUFFICIENT` | 過帳或作廢時批號或商品的數量不足 | `{ "items": [ { "product_id", "product_code", "product_name", "lot_id", "lot_no", "required", "available", "shortage", "lines": [ { "detail_key", "index" } ] } ] }` |
+    | `LOT_IN_USE` | 作廢時要刪除的批號已被其他有效單據使用 | `{ "lots": [ { "lot_id", "lot_no", "product_id", "product_code", "documents": [ { "entity_key", "record_id", "record_no" } ] } ] }` |
+
+    - `STOCK_INSUFFICIENT` 列出**所有**不足的項目：指定批號時一個批號一項；先進先出（M4c）時一個商品一項，`lot_id`、`lot_no` 為 `null`。同一個批號（商品）出現在多列明細時合併成一項，`required` 為合計，`lines` 列出各列（`index` 為依 `sort_order` 的位置，從 0 開始）。數量為補齊 4 位小數的字串。訊息為第一項，例如「商品 A001 批號 L-01 庫存不足，尚缺 6」；多項時加上「等 3 項」。
+    - `LOT_IN_USE` 的訊息例如「批號 L-01 已被其他單據使用，請先作廢 SH202611-0005」。
+
 ---
 
 ## 11. 維運
@@ -1338,7 +1566,9 @@ GROUP BY product_id;
 | M2b | 明細子表、關聯欄位、附件欄位、單號規則，以及資料類別管理的完整功能 |
 | M2c | 公式引擎 |
 | M3 | 客戶、廠商、商品、單位、幣別、匯率等基本資料；關聯欄位指向系統資料類別（M2b 只能關聯自訂資料類別，§7.3） |
-| M4 | 採購、進貨（含外幣）、批號、訂單、出貨（先進先出或手動指定）、退貨、盤點 |
+| M4a | 單據共通框架（系統單據、單號、狀態、過帳與作廢端點）、庫存基礎（批號、批號扣除、異動流水帳、庫存查詢）、盤點與調整單、期初庫存 |
+| M4b | 採購、進貨（含外幣）、進貨退回 |
+| M4c | 訂單、出貨（先進先出或手動指定批號）、銷貨退回 |
 | M5 | 發票（⏳） |
 | M6 | 財務（⏳） |
 | M7 | 報表、Excel 匯出、列印、備份與還原介面 |
@@ -1351,7 +1581,7 @@ GROUP BY product_id;
 |---|---|---|
 | Q1 | 發票模組細節（字軌、作廢、折讓、與出貨的關聯） | M5 開始前 |
 | Q2 | 財務模組深度（是否做複式記帳、匯兌損益） | M6 開始前 |
-| Q3 | 進口成本分攤（運費、關稅、報關費）到批號成本 | M4 進貨功能開始前 |
+| Q3 | 進口成本分攤（運費、關稅、報關費）到批號成本 | ✅ 已決定：第一版**不分攤**，批號成本 = `unit_price × exchange_rate`（§8.8）。之後要做時另加「費用分攤單」調整批號成本，不改變既有資料 |
 | Q4 | Tailscale 方案、伺服器主機、備份存放位置 | 開放多人使用前 |
 | Q5 | 可編輯者能不能維護匯率 | ✅ 已決定：可以（`record.write`）；幣別維持 `settings.manage`（§6.1） |
 | Q6 | 程式碼簽章 | 正式發佈前 |
