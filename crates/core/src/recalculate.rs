@@ -2,7 +2,8 @@
 //!
 //! 修改公式後，既有資料的值不會自動更新；關聯引用的目標資料修改後，引用它的公式也不會更新。
 //! 管理者（`schema.manage`）以 [`recalculate_records`] 對一個主表（`master` / `document`）的所有
-//! 未刪除資料重算，明細隨主表一起重算。
+//! 未刪除資料重算，明細隨主表一起重算。自訂資料類別（`custom_records`）與系統資料類別（專屬資料表，
+//! 公式的值寫入 `custom_data`，系統欄位不變；§7.1）都可以。
 //!
 //! - 同步執行，每 [`BATCH_SIZE`] 筆主表資料一個 transaction（依 `id` 由小到大，鎖定該批主表與明細）
 //! - 計算方式與存檔時相同（[`crate::formulas`]）：先算每一列明細（只有有效的明細子表），再算主表；
@@ -18,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use hammer_db::DbError;
-use hammer_db::record::{self as db, LineRow, RecordRow};
+use hammer_db::record::{LineRow, RecordRow};
 use hammer_db::sqlx::{PgPool, PgTransaction};
 use hammer_shared::schema::RecalculateResult;
 use hammer_shared::time::Date;
@@ -30,7 +31,10 @@ use crate::CoreError;
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
 use crate::formulas::{Formulas, Targets, errors_to_json, load_targets, today_of};
-use crate::records::{Detail, formulas_of, load_details_for_write, load_entity_for_write};
+use crate::records::{
+    Detail, FormulaWrite, formulas_of, lines_of_parents_for_update, load_details_for_write,
+    load_entity_for_write, write_formula_values,
+};
 
 /// 每個 transaction 處理的主表資料筆數。
 pub const BATCH_SIZE: usize = 500;
@@ -38,7 +42,7 @@ pub const BATCH_SIZE: usize = 500;
 /// 重新計算資料類別 `entity_key` 所有未刪除資料的公式欄位。需要 `schema.manage`。
 ///
 /// - 沒有權限 → [`CoreError::Forbidden`]（先於其他檢查）
-/// - 資料類別不存在、已停用、不是 `custom_records`、是明細子表 → [`CoreError::NotFound`]
+/// - 資料類別不存在、已停用、是明細子表 → [`CoreError::NotFound`]
 pub async fn recalculate_records(
     pool: &PgPool,
     ctx: &AuthContext,
@@ -53,24 +57,29 @@ pub async fn recalculate_records(
     loop {
         let mut tx = pool.begin().await.map_err(DbError::from)?;
         // 每批重新讀取欄位定義並以 FOR SHARE 鎖定資料類別，批次內不會與欄位定義的變更交錯
-        let (entity, fields) = load_entity_for_write(&mut tx, entity_key).await?;
+        let (entity, fields, store) = load_entity_for_write(&mut tx, entity_key).await?;
         let details = load_details_for_write(&mut tx, &entity).await?;
         let formulas = formulas_of(&fields, &details);
         let limit = i64::try_from(BATCH_SIZE).unwrap_or(i64::MAX);
-        let rows = db::list_records_after_for_update(&mut *tx, entity.id, after, limit).await?;
+        let rows = store
+            .list_after_for_update(&mut tx, entity.id, after, limit)
+            .await?;
         let last_batch = rows.len() < BATCH_SIZE;
         after = rows.last().map(|r| r.id);
 
         let batch = recalculate_batch(&mut tx, &formulas, &details, &rows, today).await?;
         if !batch.writes.is_empty() {
-            let ids: Vec<Id> = batch.writes.iter().map(|w| w.id).collect();
-            let data: Vec<Value> = batch.writes.iter().map(|w| w.data.clone()).collect();
-            let errors: Vec<Value> = batch
+            let writes: Vec<FormulaWrite<'_>> = batch
                 .writes
                 .iter()
-                .map(|w| w.formula_errors.clone().unwrap_or(Value::Null))
+                .map(|w| FormulaWrite {
+                    id: w.id,
+                    detail: w.detail.as_deref(),
+                    data: &w.data,
+                    formula_errors: w.formula_errors.as_ref(),
+                })
                 .collect();
-            db::update_formula_values(&mut *tx, &ids, &data, &errors, ctx.user_id).await?;
+            write_formula_values(&mut tx, &store, &details, &writes, ctx.user_id).await?;
         }
         result.processed = result.processed.saturating_add(count(rows.len()));
         result.changed = result.changed.saturating_add(batch.changed);
@@ -146,7 +155,7 @@ async fn recalculate_batch(
         return Ok(Batch::default());
     }
     let ids: Vec<Id> = rows.iter().map(|r| r.id).collect();
-    let line_rows = db::list_lines_of_parents_for_update(&mut **tx, &ids).await?;
+    let line_rows = lines_of_parents_for_update(tx, details, &ids).await?;
 
     // 只計算有效的明細子表；已停用的明細子表的明細不變
     let detail_keys: HashMap<Id, &str> = details
@@ -235,6 +244,8 @@ impl<'a> Stored<'a> {
 #[derive(Debug, Clone, PartialEq)]
 struct Write {
     id: Id,
+    /// 明細子表代碼；主表為 `None`（決定寫入的資料表）。
+    detail: Option<String>,
     data: Value,
     formula_errors: Option<Value>,
 }
@@ -281,6 +292,7 @@ fn recalculate_one(
     has_errors |= !errors.is_empty();
     let master_write = Write {
         id: master.id,
+        detail: None,
         data: Value::Object(data),
         formula_errors: errors_to_json(&errors),
     };
@@ -292,6 +304,7 @@ fn recalculate_one(
                 line,
                 Write {
                     id: line.id,
+                    detail: line.detail.map(str::to_owned),
                     data: Value::Object(data),
                     formula_errors: errors,
                 },
@@ -312,7 +325,7 @@ fn changed(stored: &Stored<'_>, write: &Write) -> bool {
 
 fn object(data: &Value) -> Result<&Map<String, Value>, CoreError> {
     data.as_object()
-        .ok_or_else(|| CoreError::Internal("custom_records.data 不是 JSON 物件".into()))
+        .ok_or_else(|| CoreError::Internal("資料的 data 不是 JSON 物件".into()))
 }
 
 #[cfg(test)]
@@ -419,6 +432,7 @@ mod tests {
             out.writes,
             vec![Write {
                 id: master.id,
+                detail: None,
                 data: json!({ "qty": 3, "total": 16 }),
                 formula_errors: None,
             }]
@@ -439,11 +453,13 @@ mod tests {
             vec![
                 Write {
                     id: master.id,
+                    detail: None,
                     data: m.clone(),
                     formula_errors: None,
                 },
                 Write {
                     id: line.id,
+                    detail: Some("parts".into()),
                     data: json!({ "n": 1, "amount": 10 }),
                     formula_errors: None,
                 },
@@ -503,6 +519,7 @@ mod tests {
             out.writes,
             vec![Write {
                 id: master.id,
+                detail: None,
                 data: json!({ "a": 1, "b": 2, "ratio": "0.50" }),
                 formula_errors: None,
             }]
@@ -528,6 +545,65 @@ mod tests {
         assert_eq!(out.writes[0].id, master.id);
         assert_eq!(out.writes[1].id, line.id);
         assert!(out.writes[1].formula_errors.is_some());
+    }
+
+    /// 系統資料類別（例如商品、客戶與聯絡人）：系統欄位讀出時是補齊小數位數的 `NUMERIC` 字串，
+    /// 公式以 Decimal 計算（不經過浮點數）；明細的寫入帶明細子表代碼（決定寫入的資料表）。
+    #[test]
+    fn system_money_columns_use_decimal() {
+        let system = |key: &str, data_type: DataType| FieldDefinition {
+            is_system: true,
+            storage: FieldStorage::Column,
+            decimal_places: Some(4),
+            ..field(key, data_type)
+        };
+        let money4 = |key: &str, text: &str| FieldDefinition {
+            decimal_places: Some(4),
+            ..formula(key, text, DataType::Money)
+        };
+        let master = [
+            system("default_sale_price", DataType::Money),
+            money4("with_tax", "{default_sale_price} * 1.05"),
+            money4("plus", "{default_sale_price} + 0.2"),
+            money4("commission_total", "SUM(customer_contact.commission)"),
+        ];
+        let contact = [
+            field("name", DataType::Text),
+            FieldDefinition {
+                decimal_places: Some(2),
+                ..field("rate", DataType::Money)
+            },
+            money4("commission", "{rate} * 0.1"),
+        ];
+        let formulas = Formulas::new(&master, &[("customer_contact", &contact)]);
+
+        let m = json!({ "default_sale_price": "0.1000" });
+        let l1 = json!({ "name": "甲", "rate": "0.10" });
+        let l2 = json!({ "name": "乙", "rate": "0.20" });
+        let master = stored(None, &m, None);
+        let lines = [
+            stored(Some("customer_contact"), &l1, None),
+            stored(Some("customer_contact"), &l2, None),
+        ];
+        let out = recalculate_one(&formulas, &master, &lines, &Targets::default(), TODAY).unwrap();
+        assert!(!out.has_errors);
+        assert_eq!(
+            out.writes[0].data,
+            json!({
+                "default_sale_price": "0.1000",
+                "with_tax": "0.1050",
+                "plus": "0.3000",
+                "commission_total": "0.0300",
+            })
+        );
+        assert_eq!(out.writes[0].detail, None);
+        assert_eq!(out.writes[1].data["commission"], json!("0.0100"));
+        assert_eq!(out.writes[2].data["commission"], json!("0.0200"));
+        assert!(
+            out.writes[1..]
+                .iter()
+                .all(|w| w.detail.as_deref() == Some("customer_contact"))
+        );
     }
 
     #[test]

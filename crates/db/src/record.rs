@@ -423,7 +423,7 @@ pub async fn lock_existing_records<'e>(
 }
 
 /// 關聯欄位所指的資料（**含已軟刪除**）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct RelatedRecordRow {
     pub id: Uuid,
     pub record_no: Option<String>,
