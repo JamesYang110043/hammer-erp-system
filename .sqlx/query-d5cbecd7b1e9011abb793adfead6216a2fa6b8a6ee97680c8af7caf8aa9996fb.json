@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, currency_code, rate_date, rate, created_at, updated_at, version\n        FROM exchange_rates\n        WHERE id = $1 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "exchange_rates",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "currency_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "exchange_rates",
+            "name": "currency_code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "rate_date",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "exchange_rates",
+            "name": "rate_date"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "rate",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "exchange_rates",
+            "name": "rate"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "exchange_rates",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "exchange_rates",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "exchange_rates",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d5cbecd7b1e9011abb793adfead6216a2fa6b8a6ee97680c8af7caf8aa9996fb"
+}

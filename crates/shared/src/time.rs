@@ -22,6 +22,14 @@ pub fn today_taipei() -> Date {
     now_taipei().date()
 }
 
+// `Date` ⇄ `YYYY-MM-DD` 字串（JSON 與 query string 都適用）。
+//
+// - `#[serde(with = "hammer_shared::time::date_str")]`
+// - `#[serde(with = "hammer_shared::time::date_str::option", default)]`
+//
+// 搭配 `#[specta(type = String)]`（或 `Option<String>`），讓 TypeScript 型別也是 `string`。
+::time::serde::format_description!(pub date_str, Date, "[year]-[month]-[day]");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,6 +42,31 @@ mod tests {
         let taipei = utc.to_offset(TAIPEI_OFFSET);
         assert_eq!(taipei.date(), ::time::macros::date!(2026 - 01 - 02));
         assert_eq!(taipei.offset(), TAIPEI_OFFSET);
+    }
+
+    #[test]
+    fn date_str_round_trips() {
+        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        struct D {
+            #[serde(with = "date_str")]
+            date: Date,
+            #[serde(with = "date_str::option", default)]
+            optional: Option<Date>,
+        }
+        let d = D {
+            date: ::time::macros::date!(2026 - 11 - 07),
+            optional: None,
+        };
+        let json = serde_json::to_value(&d).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "date": "2026-11-07", "optional": null })
+        );
+        assert_eq!(serde_json::from_value::<D>(json).unwrap(), d);
+        let d: D = serde_json::from_value(serde_json::json!({ "date": "2024-02-29" })).unwrap();
+        assert_eq!(d.optional, None);
+        assert!(serde_json::from_value::<D>(serde_json::json!({ "date": "2026/11/07" })).is_err());
+        assert!(serde_json::from_value::<D>(serde_json::json!({ "date": "2026-02-30" })).is_err());
     }
 
     #[test]

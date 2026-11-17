@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE currencies\n        SET name = $3, symbol = $4, decimal_places = $5, is_active = $6,\n            updated_by = $7, version = version + 1\n        WHERE id = $1 AND version = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Text",
+        "Text",
+        "Int2",
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "10afaf7eafc4219b93c52cc675b977402d2b56f8f093f30fb80a3d51204e6492"
+}

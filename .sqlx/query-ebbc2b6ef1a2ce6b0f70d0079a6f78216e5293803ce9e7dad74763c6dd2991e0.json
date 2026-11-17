@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(*) AS \"n!\"\n        FROM exchange_rates\n        WHERE deleted_at IS NULL\n          AND ($1::text IS NULL OR currency_code = $1)\n          AND ($2::date IS NULL OR rate_date >= $2)\n          AND ($3::date IS NULL OR rate_date <= $3)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ebbc2b6ef1a2ce6b0f70d0079a6f78216e5293803ce9e7dad74763c6dd2991e0"
+}

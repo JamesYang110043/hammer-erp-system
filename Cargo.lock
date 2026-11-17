@@ -1847,6 +1847,7 @@ name = "hammer-db"
 version = "0.1.0"
 dependencies = [
  "hammer-shared",
+ "rust_decimal",
  "serde_json",
  "sqlx",
  "thiserror 2.0.21",

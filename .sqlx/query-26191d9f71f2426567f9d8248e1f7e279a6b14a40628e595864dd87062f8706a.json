@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT rate_date, rate\n        FROM exchange_rates\n        WHERE currency_code = $1 AND rate_date <= $2 AND deleted_at IS NULL\n        ORDER BY rate_date DESC\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rate_date",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "exchange_rates",
+            "name": "rate_date"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "rate",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "exchange_rates",
+            "name": "rate"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "26191d9f71f2426567f9d8248e1f7e279a6b14a40628e595864dd87062f8706a"
+}
