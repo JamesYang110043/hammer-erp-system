@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS (\n            SELECT 1\n            FROM inventory_transactions t\n            WHERE t.lot_id = $1\n              AND NOT (t.ref_doc_type = $2 AND t.ref_doc_id = $3)\n              AND NOT EXISTS (\n                  SELECT 1\n                  FROM inventory_transactions v\n                  WHERE v.lot_id = t.lot_id\n                    AND v.ref_doc_type = t.ref_doc_type\n                    AND v.ref_doc_id = t.ref_doc_id\n                    AND v.txn_type = 'void_reversal'\n              )\n        ) AS \"used!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "used!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5dc3e2436b39972d06a9239bb9679f257919f07a82392f0178ac9b64bf2b7799"
+}

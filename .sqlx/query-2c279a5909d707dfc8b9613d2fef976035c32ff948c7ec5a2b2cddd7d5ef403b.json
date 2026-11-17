@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT qty_on_hand, stock_value_twd\n        FROM v_stock_balances\n        WHERE product_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "qty_on_hand",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "v_stock_balances",
+            "name": "qty_on_hand"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "stock_value_twd",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "v_stock_balances",
+            "name": "stock_value_twd"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "2c279a5909d707dfc8b9613d2fef976035c32ff948c7ec5a2b2cddd7d5ef403b"
+}

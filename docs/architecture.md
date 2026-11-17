@@ -1192,7 +1192,8 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
   - 唯一：`(product_id, lower(lot_no)) WHERE deleted_at IS NULL`（同一商品的批號不分大小寫不可重複；批號被刪除後可以再使用）
   - 先進先出：`(product_id, received_date, id) WHERE qty_remaining > 0 AND deleted_at IS NULL`
   - `(source_doc_id)`；`set_updated_at` trigger
-- 軟刪除只發生在作廢產生它的單據時（見下方「作廢」）；刪除時 `qty_remaining` 一併設為 0。
+- 軟刪除只發生在作廢產生它的單據時（見下方「作廢」）；刪除時 `qty_remaining` 一併設為 0（`CHECK (deleted_at IS NULL OR qty_remaining = 0)`）。
+- `CHECK (char_length(lot_no) BETWEEN 1 AND 50)`；去除空白、控制字元由 `hammer_core` 檢查。
 - 先進先出的順序：`received_date, id`（同一天依建立順序，uuid v7）。
 
 **批號**（`lot_no`）：
@@ -1212,12 +1213,12 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 | source_line_id | UUID NOT NULL | 明細的 id |
 | lot_id | UUID NOT NULL FK → inventory_lots | |
 | qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | 從該批號扣除的數量 |
-| unit_cost_twd | NUMERIC(18,4) NOT NULL | 扣除當下該批號的成本（= 批號的 `unit_cost_twd`） |
+| unit_cost_twd | NUMERIC(18,4) NOT NULL CHECK (unit_cost_twd >= 0) | 扣除當下該批號的成本（= 批號的 `unit_cost_twd`） |
 | created_at | TIMESTAMPTZ NOT NULL DEFAULT now() | |
 | created_by | UUID FK → users | |
 
 - 索引：`(source_type, source_line_id)`、`(lot_id)`。
-- 只新增，不修改也不刪除。作廢單據時依它把數量加回原批號，紀錄保留（成本的歷史）。
+- 只新增，不修改也不刪除：資料庫以 trigger（`reject_append_only_change`）拒絕 `UPDATE`、`DELETE`、`TRUNCATE`（SQLSTATE `23001`）。作廢單據時依它把數量加回原批號，紀錄保留（成本的歷史）。
 - 一列明細可以有多筆（先進先出跨多個批號）。
 
 #### `inventory_transactions`（庫存異動流水帳）
@@ -1230,14 +1231,14 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 | product_id | UUID NOT NULL FK → products | |
 | lot_id | UUID NOT NULL FK → inventory_lots | 每一筆異動都屬於一個批號 |
 | qty_change | NUMERIC(18,4) NOT NULL CHECK (qty_change <> 0) | 入庫為正、出庫為負 |
-| unit_cost_twd | NUMERIC(18,4) NOT NULL | 該批號的成本 |
+| unit_cost_twd | NUMERIC(18,4) NOT NULL CHECK (unit_cost_twd >= 0) | 該批號的成本 |
 | ref_doc_type | TEXT NOT NULL CHECK | 來源單據的主表代碼：`stock_adjustment`（M4b、M4c 加上各自的單據） |
 | ref_doc_id | UUID NOT NULL | 來源單據 id |
 | ref_line_id | UUID NOT NULL | 來源明細 id |
 | created_by | UUID FK → users | |
 
 - 索引：`(product_id, txn_date, id)`、`(lot_id, ref_doc_type, ref_doc_id)`、`(ref_doc_type, ref_doc_id)`。
-- 只新增，不修改也不刪除（沒有共通欄位）。作廢單據時新增 `txn_type = void_reversal` 的反向異動，`ref_*` 仍指向被作廢的單據與明細。
+- 只新增，不修改也不刪除（沒有共通欄位）：與 `lot_allocations` 相同，以 trigger 拒絕 `UPDATE`、`DELETE`、`TRUNCATE`。作廢單據時新增 `txn_type = void_reversal` 的反向異動，`ref_*` 仍指向被作廢的單據與明細。
 - 一張單據的作廢是全有或全無，所以「某張單據對某個批號的異動是否還有效」= 該單據對該批號的異動中**沒有** `void_reversal`。
 
 #### `stock_adjustments`（盤點與調整單，系統單據 `stock_adjustment`）
@@ -1273,8 +1274,8 @@ M4a 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 | product_id | UUID NOT NULL FK → products | `relation` | 商品 | 必填、→ `product`；必須是 `goods` |
 | line_type | TEXT NOT NULL CHECK | `select` | 調整方式 | 必填、預設 `gain_new`；選項 `gain_new`（盤盈：新批號）/ `gain_existing`（盤盈：加回既有批號）/ `loss`（盤虧：扣指定批號） |
 | lot_no | TEXT | `text` | 批號 | `max_length 50`；`gain_new` 可留空（過帳時自動產生），`gain_existing`、`loss` 必填 |
-| qty | NUMERIC(18,4) NOT NULL | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0（`hammer_core` 另外檢查）；一律為正數，增減由 `line_type` 決定 |
-| unit_cost_twd | NUMERIC(18,4) | `money` | 單位成本 | 小數 4、`min 0`；`gain_new` 必填；`gain_existing`、`loss` 不可填，過帳時由系統寫入該批號的成本 |
+| qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0（`hammer_core` 另外檢查，回傳 422）；一律為正數，增減由 `line_type` 決定 |
+| unit_cost_twd | NUMERIC(18,4) CHECK (unit_cost_twd >= 0) | `money` | 單位成本 | 小數 4、`min 0`；`gain_new` 必填；`gain_existing`、`loss` 不可填，過帳時由系統寫入該批號的成本 |
 | reason | TEXT | `text` | 原因 | 例如 盤點差異、報廢 |
 | lot_id | UUID FK → inventory_lots | （不是欄位） | | 過帳時寫入：`gain_new` 為新建的批號，其他為指定的批號 |
 

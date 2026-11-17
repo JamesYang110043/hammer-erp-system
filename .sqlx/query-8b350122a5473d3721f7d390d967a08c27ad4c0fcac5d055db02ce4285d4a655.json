@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO inventory_transactions\n            (id, txn_date, txn_type, product_id, lot_id, qty_change, unit_cost_twd,\n             ref_doc_type, ref_doc_id, ref_line_id, created_by)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Numeric",
+        "Numeric",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8b350122a5473d3721f7d390d967a08c27ad4c0fcac5d055db02ce4285d4a655"
+}

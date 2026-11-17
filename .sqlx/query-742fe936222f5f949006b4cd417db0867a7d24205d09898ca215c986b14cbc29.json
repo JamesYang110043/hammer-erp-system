@@ -1,0 +1,101 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, source_type, source_doc_id, source_line_id, lot_id, qty, unit_cost_twd\n        FROM lot_allocations\n        WHERE source_type = $1 AND source_line_id = $2\n        ORDER BY id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "lot_allocations",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "source_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "lot_allocations",
+            "name": "source_type"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "source_doc_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "lot_allocations",
+            "name": "source_doc_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "source_line_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "lot_allocations",
+            "name": "source_line_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "lot_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "lot_allocations",
+            "name": "lot_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "qty",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "lot_allocations",
+            "name": "qty"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "unit_cost_twd",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "lot_allocations",
+            "name": "unit_cost_twd"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "742fe936222f5f949006b4cd417db0867a7d24205d09898ca215c986b14cbc29"
+}
