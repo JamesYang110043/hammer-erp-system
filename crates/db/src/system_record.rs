@@ -9,7 +9,10 @@
 //! - 列表：[`list_records`]、[`count_records`]（條件格式與 [`crate::record::RecordListFilter`] 相同）
 //! - 選擇器：[`list_records_before`]（排除 `is_active = false`）
 //! - 唯一性：[`value_taken`]
-//! - 關聯：[`lock_existing_records`]（關聯欄位指向系統資料類別時，檢查並鎖定目標資料）
+//! - 關聯：[`lock_existing_records`]（關聯欄位指向系統資料類別時，檢查並鎖定目標資料）、
+//!   [`find_records_by_ids`]（公式的關聯引用讀取目標資料，含已軟刪除）
+//! - 重新計算公式：[`list_records_after_for_update`]、[`list_lines_of_parents_for_update`]、
+//!   [`update_formula_values`]（只取代 `custom_data` 與 `formula_errors`）
 //! - 明細（系統明細子表，例如 `customer_contacts`，[`SystemDetailTable`]）：[`list_lines`]、
 //!   [`list_lines_for_update`]、[`insert_line`]、[`update_line`]、[`soft_delete_lines`]、
 //!   [`soft_delete_child_records`]、[`line_value_taken`]；格式與 [`crate::record`] 的明細相同（[`LineRow`]）
@@ -40,7 +43,9 @@ use uuid::Uuid;
 
 use crate::DbError;
 use crate::dynamic_index::is_safe_identifier;
-use crate::record::{LineRow, RecordListFilter, RecordRow, Source, push_conditions, push_order};
+use crate::record::{
+    LineRow, RecordListFilter, RecordRow, RelatedRecordRow, Source, push_conditions, push_order,
+};
 
 /// 選擇器排除停用資料時使用的實體欄位（§7.1）。
 pub const IS_ACTIVE_COLUMN: &str = "is_active";
@@ -370,6 +375,80 @@ pub async fn soft_delete_record<'e>(
     Ok(qb.build().execute(executor).await?)
 }
 
+// ---------------------------------------------------------------------------
+// 重新計算公式（§7.6「重新計算」）
+// ---------------------------------------------------------------------------
+
+/// 一批未刪除的資料：依 `id` 由小到大，`after` 有值時只取 id 大於它的資料，並鎖定這些列
+/// （`FOR UPDATE`）。格式與 [`crate::record::list_records_after_for_update`] 相同。必須在 transaction
+/// 內呼叫。
+pub async fn list_records_after_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    table: &SystemTable,
+    after: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<RecordRow>, DbError> {
+    let mut qb = after_query(table, after, limit);
+    Ok(qb.build_query_as::<RecordRow>().fetch_all(executor).await?)
+}
+
+fn after_query(table: &SystemTable, after: Option<Uuid>, limit: i64) -> QueryBuilder<Postgres> {
+    let mut qb = QueryBuilder::new("");
+    table.push_select(&mut qb);
+    qb.push(" WHERE deleted_at IS NULL");
+    if let Some(after) = after {
+        qb.push(" AND id > ").push_bind(after);
+    }
+    qb.push(" ORDER BY id LIMIT ")
+        .push_bind(limit)
+        .push(" FOR UPDATE");
+    qb
+}
+
+/// 一次取代多筆未刪除資料（主表或系統明細子表的明細）的 `custom_data` 與 `formula_errors`，並遞增
+/// `version`；實體欄位不變（公式不寫入系統欄位）。不檢查版本，呼叫前必須已鎖定這些列。回傳影響的筆數。
+///
+/// `ids`、`custom_data`、`formula_errors` 依序對應，長度必須相同；`formula_errors` 為 JSON `null` 時
+/// 寫入資料庫 `NULL`（沒有錯誤）。
+pub async fn update_formula_values<'e>(
+    executor: impl PgExecutor<'e>,
+    table: &SystemTable,
+    ids: &[Uuid],
+    custom_data: &[Value],
+    formula_errors: &[Value],
+    updated_by: Uuid,
+) -> Result<u64, DbError> {
+    let mut qb = formula_values_query(table, ids, custom_data, formula_errors, updated_by);
+    Ok(qb.build().execute(executor).await?.rows_affected())
+}
+
+fn formula_values_query(
+    table: &SystemTable,
+    ids: &[Uuid],
+    custom_data: &[Value],
+    formula_errors: &[Value],
+    updated_by: Uuid,
+) -> QueryBuilder<Postgres> {
+    let mut qb = QueryBuilder::new("UPDATE \"");
+    qb.push(&table.name)
+        .push(
+            "\" AS r SET custom_data = u.custom_data, \
+             formula_errors = NULLIF(u.formula_errors, 'null'::jsonb), updated_by = ",
+        )
+        .push_bind(updated_by)
+        .push(", version = r.version + 1 FROM UNNEST(")
+        .push_bind(ids.to_vec())
+        .push("::uuid[], ")
+        .push_bind(custom_data.to_vec())
+        .push("::jsonb[], ")
+        .push_bind(formula_errors.to_vec())
+        .push(
+            "::jsonb[]) AS u(id, custom_data, formula_errors) \
+             WHERE r.id = u.id AND r.deleted_at IS NULL",
+        );
+    qb
+}
+
 /// 依條件分頁查詢資料。`filter.entity_id` 不使用（資料表只存一個資料類別）；條件與排序的格式、
 /// 預設排序與 [`crate::record::list_records`] 相同，系統欄位比較實體欄位、其他欄位比較 `custom_data`。
 pub async fn list_records<'e>(
@@ -493,6 +572,31 @@ fn push_value_equals(
     }
 }
 
+/// 依 id 查詢資料（**含已軟刪除**），格式與 [`crate::record::find_records_by_ids`] 相同（`record_no` 為
+/// `None`）。供公式的關聯引用讀取目標資料使用（§7.6）。
+pub async fn find_records_by_ids<'e>(
+    executor: impl PgExecutor<'e>,
+    table: &SystemTable,
+    ids: &[Uuid],
+) -> Result<Vec<RelatedRecordRow>, DbError> {
+    let mut qb = by_ids_query(table, ids);
+    Ok(qb
+        .build_query_as::<RelatedRecordRow>()
+        .fetch_all(executor)
+        .await?)
+}
+
+fn by_ids_query(table: &SystemTable, ids: &[Uuid]) -> QueryBuilder<Postgres> {
+    let mut qb = QueryBuilder::new("SELECT id, NULL::text AS record_no, ");
+    table.push_data(&mut qb);
+    qb.push(" AS data, deleted_at IS NOT NULL AS deleted FROM \"")
+        .push(&table.name)
+        .push("\" WHERE id = ANY(")
+        .push_bind(ids.to_vec())
+        .push(")");
+    qb
+}
+
 /// `ids` 中在資料表 `table_name` 存在且未刪除的 id，並以 `FOR SHARE` 鎖定這些列，避免在寫入關聯的
 /// transaction 結束前被刪除（與 [`crate::record::lock_existing_records`] 相同）。必須在 transaction 內呼叫。
 ///
@@ -582,6 +686,21 @@ pub async fn list_lines_for_update<'e>(
     Ok(rows.into_iter().map(LineRow::from).collect())
 }
 
+/// 多筆主表資料的所有未刪除明細，依主表、`sort_order`、`id` 排序，並鎖定這些列（`FOR UPDATE`）。
+/// 必須在 transaction 內呼叫。
+pub async fn list_lines_of_parents_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    detail: &SystemDetailTable,
+    parent_ids: &[Uuid],
+) -> Result<Vec<LineRow>, DbError> {
+    let mut qb = lines_of_parents_query(detail, parent_ids);
+    let rows = qb
+        .build_query_as::<LineRecord>()
+        .fetch_all(executor)
+        .await?;
+    Ok(rows.into_iter().map(LineRow::from).collect())
+}
+
 /// [`LineRow`] 的查詢結果（`sqlx::FromRow`）。
 #[derive(sqlx::FromRow)]
 struct LineRecord {
@@ -621,6 +740,31 @@ fn lines_query(
     parent_id: Uuid,
     for_update: bool,
 ) -> QueryBuilder<Postgres> {
+    let mut qb = push_lines_select(detail);
+    qb.push(" = ")
+        .push_bind(parent_id)
+        .push(" AND deleted_at IS NULL ORDER BY sort_order, id");
+    if for_update {
+        qb.push(" FOR UPDATE");
+    }
+    qb
+}
+
+fn lines_of_parents_query(
+    detail: &SystemDetailTable,
+    parent_ids: &[Uuid],
+) -> QueryBuilder<Postgres> {
+    let mut qb = push_lines_select(detail);
+    qb.push(" = ANY(")
+        .push_bind(parent_ids.to_vec())
+        .push(") AND deleted_at IS NULL ORDER BY \"")
+        .push(&detail.parent_column)
+        .push("\", sort_order, id FOR UPDATE");
+    qb
+}
+
+/// `SELECT …（與 [`LineRow`] 相同）FROM "<table>" WHERE "<父資料欄位>"`，呼叫端接著加上比較。
+fn push_lines_select(detail: &SystemDetailTable) -> QueryBuilder<Postgres> {
     let table = &detail.table;
     let mut qb = QueryBuilder::new("SELECT id, ");
     qb.push_bind(table.entity_id)
@@ -635,12 +779,7 @@ fn lines_query(
     .push(&table.name)
     .push("\" WHERE \"")
     .push(&detail.parent_column)
-    .push("\" = ")
-    .push_bind(parent_id)
-    .push(" AND deleted_at IS NULL ORDER BY sort_order, id");
-    if for_update {
-        qb.push(" FOR UPDATE");
-    }
+    .push("\"");
     qb
 }
 
@@ -1030,6 +1169,68 @@ mod tests {
              'is_primary', \"is_primary\"))) AS data, formula_errors, created_at, created_by, \
              updated_at, updated_by, version FROM \"customer_contacts\" \
              WHERE \"customer_id\" = $2 AND deleted_at IS NULL ORDER BY sort_order, id FOR UPDATE"
+        );
+    }
+
+    #[test]
+    fn lines_of_parents_lock_all_parents() {
+        let sql = lines_of_parents_query(&contacts(), &[Uuid::nil()])
+            .sql()
+            .as_str()
+            .to_owned();
+        assert_eq!(
+            sql,
+            "SELECT id, $1::uuid AS entity_id, \"customer_id\" AS parent_record_id, sort_order, \
+             (custom_data || jsonb_strip_nulls(jsonb_build_object('name', \"name\", \
+             'is_primary', \"is_primary\"))) AS data, formula_errors, created_at, created_by, \
+             updated_at, updated_by, version FROM \"customer_contacts\" \
+             WHERE \"customer_id\" = ANY($2) AND deleted_at IS NULL \
+             ORDER BY \"customer_id\", sort_order, id FOR UPDATE"
+        );
+    }
+
+    #[test]
+    fn by_ids_include_deleted_records() {
+        let qb = by_ids_query(&table(), &[Uuid::nil()]);
+        assert_eq!(
+            qb.sql().as_str(),
+            "SELECT id, NULL::text AS record_no, \
+             (custom_data || jsonb_strip_nulls(jsonb_build_object('code', \"code\", \
+             'credit_limit', \"credit_limit\"::text, 'is_active', \"is_active\"))) AS data, \
+             deleted_at IS NOT NULL AS deleted FROM \"customers\" WHERE id = ANY($1)"
+        );
+    }
+
+    #[test]
+    fn records_after_are_locked_in_id_order() {
+        let first = after_query(&table(), None, 500);
+        assert!(
+            first.sql().as_str().ends_with(
+                " FROM \"customers\" WHERE deleted_at IS NULL ORDER BY id LIMIT $2 FOR UPDATE"
+            ),
+            "{}",
+            first.sql().as_str()
+        );
+        let next = after_query(&table(), Some(Uuid::nil()), 500);
+        assert!(
+            next.sql().as_str().ends_with(
+                " FROM \"customers\" WHERE deleted_at IS NULL AND id > $2 \
+                 ORDER BY id LIMIT $3 FOR UPDATE"
+            ),
+            "{}",
+            next.sql().as_str()
+        );
+    }
+
+    #[test]
+    fn formula_values_replace_only_custom_data_and_errors() {
+        let qb = formula_values_query(&table(), &[], &[], &[], Uuid::nil());
+        assert_eq!(
+            qb.sql().as_str(),
+            "UPDATE \"customers\" AS r SET custom_data = u.custom_data, \
+             formula_errors = NULLIF(u.formula_errors, 'null'::jsonb), updated_by = $1, \
+             version = r.version + 1 FROM UNNEST($2::uuid[], $3::jsonb[], $4::jsonb[]) \
+             AS u(id, custom_data, formula_errors) WHERE r.id = u.id AND r.deleted_at IS NULL"
         );
     }
 

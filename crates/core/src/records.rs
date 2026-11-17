@@ -762,16 +762,12 @@ async fn load_target_for_write(
     load_fields_of(tx, row).await
 }
 
-/// 同 [`load_target_for_write`]，只接受自訂資料類別（`storage = custom_records`），系統資料類別回傳
-/// [`CoreError::NotFound`]。供只處理 `custom_records` 的功能使用（重新計算公式，系統資料類別在 #109）。
+/// 同 [`load_target_for_write`]，供重新計算公式使用（[`crate::recalculate`]）。自訂與系統資料類別都可以。
 pub(crate) async fn load_entity_for_write(
     tx: &mut PgTransaction<'_>,
     key: &str,
-) -> Result<(EntityDefinition, Vec<FieldDefinition>), CoreError> {
-    match load_target_for_write(tx, key).await? {
-        (entity, fields, Store::CustomRecords) => Ok((entity, fields)),
-        (_, _, Store::Table(_)) => Err(CoreError::NotFound(ENTITY_NOT_FOUND.into())),
-    }
+) -> Result<(EntityDefinition, Vec<FieldDefinition>, Store), CoreError> {
+    load_target_for_write(tx, key).await
 }
 
 async fn load_fields_of(
@@ -796,7 +792,7 @@ async fn load_fields_of(
 }
 
 /// 資料類別的所有欄位定義（含已停用）；系統資料類別（`storage = table`）另外回傳專屬資料表與系統欄位。
-async fn fields_and_table(
+pub(crate) async fn fields_and_table(
     conn: &mut PgConnection,
     entity: &EntityDefinition,
     table_name: Option<String>,
@@ -939,6 +935,24 @@ impl Store {
         match self {
             Self::CustomRecords => db::list_records_before(conn, entity_id, before, limit).await,
             Self::Table(table) => system_db::list_records_before(conn, table, before, limit).await,
+        }
+    }
+
+    /// 重新計算時的一批主表資料：未刪除、依 `id` 由小到大、id 大於 `after`，並鎖定（`FOR UPDATE`）。
+    pub(crate) async fn list_after_for_update(
+        &self,
+        conn: &mut PgConnection,
+        entity_id: Id,
+        after: Option<Id>,
+        limit: i64,
+    ) -> Result<Vec<RecordRow>, DbError> {
+        match self {
+            Self::CustomRecords => {
+                db::list_records_after_for_update(conn, entity_id, after, limit).await
+            }
+            Self::Table(table) => {
+                system_db::list_records_after_for_update(conn, table, after, limit).await
+            }
         }
     }
 
@@ -1345,6 +1359,126 @@ async fn detail_lines(
         out.push(rows);
     }
     Ok(out)
+}
+
+/// 多筆主表資料（`parent_ids`）在每個明細子表（`details`，含已停用）的所有未刪除明細，並鎖定
+/// （`FOR UPDATE`）。同一筆主表、同一個明細子表的明細依 `sort_order`、`id` 排序。供重新計算公式使用。
+pub(crate) async fn lines_of_parents_for_update(
+    tx: &mut PgTransaction<'_>,
+    details: &[Detail],
+    parent_ids: &[Id],
+) -> Result<Vec<LineRow>, CoreError> {
+    let mut out = Vec::new();
+    // 自訂明細子表的明細都在 custom_records，一次讀出
+    if details
+        .iter()
+        .any(|d| matches!(d.store, LineStore::CustomRecords))
+    {
+        out.extend(db::list_lines_of_parents_for_update(&mut **tx, parent_ids).await?);
+    }
+    for detail in details {
+        if let LineStore::Table(table) = &detail.store {
+            out.extend(
+                system_db::list_lines_of_parents_for_update(&mut **tx, table, parent_ids).await?,
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// 重新計算後要寫入的一筆資料（主表或一列明細）。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FormulaWrite<'a> {
+    pub(crate) id: Id,
+    /// 明細子表代碼；主表為 `None`。
+    pub(crate) detail: Option<&'a str>,
+    /// 完整的 `data`（系統資料類別包含系統欄位，寫入時只取自訂欄位）。
+    pub(crate) data: &'a Value,
+    pub(crate) formula_errors: Option<&'a Value>,
+}
+
+/// 一次寫入的多筆公式值（`ids`、`data`、`formula_errors` 依序對應）。
+#[derive(Default)]
+struct FormulaColumns {
+    ids: Vec<Id>,
+    data: Vec<Value>,
+    errors: Vec<Value>,
+}
+
+impl FormulaColumns {
+    fn push(&mut self, id: Id, data: Value, errors: Option<&Value>) {
+        self.ids.push(id);
+        self.data.push(data);
+        self.errors.push(errors.cloned().unwrap_or(Value::Null));
+    }
+}
+
+/// 寫入重新計算的結果：取代 `data`（系統資料表為 `custom_data`）與 `formula_errors`，`version` + 1。
+/// 依主表的 `store` 與明細子表（`details`）的存放位置分別寫入；呼叫前必須已鎖定這些列。
+pub(crate) async fn write_formula_values(
+    tx: &mut PgTransaction<'_>,
+    store: &Store,
+    details: &[Detail],
+    writes: &[FormulaWrite<'_>],
+    updated_by: Id,
+) -> Result<(), CoreError> {
+    let mut custom = FormulaColumns::default();
+    let mut tables: Vec<(&SystemTable, FormulaColumns)> = Vec::new();
+    for w in writes {
+        let table = match w.detail {
+            None => match store {
+                Store::CustomRecords => None,
+                Store::Table(table) => Some(table),
+            },
+            Some(key) => {
+                let detail = details
+                    .iter()
+                    .find(|d| d.entity.key == key)
+                    .ok_or_else(|| CoreError::Internal(format!("找不到明細子表 {key}")))?;
+                match &detail.store {
+                    LineStore::CustomRecords => None,
+                    LineStore::Table(table) => Some(table.table()),
+                }
+            }
+        };
+        match table {
+            None => custom.push(w.id, w.data.clone(), w.formula_errors),
+            Some(table) => {
+                let i = match tables.iter().position(|(t, _)| t.name() == table.name()) {
+                    Some(i) => i,
+                    None => {
+                        tables.push((table, FormulaColumns::default()));
+                        tables.len() - 1
+                    }
+                };
+                tables[i]
+                    .1
+                    .push(w.id, custom_data_of(table, w.data), w.formula_errors);
+            }
+        }
+    }
+    if !custom.ids.is_empty() {
+        db::update_formula_values(
+            &mut **tx,
+            &custom.ids,
+            &custom.data,
+            &custom.errors,
+            updated_by,
+        )
+        .await?;
+    }
+    for (table, cols) in &tables {
+        system_db::update_formula_values(
+            &mut **tx,
+            table,
+            &cols.ids,
+            &cols.data,
+            &cols.errors,
+            updated_by,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// 軟刪除主表資料 `parent_id` 的所有明細（刪除主表時）。`lines` 為 [`detail_lines`] 的結果。

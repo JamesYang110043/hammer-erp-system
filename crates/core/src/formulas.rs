@@ -4,17 +4,18 @@
 //! 並負責讀取資料庫：
 //!
 //! - [`load_targets`]：讀取公式的關聯引用 `{relation.field}` 所指資料**目前**的值（含已軟刪除的資料）
-//!   與目標資料類別的欄位型態
+//!   與目標資料類別的欄位型態；目標為系統資料類別時讀取其專屬資料表（系統欄位與 `custom_data`）
 //! - [`today_of`]：「今天」（`TODAY()`）為存檔時間在 Asia/Taipei 的日期（D13）
 //!
 //! 新增與修改資料時（[`crate::records`]）在寫入的 transaction 內計算；失敗的欄位原因存入
-//! `custom_records.formula_errors`，不中斷存檔。
+//! `custom_records.formula_errors`（系統資料類別為該資料表的 `formula_errors`），不中斷存檔。
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use hammer_db::record as record_db;
 use hammer_db::schema as schema_db;
 use hammer_db::sqlx::PgConnection;
+use hammer_db::system_record as system_db;
 pub use hammer_formula::record::{
     FormulaErrors, Formulas, MSG_NO_RESULT_TYPE, Targets, errors_from_json, errors_to_json,
     value_type,
@@ -25,7 +26,8 @@ use serde_json::Value;
 use time::OffsetDateTime;
 
 use crate::CoreError;
-use crate::schema::field_from_row;
+use crate::records::fields_and_table;
+use crate::schema::{entity_from_row, field_from_row};
 
 /// 存檔時間在 Asia/Taipei 的日期，即公式的 `TODAY()`（D13）。
 pub fn today_of(now: OffsetDateTime) -> Date {
@@ -41,17 +43,32 @@ pub async fn load_targets(
 ) -> Result<Targets, CoreError> {
     let mut targets = Targets::default();
     for (entity_id, ids) in wanted {
-        let fields = schema_db::list_fields(&mut *conn, entity_id)
-            .await?
-            .into_iter()
-            .map(field_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
+        // 系統資料類別（storage = table）的資料在專屬資料表，系統欄位與 custom_data 合成 data（§7.1）
+        let (fields, table) = match schema_db::find_entity_by_id(&mut *conn, entity_id).await? {
+            Some(row) => {
+                let table_name = row.table_name.clone();
+                let entity = entity_from_row(row)?;
+                fields_and_table(conn, &entity, table_name).await?
+            }
+            None => (
+                schema_db::list_fields(&mut *conn, entity_id)
+                    .await?
+                    .into_iter()
+                    .map(field_from_row)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None,
+            ),
+        };
         targets.insert_entity(entity_id, &fields);
         if ids.is_empty() {
             continue;
         }
         let ids: Vec<Id> = ids.into_iter().collect();
-        for row in record_db::find_records_by_ids(&mut *conn, entity_id, &ids).await? {
+        let rows = match &table {
+            Some(table) => system_db::find_records_by_ids(&mut *conn, table, &ids).await?,
+            None => record_db::find_records_by_ids(&mut *conn, entity_id, &ids).await?,
+        };
+        for row in rows {
             if let Value::Object(data) = row.data {
                 targets.insert_record(entity_id, row.id, data);
             }
