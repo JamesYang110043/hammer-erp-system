@@ -1,10 +1,11 @@
 //! 依欄位定義驗證並正規化一筆資料的 `data`（`docs/architecture.md` §7.2、§7.3、§8.5）。
 //!
-//! 伺服器寫入 `custom_records.data` / `custom_data` 前，以及日後的匯入功能，都使用 [`normalize_record_data`]。
+//! 伺服器寫入 `custom_records.data` / 系統資料表前，以及日後的匯入功能，都使用 [`normalize_record_data`]。
 //!
 //! # 規則
 //!
-//! - 只處理 `storage = json` 的欄位；`storage = column` 的系統欄位不在 `data` 內，視為未定義
+//! - `data` 以 `field_key` 為鍵，系統欄位（`storage = column`）與自訂欄位（`storage = json`）一起處理，
+//!   規則相同（§7.1）；寫入實體欄位或 `custom_data` 由 [`crate::records`] 分流
 //! - 未定義的 `field_key` 拒絕
 //! - 型態依 §7.3 的存值格式（[`hammer_shared::schema::value`]）
 //! - `validation`：`integer`、`decimal`、`money` 檢查 `min`、`max`（含）；
@@ -35,9 +36,7 @@
 //!   （不回傳錯誤，含已停用的公式欄位）；新增時不設定值，更新時保留既有的值，之後由計算結果取代
 
 use hammer_shared::decimal::Decimal;
-use hammer_shared::schema::{
-    DataType, FieldDefinition, FieldStorage, FieldValue, parse_value, to_json,
-};
+use hammer_shared::schema::{DataType, FieldDefinition, FieldValue, parse_value, to_json};
 use serde_json::{Map, Value};
 
 /// 寫入方式。
@@ -83,18 +82,13 @@ pub fn normalize_record_data(
     input: &Map<String, Value>,
     mode: WriteMode<'_>,
 ) -> Result<Map<String, Value>, Vec<FieldError>> {
-    let json_fields: Vec<&FieldDefinition> = fields
-        .iter()
-        .filter(|f| f.storage == FieldStorage::Json)
-        .collect();
-
     let mut errors = Vec::new();
     let mut data = match mode {
         WriteMode::Create => Map::new(),
         WriteMode::Update { existing } => existing.clone(),
     };
 
-    for field in &json_fields {
+    for field in fields {
         let key = field.field_key.as_str();
         // 公式欄位的值由伺服器計算：request 帶到的值忽略，既有的值保留到計算時取代
         if field.data_type == DataType::Formula {
@@ -157,7 +151,7 @@ pub fn normalize_record_data(
     }
 
     for key in input.keys() {
-        if !json_fields.iter().any(|f| f.field_key == *key) {
+        if !fields.iter().any(|f| f.field_key == *key) {
             errors.push(FieldError::new(key, MSG_UNDEFINED));
         }
     }
@@ -283,7 +277,7 @@ fn check_option(field: &FieldDefinition, value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hammer_shared::schema::{SelectOption, Validation};
+    use hammer_shared::schema::{FieldStorage, SelectOption, Validation};
     use serde_json::json;
     use std::str::FromStr;
     use time::OffsetDateTime;
@@ -824,11 +818,17 @@ mod tests {
     }
 
     #[test]
-    fn column_storage_field_is_treated_as_undefined() {
+    fn column_storage_field_is_validated_like_json_fields() {
         let mut f = field("code", DataType::Text);
         f.storage = FieldStorage::Column;
         f.is_system = true;
-        assert_eq!(single_error(&[f], json!({ "code": "x" })), MSG_UNDEFINED);
+        f.is_required = true;
+        let fields = [f];
+        assert_eq!(
+            create(&fields, json!({ "code": "A001" })).unwrap(),
+            json!({ "code": "A001" })
+        );
+        assert_eq!(single_error(&fields, json!({ "code": "" })), MSG_REQUIRED);
     }
 
     #[test]

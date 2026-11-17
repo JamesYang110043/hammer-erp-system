@@ -21,6 +21,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::DbError;
+use crate::system_record::SystemTable;
 
 /// 同一個資料類別的單號不可重複的部分唯一索引（含已軟刪除的資料）。
 pub const RECORD_NO_UNIQUE: &str = "uq_custom_records_entity_record_no";
@@ -748,22 +749,7 @@ pub async fn list_records<'e>(
          updated_at, updated_by, version FROM custom_records",
     );
     push_where(&mut qb, filter);
-    match &filter.order {
-        Some(order) => {
-            let dir = if order.descending { " DESC" } else { " ASC" };
-            qb.push(" ORDER BY ");
-            match &order.target {
-                OrderTarget::Field { field_key, cast } => push_value(&mut qb, field_key, *cast),
-                OrderTarget::RecordNo => {
-                    qb.push("record_no");
-                }
-            }
-            qb.push(dir).push(" NULLS LAST, id").push(dir);
-        }
-        None => {
-            qb.push(" ORDER BY id DESC");
-        }
-    }
+    push_order(&mut qb, Source::CustomRecords, filter.order.as_ref());
     qb.push(" LIMIT ").push_bind(limit);
     qb.push(" OFFSET ").push_bind(offset);
     let rows = qb.build_query_as::<RecordRow>().fetch_all(executor).await?;
@@ -784,7 +770,52 @@ pub async fn count_records<'e>(
 fn push_where(qb: &mut QueryBuilder<Postgres>, filter: &RecordListFilter) {
     qb.push(" WHERE deleted_at IS NULL AND entity_id = ")
         .push_bind(filter.entity_id);
-    for condition in &filter.conditions {
+    push_conditions(qb, Source::CustomRecords, &filter.conditions);
+}
+
+/// 篩選與排序的資料來源：欄位值從哪裡取出。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Source<'a> {
+    /// `custom_records`：所有欄位都在 `data`。
+    CustomRecords,
+    /// 系統資料表：系統欄位是實體欄位，其他欄位在 `custom_data`；沒有單號。
+    Table(&'a SystemTable),
+}
+
+impl<'a> Source<'a> {
+    /// 存放 JSON 欄位的實體欄位。
+    fn json_column(self) -> &'static str {
+        match self {
+            Self::CustomRecords => "data",
+            Self::Table(_) => "custom_data",
+        }
+    }
+
+    /// 單號的運算式；系統資料表沒有單號，一律為 `NULL`。
+    fn record_no(self) -> &'static str {
+        match self {
+            Self::CustomRecords => "record_no",
+            Self::Table(_) => "NULL::text",
+        }
+    }
+
+    /// `field_key` 是否為實體欄位（只有系統資料表的系統欄位）。欄位名稱已在
+    /// [`SystemTable::new`] 檢查過，可以直接拼接。
+    fn column(self, field_key: &str) -> Option<&'a str> {
+        match self {
+            Self::CustomRecords => None,
+            Self::Table(table) => table.column(field_key).map(|c| c.name.as_str()),
+        }
+    }
+}
+
+/// 在 `WHERE` 之後加上 `AND <條件>`（全部須符合）。
+pub(crate) fn push_conditions(
+    qb: &mut QueryBuilder<Postgres>,
+    source: Source<'_>,
+    conditions: &[RecordCondition],
+) {
+    for condition in conditions {
         qb.push(" AND ");
         match condition {
             RecordCondition::Compare {
@@ -793,14 +824,14 @@ fn push_where(qb: &mut QueryBuilder<Postgres>, filter: &RecordListFilter) {
                 op,
                 value,
             } => {
-                push_value(qb, field_key, *cast);
+                push_value(qb, source, field_key, *cast);
                 qb.push(op.sql()).push_bind(value.clone());
                 if let Some(t) = cast.sql_type() {
                     qb.push("::").push(t);
                 }
             }
             RecordCondition::Contains { field_key, text } => {
-                push_value(qb, field_key, JsonCast::Text);
+                push_value(qb, source, field_key, JsonCast::Text);
                 qb.push(" ILIKE ")
                     .push_bind(format!("%{}%", escape_like(text)))
                     .push(" ESCAPE '\\'");
@@ -808,24 +839,39 @@ fn push_where(qb: &mut QueryBuilder<Postgres>, filter: &RecordListFilter) {
             RecordCondition::HasValue {
                 field_key,
                 has_value,
-            } => {
-                if !has_value {
-                    qb.push("NOT ");
+            } => match source.column(field_key) {
+                Some(column) => {
+                    let not = if *has_value { " NOT" } else { "" };
+                    qb.push("(\"")
+                        .push(column)
+                        .push("\" IS")
+                        .push(not)
+                        .push(" NULL)");
                 }
-                qb.push("(data ? ").push_bind(field_key.clone()).push(")");
-            }
+                None => {
+                    if !has_value {
+                        qb.push("NOT ");
+                    }
+                    qb.push("(")
+                        .push(source.json_column())
+                        .push(" ? ")
+                        .push_bind(field_key.clone())
+                        .push(")");
+                }
+            },
             RecordCondition::ContainsAny { field_key, values } => {
-                qb.push("(data -> ")
-                    .push_bind(field_key.clone())
-                    .push(" ?| ")
-                    .push_bind(values.clone())
-                    .push("::text[])");
+                qb.push("(");
+                push_value(qb, source, field_key, JsonCast::Jsonb);
+                qb.push(" ?| ").push_bind(values.clone()).push("::text[])");
             }
             RecordCondition::RecordNoEq(value) => {
-                qb.push("record_no = ").push_bind(value.clone());
+                qb.push(source.record_no())
+                    .push(" = ")
+                    .push_bind(value.clone());
             }
             RecordCondition::RecordNoContains(text) => {
-                qb.push("record_no ILIKE ")
+                qb.push(source.record_no())
+                    .push(" ILIKE ")
                     .push_bind(format!("%{}%", escape_like(text)))
                     .push(" ESCAPE '\\'");
             }
@@ -833,21 +879,65 @@ fn push_where(qb: &mut QueryBuilder<Postgres>, filter: &RecordListFilter) {
     }
 }
 
-/// 取出欄位值並轉型。欄位代碼以 bind 參數傳入。
-fn push_value(qb: &mut QueryBuilder<Postgres>, field_key: &str, cast: JsonCast) {
+/// `ORDER BY`：有排序欄位時 `<值> <方向> NULLS LAST, id <方向>`；沒有時 `id DESC`。
+pub(crate) fn push_order(
+    qb: &mut QueryBuilder<Postgres>,
+    source: Source<'_>,
+    order: Option<&RecordOrder>,
+) {
+    match order {
+        Some(order) => {
+            let dir = if order.descending { " DESC" } else { " ASC" };
+            qb.push(" ORDER BY ");
+            match &order.target {
+                OrderTarget::Field { field_key, cast } => push_value(qb, source, field_key, *cast),
+                OrderTarget::RecordNo => {
+                    qb.push(source.record_no());
+                }
+            }
+            qb.push(dir).push(" NULLS LAST, id").push(dir);
+        }
+        None => {
+            qb.push(" ORDER BY id DESC");
+        }
+    }
+}
+
+/// 取出欄位值並轉型。JSON 欄位的代碼以 bind 參數傳入；實體欄位的名稱已檢查過，加上引號拼接。
+fn push_value(
+    qb: &mut QueryBuilder<Postgres>,
+    source: Source<'_>,
+    field_key: &str,
+    cast: JsonCast,
+) {
+    if let Some(column) = source.column(field_key) {
+        match (cast, cast.sql_type()) {
+            (JsonCast::Jsonb, _) => qb.push("to_jsonb(\"").push(column).push("\")"),
+            (_, None) => qb.push("(\"").push(column).push("\"::text)"),
+            (_, Some(t)) => qb.push("(\"").push(column).push("\"::").push(t).push(")"),
+        };
+        return;
+    }
+    let json = source.json_column();
     match (cast, cast.sql_type()) {
         (JsonCast::Jsonb, _) => {
-            qb.push("(data -> ")
+            qb.push("(")
+                .push(json)
+                .push(" -> ")
                 .push_bind(field_key.to_owned())
                 .push(")");
         }
         (_, None) => {
-            qb.push("(data ->> ")
+            qb.push("(")
+                .push(json)
+                .push(" ->> ")
                 .push_bind(field_key.to_owned())
                 .push(")");
         }
         (_, Some(t)) => {
-            qb.push("((data ->> ")
+            qb.push("((")
+                .push(json)
+                .push(" ->> ")
                 .push_bind(field_key.to_owned())
                 .push(")::")
                 .push(t)
@@ -857,7 +947,7 @@ fn push_value(qb: &mut QueryBuilder<Postgres>, field_key: &str, cast: JsonCast) 
 }
 
 /// 跳脫 `LIKE` 的特殊字元（`ESCAPE '\'`）。
-fn escape_like(text: &str) -> String {
+pub(crate) fn escape_like(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         if matches!(c, '\\' | '%' | '_') {
@@ -914,7 +1004,7 @@ mod tests {
              AND ((data ->> $2)::numeric) >= $3::numeric \
              AND (data ->> $4) ILIKE $5 ESCAPE '\\' \
              AND NOT (data ? $6) \
-             AND (data -> $7 ?| $8::text[]) \
+             AND ((data -> $7) ?| $8::text[]) \
              AND record_no = $9 \
              AND record_no ILIKE $10 ESCAPE '\\'"
         );

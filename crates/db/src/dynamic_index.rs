@@ -1,4 +1,6 @@
-//! 自訂欄位的動態索引（`docs/architecture.md` §7.5），建立在 `custom_records` 上。
+//! 自訂欄位的動態索引（`docs/architecture.md` §7.5）。
+//!
+//! 自訂資料類別建立在 `custom_records` 上（[`IndexTable::CustomRecords`]）：
 //!
 //! - 可搜尋：`CREATE INDEX … ((data ->> 'field_key')) WHERE entity_id = '…' AND deleted_at IS NULL`
 //! - 不可重複：`CREATE UNIQUE INDEX … (entity_id, (data ->> 'field_key'))
@@ -7,15 +9,21 @@
 //! 兩者都以部分索引限定在單一資料類別，所以不同資料類別即使有相同的 `field_key`，
 //! 索引與唯一性也互不影響。
 //!
-//! DDL 不能使用 bind 參數，因此索引名稱與 `field_key` 必須拼接進 SQL：
+//! 系統資料類別建立在專屬資料表的 `custom_data` 上（[`IndexTable::System`]）；資料表只存一個資料類別，
+//! 所以不加 `entity_id` 條件：
+//!
+//! - 可搜尋：`CREATE INDEX … ON <table> ((custom_data ->> 'field_key'))`
+//! - 不可重複：`CREATE UNIQUE INDEX … ON <table> ((custom_data ->> 'field_key')) WHERE deleted_at IS NULL`
+//!
+//! DDL 不能使用 bind 參數，因此索引名稱、資料表名稱與 `field_key` 必須拼接進 SQL：
 //! 拼接前一律檢查只含 `a-z`、`0-9`、`_`（[`is_safe_identifier`]），並加上引號
-//! （名稱用 `"…"`，`field_key` 用 `'…'`）。`entity_id` 是 [`Uuid`]，格式固定。
+//! （名稱與資料表用 `"…"`，`field_key` 用 `'…'`）。`entity_id` 是 [`Uuid`]，格式固定。
 //! 索引名稱的命名規則在 `hammer_core::schema::index`。
 //!
 //! 索引不使用 `CONCURRENTLY`，可以和欄位定義的修改放在同一個 transaction 內。
 
 use serde_json::Value;
-use sqlx::{AssertSqlSafe, PgExecutor};
+use sqlx::{AssertSqlSafe, PgExecutor, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::DbError;
@@ -23,12 +31,21 @@ use crate::DbError;
 /// PostgreSQL 識別字的長度上限（bytes）。
 pub const MAX_IDENTIFIER_LEN: usize = 63;
 
+/// 索引建立在哪裡。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexTable<'a> {
+    /// 自訂資料類別：`custom_records.data`，限定在資料類別 `entity_id`。
+    CustomRecords { entity_id: Uuid },
+    /// 系統資料類別：專屬資料表的 `custom_data`。`table_name` 必須符合 [`is_safe_identifier`]。
+    System { table_name: &'a str },
+}
+
 /// 要建立的運算式索引。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExpressionIndex<'a> {
     /// 索引名稱，必須符合 [`is_safe_identifier`]。
     pub name: &'a str,
-    pub entity_id: Uuid,
+    pub table: IndexTable<'a>,
     /// 必須符合 [`is_safe_identifier`]。
     pub field_key: &'a str,
     /// 部分唯一索引（不可重複）；否則為一般索引（可搜尋）。
@@ -58,6 +75,23 @@ fn ensure_safe(s: &str) -> Result<(), DbError> {
 pub fn create_index_sql(index: &ExpressionIndex<'_>) -> Result<String, DbError> {
     ensure_safe(index.name)?;
     ensure_safe(index.field_key)?;
+    let entity_id = match index.table {
+        IndexTable::CustomRecords { entity_id } => entity_id,
+        IndexTable::System { table_name } => {
+            ensure_safe(table_name)?;
+            let (unique, filter) = if index.unique {
+                ("UNIQUE ", " WHERE deleted_at IS NULL")
+            } else {
+                ("", "")
+            };
+            return Ok(format!(
+                "CREATE {unique}INDEX IF NOT EXISTS \"{name}\" ON \"{table_name}\" \
+                 ((custom_data ->> '{field_key}')){filter}",
+                name = index.name,
+                field_key = index.field_key,
+            ));
+        }
+    };
     let (unique, columns) = if index.unique {
         (
             "UNIQUE ",
@@ -70,7 +104,6 @@ pub fn create_index_sql(index: &ExpressionIndex<'_>) -> Result<String, DbError> 
         "CREATE {unique}INDEX IF NOT EXISTS \"{name}\" ON custom_records ({columns}) \
          WHERE entity_id = '{entity_id}' AND deleted_at IS NULL",
         name = index.name,
-        entity_id = index.entity_id,
     ))
 }
 
@@ -101,7 +134,7 @@ pub async fn drop_index<'e>(executor: impl PgExecutor<'e>, name: &str) -> Result
 }
 
 /// 重複的值與擁有這個值的資料。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct DuplicateValueRow {
     /// `data -> field_key`（JSON 原值）。
     pub value: Value,
@@ -146,6 +179,46 @@ pub async fn find_duplicate_values<'e>(
     Ok(rows)
 }
 
+/// 同 [`find_duplicate_values`]，對象為系統資料表 `table_name` 的 `custom_data`（§7.5）。
+/// `table_name` 不安全時回傳 [`DbError::UnsafeIdentifier`]。
+pub async fn find_duplicate_values_in_table<'e>(
+    executor: impl PgExecutor<'e>,
+    table_name: &str,
+    field_key: &str,
+    limit: i32,
+) -> Result<Vec<DuplicateValueRow>, DbError> {
+    let mut qb = duplicate_values_in_table_query(table_name, field_key, limit)?;
+    let rows = qb
+        .build_query_as::<DuplicateValueRow>()
+        .fetch_all(executor)
+        .await?;
+    Ok(rows)
+}
+
+fn duplicate_values_in_table_query(
+    table_name: &str,
+    field_key: &str,
+    limit: i32,
+) -> Result<QueryBuilder<Postgres>, DbError> {
+    ensure_safe(table_name)?;
+    // 值先在子查詢取出一次，GROUP BY 與 SELECT 使用同一個運算式
+    let mut qb = QueryBuilder::<Postgres>::new(
+        "SELECT (array_agg(v ORDER BY id))[1] AS value, count(*) AS count, \
+         (array_agg(id ORDER BY id))[1:",
+    );
+    qb.push_bind(limit)
+        .push("] AS record_ids, count(*) OVER () AS total FROM (SELECT id, custom_data -> ")
+        .push_bind(field_key.to_owned())
+        .push(" AS v FROM \"")
+        .push(table_name)
+        .push(
+            "\" WHERE deleted_at IS NULL) AS s WHERE v IS NOT NULL \
+             GROUP BY v #>> '{}' HAVING count(*) > 1 ORDER BY v #>> '{}' LIMIT ",
+        )
+        .push_bind(limit);
+    Ok(qb)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,7 +256,7 @@ mod tests {
     fn searchable_index_sql() {
         let sql = create_index_sql(&ExpressionIndex {
             name: "cfs_x",
-            entity_id: ENTITY,
+            table: IndexTable::CustomRecords { entity_id: ENTITY },
             field_key: "title",
             unique: false,
         })
@@ -199,7 +272,7 @@ mod tests {
     fn unique_index_sql() {
         let sql = create_index_sql(&ExpressionIndex {
             name: "cfu_x",
-            entity_id: ENTITY,
+            table: IndexTable::CustomRecords { entity_id: ENTITY },
             field_key: "code",
             unique: true,
         })
@@ -213,11 +286,69 @@ mod tests {
     }
 
     #[test]
+    fn system_table_index_sql() {
+        let table = IndexTable::System {
+            table_name: "customers",
+        };
+        let searchable = create_index_sql(&ExpressionIndex {
+            name: "cfs_customer_region_1a2b3c4d",
+            table,
+            field_key: "region",
+            unique: false,
+        })
+        .unwrap();
+        assert_eq!(
+            searchable,
+            "CREATE INDEX IF NOT EXISTS \"cfs_customer_region_1a2b3c4d\" ON \"customers\" \
+             ((custom_data ->> 'region'))"
+        );
+        let unique = create_index_sql(&ExpressionIndex {
+            name: "cfu_customer_region_1a2b3c4d",
+            table,
+            field_key: "region",
+            unique: true,
+        })
+        .unwrap();
+        assert_eq!(
+            unique,
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"cfu_customer_region_1a2b3c4d\" ON \"customers\" \
+             ((custom_data ->> 'region')) WHERE deleted_at IS NULL"
+        );
+
+        let err = create_index_sql(&ExpressionIndex {
+            name: "cfs_x",
+            table: IndexTable::System {
+                table_name: "users\"; DROP TABLE users; --",
+            },
+            field_key: "region",
+            unique: false,
+        })
+        .unwrap_err();
+        assert!(matches!(err, DbError::UnsafeIdentifier(_)));
+    }
+
+    #[test]
+    fn duplicate_values_in_table_uses_bind_parameters() {
+        let qb = duplicate_values_in_table_query("units", "x'; --", 5).unwrap();
+        assert_eq!(
+            qb.sql().as_str(),
+            "SELECT (array_agg(v ORDER BY id))[1] AS value, count(*) AS count, \
+             (array_agg(id ORDER BY id))[1:$1] AS record_ids, count(*) OVER () AS total \
+             FROM (SELECT id, custom_data -> $2 AS v FROM \"units\" WHERE deleted_at IS NULL) AS s \
+             WHERE v IS NOT NULL GROUP BY v #>> '{}' HAVING count(*) > 1 ORDER BY v #>> '{}' LIMIT $3"
+        );
+        assert!(matches!(
+            duplicate_values_in_table_query("units; --", "x", 5),
+            Err(DbError::UnsafeIdentifier(_))
+        ));
+    }
+
+    #[test]
     fn rejects_unsafe_input() {
         let unsafe_key = "x') ; DROP TABLE users; --";
         let err = create_index_sql(&ExpressionIndex {
             name: "cfs_x",
-            entity_id: ENTITY,
+            table: IndexTable::CustomRecords { entity_id: ENTITY },
             field_key: unsafe_key,
             unique: false,
         })
@@ -226,7 +357,7 @@ mod tests {
 
         let err = create_index_sql(&ExpressionIndex {
             name: "x\"; DROP TABLE users; --",
-            entity_id: ENTITY,
+            table: IndexTable::CustomRecords { entity_id: ENTITY },
             field_key: "title",
             unique: true,
         })

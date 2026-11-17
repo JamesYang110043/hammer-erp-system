@@ -5,7 +5,7 @@
 //! - [`ensure_version_matched`]：樂觀鎖定檢查，版本不符時回傳 [`DbError::Conflict`]
 //! - [`attachment`]：附件（`attachments`）的新增、綁定、標記刪除與清理
 //! - [`audit`]：寫入與查詢 `audit_logs`
-//! - [`dynamic_index`]：自訂欄位的動態索引（可搜尋、不可重複）
+//! - [`dynamic_index`]：自訂欄位的動態索引（可搜尋、不可重複；`custom_records` 與系統資料表）
 //! - [`lock`]：advisory lock
 //! - [`number_sequence`]：單號流水號（`number_sequences`）的取號
 //! - [`record`]：自訂資料類別的資料（`custom_records`）
@@ -13,6 +13,7 @@
 //! - [`schema`]：資料類別、欄位定義與定義變更紀錄
 //! - [`session`]：`sessions` 的新增、查詢、更新與撤銷
 //! - [`settings`]：讀取 `settings`
+//! - [`system_record`]：系統資料類別的資料（`storage = table`，系統欄位是實體欄位、自訂欄位在 `custom_data`）
 //! - [`user`]：認證用的使用者查詢，以及帳號的建立、修改、停用、刪除
 //! - [`view_layout`]：列表版面（`view_layouts`）
 //!
@@ -33,6 +34,7 @@ pub mod role;
 pub mod schema;
 pub mod session;
 pub mod settings;
+pub mod system_record;
 pub mod user;
 pub mod view_layout;
 

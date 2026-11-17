@@ -1,10 +1,18 @@
-//! 自訂資料類別的資料（docs/architecture.md §6.1、§7.1、§7.5、§8.5 `custom_records`、§9.4、§10）。
+//! 通用資料 API 的資料（docs/architecture.md §6.1、§7.1、§7.5、§8.5 `custom_records`、§8.6、§9.4、§10）。
 //!
 //! - 讀取（需要 `record.read`）：[`list_records`]、[`get_record`]、[`lookup_records`]（選擇器搜尋）
 //! - 寫入（需要 `record.write`）：[`create_record`]、[`update_record`]、[`delete_record`]
 //!
-//! 只處理有效（啟用、未刪除）且 `storage = custom_records` 的資料類別，其他一律回傳
-//! [`CoreError::NotFound`]。`data` 依欄位定義驗證（[`crate::record_data`]）。
+//! 只處理有效（啟用、未刪除）、不是明細子表的資料類別，其他一律回傳 [`CoreError::NotFound`]。
+//! `data` 依欄位定義驗證（[`crate::record_data`]）。
+//!
+//! 資料依資料類別的 `storage` 分流（[`Store`]）：
+//!
+//! - `custom_records`：所有欄位存在 `custom_records.data`（`hammer_db::record`）
+//! - `table`（系統資料類別，§7.1）：系統欄位（`storage = column`）存在專屬資料表的實體欄位，其他欄位存在
+//!   `custom_data`（`hammer_db::system_record`）。request 與回應的 `data` 同時包含兩者，驗證、篩選與
+//!   排序、樂觀鎖定、操作紀錄、標題都與自訂資料類別相同；沒有單號。系統資料類別的明細（聯絡人）在 #108
+//!   處理，目前不讀寫明細（request 帶 `lines` 時與不存在的明細子表相同）
 //!
 //! 寫入都在單一 transaction 內完成，並寫入一筆 `audit_logs`：`entity_key` 為資料類別代碼，
 //! `before_data` / `after_data` 只包含有變動的欄位（[`AuditDiff`]）。修改沒有任何變動時不寫入。
@@ -45,7 +53,11 @@ use hammer_db::record::{
     RecordCondition, RecordListFilter, RecordOrder, RecordRow,
 };
 use hammer_db::schema as schema_db;
+use hammer_db::sqlx::postgres::PgQueryResult;
 use hammer_db::sqlx::{PgConnection, PgPool, PgTransaction};
+use hammer_db::system_record::{
+    self as system_db, ColumnType, NewSystemRecord, SystemColumn, SystemRecordUpdate, SystemTable,
+};
 use hammer_shared::pagination::{Page, PageRequest};
 use hammer_shared::record::{
     CreateRecordRequest, FilterOp, LineInput, LookupItem, LookupQuery, QueryParamError, RECORD_NO,
@@ -104,7 +116,7 @@ pub async fn list_records(
 ) -> Result<Page<Record>, CoreError> {
     ctx.require(permission::RECORD_READ)?;
     let mut conn = pool.acquire().await.map_err(DbError::from)?;
-    let (entity, fields) = load_entity(&mut conn, entity_key).await?;
+    let (entity, fields, store) = load_entity(&mut conn, entity_key).await?;
 
     let query = RecordListQuery::from_pairs(pairs).map_err(|err| match err {
         QueryParamError::NotInteger { .. } => CoreError::BadRequest(err.message()),
@@ -112,8 +124,10 @@ pub async fn list_records(
     })?;
     let (filter, page) = plan_list(entity.id, &fields, &query)?;
 
-    let total = db::count_records(&mut *conn, &filter).await?;
-    let rows = db::list_records(&mut *conn, &filter, page.limit(), page.offset()).await?;
+    let total = store.count(&mut conn, &filter).await?;
+    let rows = store
+        .list(&mut conn, &filter, page.limit(), page.offset())
+        .await?;
     let titles = renderer(&entity, &fields);
     let mut items = rows
         .into_iter()
@@ -134,11 +148,16 @@ pub async fn get_record(
 ) -> Result<Record, CoreError> {
     ctx.require(permission::RECORD_READ)?;
     let mut conn = pool.acquire().await.map_err(DbError::from)?;
-    let (entity, fields) = load_entity(&mut conn, entity_key).await?;
-    let row = db::find_record(&mut *conn, entity.id, id)
+    let (entity, fields, store) = load_entity(&mut conn, entity_key).await?;
+    let row = store
+        .find(&mut conn, entity.id, id)
         .await?
         .ok_or_else(record_not_found)?;
-    let details = schema_db::list_detail_entities(&mut *conn, entity.id).await?;
+    let details = match store {
+        Store::CustomRecords => schema_db::list_detail_entities(&mut *conn, entity.id).await?,
+        // 系統明細子表在 #108 處理
+        Store::Table(_) => Vec::new(),
+    };
     let details = load_details(&mut conn, details).await?;
     let record = record_from_row(row, &renderer(&entity, &fields))?;
     let mut record = with_relations(&mut conn, &fields, record).await?;
@@ -147,6 +166,7 @@ pub async fn get_record(
 }
 
 /// 選擇器搜尋：依關鍵字比對資料標題，回傳未刪除的資料的 id 與標題。需要 `record.read`。
+/// 系統資料類別另外排除 `is_active = false` 的資料（§7.1）。
 ///
 /// 標題在讀取時產生、不存入資料庫（§8.5），所以依 id 由新到舊分批讀取資料、產生標題後比對，
 /// 直到找到 `limit` 筆或讀完為止。query string 格式見 [`LookupQuery`]。
@@ -163,7 +183,7 @@ pub async fn lookup_records(
 
     ctx.require(permission::RECORD_READ)?;
     let mut conn = pool.acquire().await.map_err(DbError::from)?;
-    let (entity, fields) = load_entity(&mut conn, entity_key).await?;
+    let (entity, fields, store) = load_entity(&mut conn, entity_key).await?;
     let query = LookupQuery::from_pairs(pairs).map_err(|err| match err {
         QueryParamError::NotInteger { .. } => CoreError::BadRequest(err.message()),
         QueryParamError::Invalid { param, message } => CoreError::InvalidParam { param, message },
@@ -175,7 +195,9 @@ pub async fn lookup_records(
     let mut items = Vec::new();
     let mut before = None;
     loop {
-        let rows = db::list_records_before(&mut *conn, entity.id, before, BATCH).await?;
+        let rows = store
+            .list_before(&mut conn, entity.id, before, BATCH)
+            .await?;
         let exhausted = (rows.len() as i64) < BATCH;
         before = rows.last().map(|r| r.id);
         for row in rows {
@@ -220,8 +242,8 @@ pub async fn create_record(
     ctx.require(permission::RECORD_WRITE)?;
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
-    let (entity, fields) = load_entity_for_write(&mut tx, entity_key).await?;
-    let details = load_details_for_write(&mut tx, &entity).await?;
+    let (entity, fields, store) = load_target_for_write(&mut tx, entity_key).await?;
+    let details = store_details_for_write(&mut tx, &entity, &store).await?;
     let formulas = formulas_of(&fields, &details);
     let master = normalize_record_data(&fields, &req.data, WriteMode::Create);
     let mut line_errors = Vec::new();
@@ -236,25 +258,30 @@ pub async fn create_record(
     let data = Value::Object(data);
 
     // 驗證通過後才取號：流水號的列鎖定到 transaction 結束，越晚取號鎖定的時間越短
-    let record_no = next_record_no(&mut tx, &entity, now).await?;
+    let record_no = match store {
+        Store::CustomRecords => next_record_no(&mut tx, &entity, now).await?,
+        // 系統資料類別在 M3 沒有單號（§7.1）
+        Store::Table(_) => None,
+    };
     let id = new_id();
-    let inserted = db::insert_record(
-        &mut *tx,
-        &NewRecord {
-            id,
-            entity_id: entity.id,
-            record_no: record_no.as_deref(),
-            parent_record_id: None,
-            sort_order: 0,
-            data: &data,
-            formula_errors: formula_errors.as_ref(),
-            created_by: ctx.user_id,
-            created_at: now,
-        },
-    )
-    .await;
+    let inserted = store
+        .insert(
+            &mut tx,
+            &NewRecord {
+                id,
+                entity_id: entity.id,
+                record_no: record_no.as_deref(),
+                parent_record_id: None,
+                sort_order: 0,
+                data: &data,
+                formula_errors: formula_errors.as_ref(),
+                created_by: ctx.user_id,
+                created_at: now,
+            },
+        )
+        .await;
     if let Err(err) = inserted {
-        return Err(write_error(pool, tx, err, entity.id, id, &fields, &data).await);
+        return Err(write_error(pool, tx, err, &store, entity.id, id, &fields, &data).await);
     }
     if let Err(err) = write_lines(&mut tx, ctx, id, &lines, now).await {
         return Err(line_write_error(pool, tx, err, id, &lines).await);
@@ -283,7 +310,7 @@ pub async fn create_record(
         now,
     )
     .await?;
-    let record = fetch_record(&mut tx, &entity, &fields, &details, id).await?;
+    let record = fetch_record(&mut tx, &entity, &fields, &store, &details, id).await?;
     commit(tx).await?;
 
     tracing::info!(actor = %ctx.user_id, entity = %entity.key, record_id = %id, "已新增資料");
@@ -312,11 +339,11 @@ pub async fn update_record(
     ctx.require(permission::RECORD_WRITE)?;
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
-    let (entity, fields) = load_entity_for_write(&mut tx, entity_key).await?;
-    let current = lock_record(&mut tx, entity.id, id).await?;
+    let (entity, fields, store) = load_target_for_write(&mut tx, entity_key).await?;
+    let current = lock_record(&mut tx, &store, entity.id, id).await?;
     ensure_version(current.version, req.version)?;
 
-    let details = load_details_for_write(&mut tx, &entity).await?;
+    let details = store_details_for_write(&mut tx, &entity, &store).await?;
     let formulas = formulas_of(&fields, &details);
     let existing = data_object(&current.data)?;
     let master = normalize_record_data(&fields, &req.data, WriteMode::Update { existing });
@@ -352,20 +379,23 @@ pub async fn update_record(
     let data = Value::Object(data);
 
     // 只有明細變動時 data 不變，但 version 仍遞增
-    let updated = db::update_record_data(
-        &mut *tx,
-        id,
-        req.version,
-        &data,
-        formula_errors.as_ref(),
-        ctx.user_id,
-    )
-    .await;
+    let updated = store
+        .update(
+            &mut tx,
+            id,
+            req.version,
+            &data,
+            formula_errors.as_ref(),
+            ctx.user_id,
+        )
+        .await;
     match updated {
         Ok(result) => {
             ensure_version_matched(result)?;
         }
-        Err(err) => return Err(write_error(pool, tx, err, entity.id, id, &fields, &data).await),
+        Err(err) => {
+            return Err(write_error(pool, tx, err, &store, entity.id, id, &fields, &data).await);
+        }
     }
     if let Err(err) = write_lines(&mut tx, ctx, id, &lines, now).await {
         return Err(line_write_error(pool, tx, err, id, &lines).await);
@@ -393,7 +423,7 @@ pub async fn update_record(
         now,
     )
     .await?;
-    let record = fetch_record(&mut tx, &entity, &fields, &details, id).await?;
+    let record = fetch_record(&mut tx, &entity, &fields, &store, &details, id).await?;
     commit(tx).await?;
 
     tracing::info!(actor = %ctx.user_id, entity = %entity.key, record_id = %id, "已修改資料");
@@ -416,14 +446,26 @@ pub async fn delete_record(
     ctx.require(permission::RECORD_WRITE)?;
 
     let mut tx = pool.begin().await.map_err(DbError::from)?;
-    let (entity, _) = load_entity_for_write(&mut tx, entity_key).await?;
-    let current = lock_record(&mut tx, entity.id, id).await?;
+    let (entity, _, store) = load_target_for_write(&mut tx, entity_key).await?;
+    let current = lock_record(&mut tx, &store, entity.id, id).await?;
     ensure_version(current.version, version)?;
-    let details = schema_db::list_detail_entities_for_share(&mut *tx, entity.id).await?;
-    let lines = db::list_lines(&mut *tx, id).await?;
+    let (details, lines) = match store {
+        Store::CustomRecords => (
+            schema_db::list_detail_entities_for_share(&mut *tx, entity.id).await?,
+            db::list_lines(&mut *tx, id).await?,
+        ),
+        // 系統明細子表在 #108 處理
+        Store::Table(_) => (Vec::new(), Vec::new()),
+    };
 
-    ensure_version_matched(db::soft_delete_record(&mut *tx, id, version, now, ctx.user_id).await?)?;
-    db::soft_delete_child_records(&mut *tx, id, now, ctx.user_id).await?;
+    ensure_version_matched(
+        store
+            .soft_delete(&mut tx, id, version, now, ctx.user_id)
+            .await?,
+    )?;
+    if !lines.is_empty() {
+        db::soft_delete_child_records(&mut *tx, id, now, ctx.user_id).await?;
+    }
 
     // 操作紀錄包含所有明細（含已停用的明細子表）
     let mut before = current.data.clone();
@@ -461,7 +503,8 @@ pub async fn delete_record(
 
 /// 依欄位定義檢查列表的篩選、排序與分頁參數，轉成資料庫的查詢條件。
 ///
-/// - 只能使用有效（`is_active`）、`storage = json` 且目前支援的欄位，或代表單號的 [`RECORD_NO`]
+/// - 只能使用有效（`is_active`）且目前支援的欄位（系統欄位與自訂欄位都可以，§10），或代表單號的
+///   [`RECORD_NO`]
 ///   （排序依文字；篩選只支援 `eq`、`contains`）
 /// - 運算子必須適用於欄位型態（見 [`FilterOp`]）；值必須符合型態的格式
 /// - 同一個欄位的多個 `any` 合併成一個條件
@@ -544,7 +587,7 @@ pub fn plan_list(
     ))
 }
 
-/// 可用於篩選與排序的欄位：有效、`storage = json`；`formula` 欄位必須有結果型態。
+/// 可用於篩選與排序的欄位：有效；`formula` 欄位必須有結果型態。
 fn queryable_field<'a>(
     fields: &'a [FieldDefinition],
     field_key: &str,
@@ -552,12 +595,7 @@ fn queryable_field<'a>(
 ) -> Result<&'a FieldDefinition, CoreError> {
     fields
         .iter()
-        .find(|f| {
-            f.field_key == field_key
-                && f.is_active
-                && f.storage == FieldStorage::Json
-                && value_type(f).is_some()
-        })
+        .find(|f| f.field_key == field_key && f.is_active && value_type(f).is_some())
         .ok_or_else(|| CoreError::InvalidParam {
             param: param.to_owned(),
             message: format!("沒有可查詢的欄位「{field_key}」"),
@@ -696,11 +734,11 @@ fn parse_bool(raw: &str) -> Result<bool, String> {
 // 共用
 // ---------------------------------------------------------------------------
 
-/// 載入有效的自訂資料類別與其所有欄位定義（含已停用）。
+/// 載入有效的資料類別、其所有欄位定義（含已停用）與資料的存放位置。
 async fn load_entity(
     conn: &mut PgConnection,
     key: &str,
-) -> Result<(EntityDefinition, Vec<FieldDefinition>), CoreError> {
+) -> Result<(EntityDefinition, Vec<FieldDefinition>, Store), CoreError> {
     let row = schema_db::find_entity_by_key(&mut *conn, key).await?;
     load_fields_of(conn, row).await
 }
@@ -708,32 +746,282 @@ async fn load_entity(
 /// 同 [`load_entity`]，寫入資料時使用：以 `FOR SHARE` 鎖定資料類別，等待進行中的欄位定義變更
 /// （例如變更欄位型態，[`crate::schema::change_field_type`]）完成後才讀取欄位定義，
 /// 避免依舊的定義寫入資料。
+async fn load_target_for_write(
+    tx: &mut PgTransaction<'_>,
+    key: &str,
+) -> Result<(EntityDefinition, Vec<FieldDefinition>, Store), CoreError> {
+    let row = schema_db::find_entity_by_key_for_share(&mut **tx, key).await?;
+    load_fields_of(tx, row).await
+}
+
+/// 同 [`load_target_for_write`]，只接受自訂資料類別（`storage = custom_records`），系統資料類別回傳
+/// [`CoreError::NotFound`]。供只處理 `custom_records` 的功能使用（重新計算公式，系統資料類別在 #109）。
 pub(crate) async fn load_entity_for_write(
     tx: &mut PgTransaction<'_>,
     key: &str,
 ) -> Result<(EntityDefinition, Vec<FieldDefinition>), CoreError> {
-    let row = schema_db::find_entity_by_key_for_share(&mut **tx, key).await?;
-    load_fields_of(tx, row).await
+    match load_target_for_write(tx, key).await? {
+        (entity, fields, Store::CustomRecords) => Ok((entity, fields)),
+        (_, _, Store::Table(_)) => Err(CoreError::NotFound(ENTITY_NOT_FOUND.into())),
+    }
 }
 
 async fn load_fields_of(
     conn: &mut PgConnection,
     row: Option<schema_db::EntityRow>,
-) -> Result<(EntityDefinition, Vec<FieldDefinition>), CoreError> {
-    let entity = row
-        .map(entity_from_row)
-        .transpose()?
-        // 明細子表只能透過主表存取
-        .filter(|e| {
-            e.is_active && e.storage == EntityStorage::CustomRecords && e.kind != EntityKind::Detail
-        })
-        .ok_or_else(|| CoreError::NotFound(ENTITY_NOT_FOUND.into()))?;
-    let fields = schema_db::list_fields(&mut *conn, entity.id)
-        .await?
+) -> Result<(EntityDefinition, Vec<FieldDefinition>, Store), CoreError> {
+    let Some(row) = row else {
+        return Err(CoreError::NotFound(ENTITY_NOT_FOUND.into()));
+    };
+    let table_name = row.table_name.clone();
+    let entity = entity_from_row(row)?;
+    // 明細子表只能透過主表存取
+    if !entity.is_active || entity.kind == EntityKind::Detail {
+        return Err(CoreError::NotFound(ENTITY_NOT_FOUND.into()));
+    }
+    let rows = schema_db::list_fields(&mut *conn, entity.id).await?;
+    let columns: Vec<(String, Option<String>)> = rows
+        .iter()
+        .filter(|r| r.storage == FieldStorage::Column.as_str())
+        .map(|r| (r.field_key.clone(), r.column_name.clone()))
+        .collect();
+    let fields = rows
         .into_iter()
         .map(field_from_row)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((entity, fields))
+    let store = match entity.storage {
+        EntityStorage::CustomRecords => Store::CustomRecords,
+        EntityStorage::Table => {
+            let table_name = table_name.ok_or_else(|| {
+                CoreError::Internal(format!("系統資料類別 {} 沒有設定 table_name", entity.key))
+            })?;
+            Store::Table(system_table(entity.id, &table_name, &fields, &columns)?)
+        }
+    };
+    Ok((entity, fields, store))
+}
+
+/// 系統資料類別的資料表與系統欄位。`columns` 為 `storage = column` 的欄位 `(field_key, column_name)`；
+/// 系統欄位的 `column_name` 必須與 `field_key` 相同（§7.1）。名稱不安全或型態不能存成實體欄位時回傳
+/// [`CoreError::Internal`]（migration 寫入的定義不正確）。
+fn system_table(
+    entity_id: Id,
+    table_name: &str,
+    fields: &[FieldDefinition],
+    columns: &[(String, Option<String>)],
+) -> Result<SystemTable, CoreError> {
+    let mut out = Vec::with_capacity(columns.len());
+    for (field_key, column_name) in columns {
+        if column_name.as_deref() != Some(field_key.as_str()) {
+            return Err(CoreError::Internal(format!(
+                "系統欄位 {table_name}.{field_key} 的 column_name 與欄位代碼不同"
+            )));
+        }
+        let field = fields
+            .iter()
+            .find(|f| f.field_key == *field_key)
+            .ok_or_else(|| CoreError::Internal(format!("找不到系統欄位 {field_key}")))?;
+        let column_type = column_type(field.data_type).ok_or_else(|| {
+            CoreError::Internal(format!(
+                "系統欄位 {table_name}.{field_key} 的型態 {} 不能存成實體欄位",
+                field.data_type.as_str()
+            ))
+        })?;
+        out.push(SystemColumn {
+            name: field_key.clone(),
+            column_type,
+        });
+    }
+    SystemTable::new(entity_id, table_name, out).map_err(|e| CoreError::Internal(e.to_string()))
+}
+
+/// 系統欄位的 `data_type` 對應的實體欄位型別（§8.6、§8.7）；`multi_select`、`file`、`formula` 不能是
+/// 系統欄位。
+fn column_type(data_type: DataType) -> Option<ColumnType> {
+    match data_type {
+        DataType::Text | DataType::LongText | DataType::Select => Some(ColumnType::Text),
+        DataType::Integer => Some(ColumnType::Integer),
+        DataType::Decimal | DataType::Money => Some(ColumnType::Numeric),
+        DataType::Date => Some(ColumnType::Date),
+        DataType::DateTime => Some(ColumnType::Timestamptz),
+        DataType::Boolean => Some(ColumnType::Boolean),
+        DataType::Relation => Some(ColumnType::Uuid),
+        DataType::MultiSelect | DataType::File | DataType::Formula => None,
+    }
+}
+
+/// 資料的存放位置（§7.1）。
+pub(crate) enum Store {
+    /// 自訂資料類別：`custom_records`。
+    CustomRecords,
+    /// 系統資料類別：專屬資料表（系統欄位為實體欄位，其他欄位在 `custom_data`）。
+    Table(SystemTable),
+}
+
+impl Store {
+    async fn find(
+        &self,
+        conn: &mut PgConnection,
+        entity_id: Id,
+        id: Id,
+    ) -> Result<Option<RecordRow>, DbError> {
+        match self {
+            Self::CustomRecords => db::find_record(conn, entity_id, id).await,
+            Self::Table(table) => system_db::find_record(conn, table, id).await,
+        }
+    }
+
+    async fn find_for_update(
+        &self,
+        conn: &mut PgConnection,
+        entity_id: Id,
+        id: Id,
+    ) -> Result<Option<RecordRow>, DbError> {
+        match self {
+            Self::CustomRecords => db::find_record_for_update(conn, entity_id, id).await,
+            Self::Table(table) => system_db::find_record_for_update(conn, table, id).await,
+        }
+    }
+
+    async fn list(
+        &self,
+        conn: &mut PgConnection,
+        filter: &RecordListFilter,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<RecordRow>, DbError> {
+        match self {
+            Self::CustomRecords => db::list_records(conn, filter, limit, offset).await,
+            Self::Table(table) => system_db::list_records(conn, table, filter, limit, offset).await,
+        }
+    }
+
+    async fn count(
+        &self,
+        conn: &mut PgConnection,
+        filter: &RecordListFilter,
+    ) -> Result<i64, DbError> {
+        match self {
+            Self::CustomRecords => db::count_records(conn, filter).await,
+            Self::Table(table) => system_db::count_records(conn, table, filter).await,
+        }
+    }
+
+    async fn list_before(
+        &self,
+        conn: &mut PgConnection,
+        entity_id: Id,
+        before: Option<Id>,
+        limit: i64,
+    ) -> Result<Vec<RecordRow>, DbError> {
+        match self {
+            Self::CustomRecords => db::list_records_before(conn, entity_id, before, limit).await,
+            Self::Table(table) => system_db::list_records_before(conn, table, before, limit).await,
+        }
+    }
+
+    /// 新增主表資料。系統資料類別不使用 `record_no`、`parent_record_id`、`sort_order`。
+    async fn insert(&self, conn: &mut PgConnection, new: &NewRecord<'_>) -> Result<(), DbError> {
+        match self {
+            Self::CustomRecords => db::insert_record(conn, new).await,
+            Self::Table(table) => {
+                let custom_data = custom_data_of(table, new.data);
+                system_db::insert_record(
+                    conn,
+                    table,
+                    &NewSystemRecord {
+                        id: new.id,
+                        data: new.data,
+                        custom_data: &custom_data,
+                        formula_errors: new.formula_errors,
+                        created_by: new.created_by,
+                        created_at: new.created_at,
+                    },
+                )
+                .await
+            }
+        }
+    }
+
+    async fn update(
+        &self,
+        conn: &mut PgConnection,
+        id: Id,
+        version: i32,
+        data: &Value,
+        formula_errors: Option<&Value>,
+        updated_by: Id,
+    ) -> Result<PgQueryResult, DbError> {
+        match self {
+            Self::CustomRecords => {
+                db::update_record_data(conn, id, version, data, formula_errors, updated_by).await
+            }
+            Self::Table(table) => {
+                let custom_data = custom_data_of(table, data);
+                system_db::update_record(
+                    conn,
+                    table,
+                    &SystemRecordUpdate {
+                        id,
+                        version,
+                        data,
+                        custom_data: &custom_data,
+                        formula_errors,
+                        updated_by,
+                    },
+                )
+                .await
+            }
+        }
+    }
+
+    async fn soft_delete(
+        &self,
+        conn: &mut PgConnection,
+        id: Id,
+        version: i32,
+        now: OffsetDateTime,
+        deleted_by: Id,
+    ) -> Result<PgQueryResult, DbError> {
+        match self {
+            Self::CustomRecords => db::soft_delete_record(conn, id, version, now, deleted_by).await,
+            Self::Table(table) => {
+                system_db::soft_delete_record(conn, table, id, version, now, deleted_by).await
+            }
+        }
+    }
+
+    async fn value_taken(
+        &self,
+        pool: &PgPool,
+        entity_id: Id,
+        exclude_id: Id,
+        field_key: &str,
+        value: &Value,
+    ) -> Result<bool, DbError> {
+        match self {
+            Self::CustomRecords => {
+                db::value_taken(pool, entity_id, exclude_id, field_key, value).await
+            }
+            Self::Table(table) => {
+                system_db::value_taken(pool, table, exclude_id, field_key, value).await
+            }
+        }
+    }
+}
+
+/// 要寫入 `custom_data` 的部分：`data` 中系統欄位以外的鍵。
+fn custom_data_of(table: &SystemTable, data: &Value) -> Value {
+    let map = data
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter(|(k, _)| table.column(k).is_none())
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Value::Object(map)
 }
 
 /// 資料類別的標題產生器。
@@ -768,14 +1056,16 @@ pub fn record_from_row(row: RecordRow, titles: &TitleRenderer<'_>) -> Result<Rec
 
 fn data_object(data: &Value) -> Result<&Map<String, Value>, CoreError> {
     data.as_object()
-        .ok_or_else(|| CoreError::Internal("custom_records.data 不是 JSON 物件".into()))
+        .ok_or_else(|| CoreError::Internal("資料的 data 不是 JSON 物件".into()))
 }
 
-/// 寫入 `custom_records` 失敗時的錯誤。違反唯一索引時 rollback 後找出重複的欄位。
+/// 寫入主表資料失敗時的錯誤。違反唯一索引時 rollback 後找出重複的欄位。
+#[allow(clippy::too_many_arguments)]
 async fn write_error(
     pool: &PgPool,
     tx: PgTransaction<'_>,
     err: DbError,
+    store: &Store,
     entity_id: Id,
     record_id: Id,
     fields: &[FieldDefinition],
@@ -790,7 +1080,7 @@ async fn write_error(
     if let Err(e) = tx.rollback().await {
         return DbError::from(e).into();
     }
-    match duplicate_fields(pool, entity_id, record_id, fields, data).await {
+    match duplicate_fields(pool, store, entity_id, record_id, fields, data).await {
         Ok(errors) if errors.is_empty() => CoreError::Validation(DUPLICATE_RECORD.into()),
         Ok(errors) => CoreError::InvalidFields(errors),
         Err(e) => e,
@@ -800,6 +1090,7 @@ async fn write_error(
 /// 「不可重複」欄位中，值與其他資料相同的欄位。
 async fn duplicate_fields(
     pool: &PgPool,
+    store: &Store,
     entity_id: Id,
     record_id: Id,
     fields: &[FieldDefinition],
@@ -810,7 +1101,10 @@ async fn duplicate_fields(
         let Some(value) = data.get(&field.field_key) else {
             continue;
         };
-        if db::value_taken(pool, entity_id, record_id, &field.field_key, value).await? {
+        if store
+            .value_taken(pool, entity_id, record_id, &field.field_key, value)
+            .await?
+        {
             errors.push(FieldError {
                 field_key: field.field_key.clone(),
                 message: VALUE_TAKEN.to_owned(),
@@ -869,10 +1163,12 @@ async fn next_record_no(
 
 async fn lock_record(
     tx: &mut PgTransaction<'_>,
+    store: &Store,
     entity_id: Id,
     id: Id,
 ) -> Result<RecordRow, CoreError> {
-    db::find_record_for_update(&mut **tx, entity_id, id)
+    store
+        .find_for_update(tx, entity_id, id)
         .await?
         .ok_or_else(record_not_found)
 }
@@ -881,10 +1177,12 @@ async fn fetch_record(
     tx: &mut PgTransaction<'_>,
     entity: &EntityDefinition,
     fields: &[FieldDefinition],
+    store: &Store,
     details: &[Detail],
     id: Id,
 ) -> Result<Record, CoreError> {
-    let row = db::find_record(&mut **tx, entity.id, id)
+    let row = store
+        .find(tx, entity.id, id)
         .await?
         .ok_or_else(|| CoreError::Internal("寫入後找不到資料".into()))?;
     let record = record_from_row(row, &renderer(entity, fields))?;
@@ -950,6 +1248,18 @@ pub(crate) async fn load_details_for_write(
 ) -> Result<Vec<Detail>, CoreError> {
     let rows = schema_db::list_detail_entities_for_share(&mut **tx, master.id).await?;
     load_details(tx, rows).await
+}
+
+/// 同 [`load_details_for_write`]；系統資料類別的明細子表在 #108 處理，目前視為沒有明細子表。
+async fn store_details_for_write(
+    tx: &mut PgTransaction<'_>,
+    master: &EntityDefinition,
+    store: &Store,
+) -> Result<Vec<Detail>, CoreError> {
+    match store {
+        Store::CustomRecords => load_details_for_write(tx, master).await,
+        Store::Table(_) => Ok(Vec::new()),
+    }
 }
 
 /// 一列明細的寫入方式。
@@ -1578,7 +1888,7 @@ mod tests {
 
     #[test]
     fn sort_rejects_unknown_inactive_column_and_unsupported_fields() {
-        for key in ["missing", "old", "code", "rel"] {
+        for key in ["missing", "old", "rel"] {
             let (param, _) = invalid_param(&[("sort", key)]);
             assert_eq!(param, "sort", "{key}");
         }
@@ -1729,11 +2039,114 @@ mod tests {
 
     #[test]
     fn filter_rejects_unknown_and_inactive_fields() {
-        for param in ["filter.missing.eq", "filter.old.eq", "filter.code.eq"] {
+        for param in ["filter.missing.eq", "filter.old.eq"] {
             let (p, message) = invalid_param(&[(param, "x")]);
             assert_eq!(p, param);
             assert!(message.contains("沒有可查詢的欄位"), "{message}");
         }
+    }
+
+    #[test]
+    fn system_fields_can_be_filtered_and_sorted() {
+        let (filter, _) = plan(&[("sort", "code"), ("filter.code.contains", "A")]).unwrap();
+        assert_eq!(
+            filter.order,
+            Some(RecordOrder {
+                target: OrderTarget::Field {
+                    field_key: "code".into(),
+                    cast: JsonCast::Text,
+                },
+                descending: false,
+            })
+        );
+        assert_eq!(
+            filter.conditions,
+            vec![RecordCondition::Contains {
+                field_key: "code".into(),
+                text: "A".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn system_field_types_map_to_columns() {
+        for (data_type, expected) in [
+            (DataType::Text, Some(ColumnType::Text)),
+            (DataType::LongText, Some(ColumnType::Text)),
+            (DataType::Select, Some(ColumnType::Text)),
+            (DataType::Integer, Some(ColumnType::Integer)),
+            (DataType::Decimal, Some(ColumnType::Numeric)),
+            (DataType::Money, Some(ColumnType::Numeric)),
+            (DataType::Date, Some(ColumnType::Date)),
+            (DataType::DateTime, Some(ColumnType::Timestamptz)),
+            (DataType::Boolean, Some(ColumnType::Boolean)),
+            (DataType::Relation, Some(ColumnType::Uuid)),
+            (DataType::MultiSelect, None),
+            (DataType::File, None),
+            (DataType::Formula, None),
+        ] {
+            assert_eq!(column_type(data_type), expected, "{data_type:?}");
+        }
+    }
+
+    #[test]
+    fn system_table_requires_matching_column_names() {
+        let mut code = field("code", DataType::Text);
+        code.storage = FieldStorage::Column;
+        let mut tags = field("tags", DataType::MultiSelect);
+        tags.storage = FieldStorage::Column;
+        let fields = vec![code, tags, field("region", DataType::Text)];
+
+        let table = system_table(
+            Id::nil(),
+            "units",
+            &fields,
+            &[("code".into(), Some("code".into()))],
+        )
+        .unwrap();
+        assert_eq!(table.name(), "units");
+        assert!(table.column("code").is_some());
+        assert!(table.column("region").is_none());
+
+        for columns in [
+            vec![("code".to_owned(), Some("other".to_owned()))],
+            vec![("code".to_owned(), None)],
+            vec![("tags".to_owned(), Some("tags".to_owned()))],
+            vec![("missing".to_owned(), Some("missing".to_owned()))],
+        ] {
+            assert!(
+                matches!(
+                    system_table(Id::nil(), "units", &fields, &columns),
+                    Err(CoreError::Internal(_))
+                ),
+                "{columns:?}"
+            );
+        }
+        assert!(matches!(
+            system_table(Id::nil(), "units; --", &fields, &[]),
+            Err(CoreError::Internal(_))
+        ));
+    }
+
+    #[test]
+    fn custom_data_excludes_system_columns() {
+        let table = SystemTable::new(
+            Id::nil(),
+            "units",
+            vec![SystemColumn {
+                name: "code".into(),
+                column_type: ColumnType::Text,
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            custom_data_of(
+                &table,
+                &serde_json::json!({ "code": "pcs", "region": "北" })
+            ),
+            serde_json::json!({ "region": "北" })
+        );
+        assert_eq!(custom_data_of(&table, &Value::Null), serde_json::json!({}));
     }
 
     fn formula_fields() -> Vec<FieldDefinition> {
