@@ -3,7 +3,9 @@ import {
   DatabaseOutlined,
   DollarOutlined,
   FileTextOutlined,
+  PayCircleOutlined,
   SettingOutlined,
+  TransactionOutlined,
   SwapOutlined,
   UserOutlined,
 } from '@ant-design/icons';
@@ -15,6 +17,8 @@ import type { EntityDefinition } from './bindings';
 import { groupEntities } from './schema/entities';
 import type { EntityGroup } from './schema/entities';
 import { AuditLogsPage } from './pages/audit/AuditLogsPage';
+import { CurrenciesPage } from './pages/currencies/CurrenciesPage';
+import { ExchangeRatesPage } from './pages/exchangeRates/ExchangeRatesPage';
 import { EntitiesPage } from './pages/schema/EntitiesPage';
 import { FieldsPage } from './pages/schema/FieldsPage';
 import { UsersPage } from './pages/users/UsersPage';
@@ -68,6 +72,30 @@ export const MODULES: readonly ModuleEntry[] = [
     label: '系統設定',
     icon: <SettingOutlined />,
     permission: PERMISSIONS.SETTINGS_MANAGE,
+  },
+];
+
+/**
+ * 「基本資料」分組中，系統主檔（{@link masterDataEntities}）之後的專屬頁面（docs/architecture.md §8.6）。
+ *
+ * 幣別、匯率不是資料類別，使用專屬端點：
+ * - 幣別：維護需要 `settings.manage`（只有管理者），因此整頁只給管理者
+ * - 匯率：查看需要 `record.read`；新增、修改、刪除需要 `record.write`（頁面內依權限顯示按鈕）
+ */
+export const MASTER_DATA_MODULES: readonly ModuleEntry[] = [
+  {
+    path: 'currencies',
+    label: '幣別',
+    icon: <PayCircleOutlined />,
+    permission: PERMISSIONS.SETTINGS_MANAGE,
+    element: <CurrenciesPage />,
+  },
+  {
+    path: 'exchange-rates',
+    label: '匯率',
+    icon: <TransactionOutlined />,
+    permission: PERMISSIONS.RECORD_READ,
+    element: <ExchangeRatesPage />,
   },
 ];
 
