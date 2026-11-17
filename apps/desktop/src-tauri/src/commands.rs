@@ -9,6 +9,7 @@ use hammer_shared::Id;
 use hammer_shared::attachment::Attachment;
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest};
+use hammer_shared::currency::{Currency, CurrencyListQuery};
 use hammer_shared::health::HealthResponse;
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
@@ -201,6 +202,20 @@ pub async fn list_audit_logs(
     query: AuditLogQuery,
 ) -> Result<Page<AuditLogEntry>, ClientError> {
     state.list_audit_logs(&query).await
+}
+
+/// 幣別列表（幣別選單用）：`include_inactive` 為 `true` 時含已停用的幣別。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_currencies(
+    state: State<'_, AppState>,
+    include_inactive: bool,
+) -> Result<Vec<Currency>, ClientError> {
+    state
+        .list_currencies(&CurrencyListQuery {
+            include_inactive: Some(include_inactive),
+        })
+        .await
 }
 
 /// 資料類別列表（啟用中的資料類別，選單用）。

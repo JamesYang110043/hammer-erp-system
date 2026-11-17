@@ -52,6 +52,8 @@ export const commands = {
 	deleteUser: (id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_user", { id, version })),
 	/**  查詢操作紀錄（需要 `audit.read`）。 */
 	listAuditLogs: (query: AuditLogQuery_Deserialize) => typedError<Page<AuditLogEntry_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_audit_logs", { query })),
+	/**  幣別列表（幣別選單用）：`include_inactive` 為 `true` 時含已停用的幣別。 */
+	listCurrencies: (includeInactive: boolean) => typedError<Currency_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_currencies", { includeInactive })),
 	/**  資料類別列表（啟用中的資料類別，選單用）。 */
 	listEntities: () => typedError<EntityDefinition_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_entities")),
 	/**  資料類別列表，含已停用的資料類別（管理畫面用，需要 `schema.manage`）。 */
@@ -742,6 +744,55 @@ export type CreateViewLayoutRequest_Serialize = {
 	config: LayoutConfig_Serialize,
 	/**  `true`：設為預設，並取消同一範圍原本的預設。 */
 	is_default: boolean,
+};
+
+/**  幣別。 */
+export type Currency = Currency_Serialize | Currency_Deserialize;
+
+/**  幣別。 */
+export type Currency_Deserialize = {
+	id: string,
+	/**  ISO 4217 代碼（3 個大寫英文字母），建立後不可修改。其他資料以代碼參照幣別。 */
+	code: string,
+	/**  名稱，例如「新台幣」。 */
+	name: string,
+	/**  符號，例如 `NT$`；沒有時為 `null`。 */
+	symbol?: string | null,
+	/**  金額的小數位數，0–4。 */
+	decimal_places: number,
+	/**  本位幣（只有 TWD）。 */
+	is_base: boolean,
+	/**  `false` 代表已停用：不出現在幣別選單、不可用於新的資料，也不可新增或修改它的匯率。 */
+	is_active: boolean,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號，修改時帶回（§9.4）。 */
+	version: number,
+};
+
+/**  幣別。 */
+export type Currency_Serialize = {
+	id: string,
+	/**  ISO 4217 代碼（3 個大寫英文字母），建立後不可修改。其他資料以代碼參照幣別。 */
+	code: string,
+	/**  名稱，例如「新台幣」。 */
+	name: string,
+	/**  符號，例如 `NT$`；沒有時為 `null`。 */
+	symbol: string | null,
+	/**  金額的小數位數，0–4。 */
+	decimal_places: number,
+	/**  本位幣（只有 TWD）。 */
+	is_base: boolean,
+	/**  `false` 代表已停用：不出現在幣別選單、不可用於新的資料，也不可新增或修改它的匯率。 */
+	is_active: boolean,
+	/**  建立時間（RFC 3339）。 */
+	created_at: string,
+	/**  最後修改時間（RFC 3339）。 */
+	updated_at: string,
+	/**  樂觀鎖定版本號，修改時帶回（§9.4）。 */
+	version: number,
 };
 
 /**  目前登入的使用者（`GET /api/v1/auth/me`，以及登入回應中的 `user`）。 */

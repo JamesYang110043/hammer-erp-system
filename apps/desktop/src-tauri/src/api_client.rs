@@ -13,6 +13,7 @@ use hammer_shared::attachment::{Attachment, UPLOAD_FIELD};
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
 use hammer_shared::constants::{API_PREFIX, CLIENT_VERSION_HEADER};
+use hammer_shared::currency::{Currency, CurrencyListQuery};
 use hammer_shared::health::HealthResponse;
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
@@ -295,6 +296,21 @@ impl ApiClient {
         let builder = self
             .http
             .get(endpoint(server_url, "/entities"))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/currencies`（本位幣優先、再依代碼排序）。
+    pub async fn list_currencies(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &CurrencyListQuery,
+    ) -> Result<Vec<Currency>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/currencies"))
             .bearer_auth(token)
             .query(query);
         authed(read_json(send(builder).await?).await)
@@ -2259,5 +2275,46 @@ mod tests {
             matches!(&err, ClientError::Api(api) if api.code == ErrorCode::NotFound),
             "{err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn list_currencies_sends_include_inactive() {
+        let url = serve(Router::new().route(
+            "/currencies",
+            get(
+                |axum::extract::RawQuery(query): axum::extract::RawQuery| async move {
+                    let inactive = query.as_deref() == Some("include_inactive=true");
+                    axum::Json(json!([{
+                        "id": "0190a000-0000-7000-8000-000000000001",
+                        "code": if inactive { "XXX" } else { "TWD" },
+                        "name": "新台幣", "symbol": "NT$", "decimal_places": 0,
+                        "is_base": !inactive, "is_active": !inactive,
+                        "created_at": "2026-11-17T00:00:00Z",
+                        "updated_at": "2026-11-17T00:00:00Z", "version": 1,
+                    }]))
+                },
+            ),
+        ))
+        .await;
+        let client = ApiClient::new().unwrap();
+
+        let active = client
+            .list_currencies(&url, "tok", &CurrencyListQuery::default())
+            .await
+            .unwrap();
+        assert_eq!(active[0].code, "TWD");
+        assert!(active[0].is_base);
+        let all = client
+            .list_currencies(
+                &url,
+                "tok",
+                &CurrencyListQuery {
+                    include_inactive: Some(true),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(all[0].code, "XXX");
+        assert!(!all[0].is_active);
     }
 }
