@@ -9,7 +9,13 @@ use hammer_shared::Id;
 use hammer_shared::attachment::Attachment;
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest};
-use hammer_shared::currency::{Currency, CurrencyListQuery};
+use hammer_shared::currency::{
+    CreateCurrencyRequest, Currency, CurrencyListQuery, UpdateCurrencyRequest,
+};
+use hammer_shared::exchange_rate::{
+    CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
+    UpdateExchangeRateRequest,
+};
 use hammer_shared::health::HealthResponse;
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
@@ -215,6 +221,73 @@ pub async fn list_currencies(
         .list_currencies(&CurrencyListQuery {
             include_inactive: Some(include_inactive),
         })
+        .await
+}
+
+/// 新增幣別（需要 `settings.manage`）。代碼的小寫由伺服器轉成大寫。
+#[tauri::command]
+#[specta::specta]
+pub async fn create_currency(
+    state: State<'_, AppState>,
+    req: CreateCurrencyRequest,
+) -> Result<Currency, ClientError> {
+    state.create_currency(&req).await
+}
+
+/// 修改幣別的名稱、符號、小數位數、啟用狀態（需要 `settings.manage`）。
+///
+/// `symbol` 為空字串時清除符號；`req.version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn update_currency(
+    state: State<'_, AppState>,
+    code: String,
+    req: UpdateCurrencyRequest,
+) -> Result<Currency, ClientError> {
+    state.update_currency(&code, &req).await
+}
+
+/// 匯率列表（需要 `record.read`），依日期新到舊分頁。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_exchange_rates(
+    state: State<'_, AppState>,
+    query: ExchangeRateQuery,
+) -> Result<Page<ExchangeRate>, ClientError> {
+    state.list_exchange_rates(&query).await
+}
+
+/// 新增匯率（需要 `record.write`）。匯率以字串傳入，不經過浮點數。
+#[tauri::command]
+#[specta::specta]
+pub async fn create_exchange_rate(
+    state: State<'_, AppState>,
+    req: CreateExchangeRateRequest,
+) -> Result<ExchangeRate, ClientError> {
+    state.create_exchange_rate(&req).await
+}
+
+/// 修改匯率值（需要 `record.write`）。`req.version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn update_exchange_rate(
+    state: State<'_, AppState>,
+    id: Id,
+    req: UpdateExchangeRateRequest,
+) -> Result<ExchangeRate, ClientError> {
+    state.update_exchange_rate(id, &req).await
+}
+
+/// 刪除匯率（需要 `record.write`）。`version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_exchange_rate(
+    state: State<'_, AppState>,
+    id: Id,
+    version: i32,
+) -> Result<(), ClientError> {
+    state
+        .delete_exchange_rate(id, &DeleteExchangeRateQuery { version })
         .await
 }
 

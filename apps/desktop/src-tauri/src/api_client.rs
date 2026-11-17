@@ -13,7 +13,13 @@ use hammer_shared::attachment::{Attachment, UPLOAD_FIELD};
 use hammer_shared::audit::{AuditLogEntry, AuditLogQuery};
 use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, LoginResponse};
 use hammer_shared::constants::{API_PREFIX, CLIENT_VERSION_HEADER};
-use hammer_shared::currency::{Currency, CurrencyListQuery};
+use hammer_shared::currency::{
+    CreateCurrencyRequest, Currency, CurrencyListQuery, UpdateCurrencyRequest,
+};
+use hammer_shared::exchange_rate::{
+    CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
+    UpdateExchangeRateRequest,
+};
 use hammer_shared::health::HealthResponse;
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
@@ -314,6 +320,99 @@ impl ApiClient {
             .bearer_auth(token)
             .query(query);
         authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/currencies`。
+    pub async fn create_currency(
+        &self,
+        server_url: &str,
+        token: &str,
+        req: &CreateCurrencyRequest,
+    ) -> Result<Currency, ClientError> {
+        let builder = self
+            .http
+            .post(endpoint(server_url, "/currencies"))
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PATCH /api/v1/currencies/{code}`。
+    pub async fn update_currency(
+        &self,
+        server_url: &str,
+        token: &str,
+        code: &str,
+        req: &UpdateCurrencyRequest,
+    ) -> Result<Currency, ClientError> {
+        let builder = self
+            .http
+            .patch(currency_endpoint(server_url, code)?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/exchange-rates`（分頁，依日期新到舊）。`None` 的條件不會放進 query string。
+    pub async fn list_exchange_rates(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &ExchangeRateQuery,
+    ) -> Result<Page<ExchangeRate>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/exchange-rates"))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/exchange-rates`。
+    pub async fn create_exchange_rate(
+        &self,
+        server_url: &str,
+        token: &str,
+        req: &CreateExchangeRateRequest,
+    ) -> Result<ExchangeRate, ClientError> {
+        let builder = self
+            .http
+            .post(endpoint(server_url, "/exchange-rates"))
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PATCH /api/v1/exchange-rates/{id}`。
+    pub async fn update_exchange_rate(
+        &self,
+        server_url: &str,
+        token: &str,
+        id: Id,
+        req: &UpdateExchangeRateRequest,
+    ) -> Result<ExchangeRate, ClientError> {
+        let builder = self
+            .http
+            .patch(endpoint(server_url, &format!("/exchange-rates/{id}")))
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `DELETE /api/v1/exchange-rates/{id}?version=N`。
+    pub async fn delete_exchange_rate(
+        &self,
+        server_url: &str,
+        token: &str,
+        id: Id,
+        query: &DeleteExchangeRateQuery,
+    ) -> Result<(), ClientError> {
+        let builder = self
+            .http
+            .delete(endpoint(server_url, &format!("/exchange-rates/{id}")))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_empty(send(builder).await?).await)
     }
 
     /// `GET /api/v1/entities/{key}`。
@@ -818,6 +917,19 @@ fn entity_endpoint(
     }
     path.push_str(suffix);
     Ok(endpoint(server_url, &path))
+}
+
+/// `/api/v1/currencies/{code}`。
+///
+/// 幣別代碼只有英文字母（伺服器規定 3 個大寫字母），因此不需要編碼；
+/// 含其他字元時回傳 [`ClientError::InvalidInput`]，不送出請求。
+fn currency_endpoint(server_url: &str, code: &str) -> Result<String, ClientError> {
+    if code.is_empty() || !code.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Err(ClientError::invalid_input(format!(
+            "幣別代碼「{code}」不正確"
+        )));
+    }
+    Ok(endpoint(server_url, &format!("/currencies/{code}")))
 }
 
 /// 成功時解析成 `T`；失敗時轉成 [`ClientError`]。
@@ -2316,5 +2428,206 @@ mod tests {
             .unwrap();
         assert_eq!(all[0].code, "XXX");
         assert!(!all[0].is_active);
+    }
+
+    fn exchange_rate_json(version: i32) -> serde_json::Value {
+        json!({
+            "id": "0190a000-0000-7000-8000-0000000000e1",
+            "currency_code": "USD",
+            "rate_date": "2026-11-17",
+            "rate": "32.150000",
+            "created_at": "2026-11-17T00:00:00Z",
+            "updated_at": "2026-11-17T00:00:00Z",
+            "version": version,
+        })
+    }
+
+    #[tokio::test]
+    async fn currency_management_endpoints() {
+        use axum::extract::Path;
+        use axum::routing::patch;
+
+        let currency = |version: i32| {
+            json!({
+                "id": "0190a000-0000-7000-8000-000000000002",
+                "code": "GBP", "name": "英鎊", "symbol": null, "decimal_places": 2,
+                "is_base": false, "is_active": true,
+                "created_at": "2026-11-17T00:00:00Z",
+                "updated_at": "2026-11-17T00:00:00Z", "version": version,
+            })
+        };
+        let url = serve(
+            Router::new()
+                .route(
+                    "/currencies",
+                    post(
+                        move |headers: AxumHeaders, axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(bearer(&headers), "Bearer tok");
+                            assert_eq!(
+                                body,
+                                json!({ "code": "gbp", "name": "英鎊", "symbol": null, "decimal_places": 2 })
+                            );
+                            (AxumStatus::CREATED, axum::Json(currency(1)))
+                        },
+                    ),
+                )
+                .route(
+                    "/currencies/{code}",
+                    patch(
+                        move |Path(code): Path<String>, axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(code, "GBP");
+                            assert_eq!(
+                                body,
+                                json!({ "version": 1, "name": null, "symbol": "", "decimal_places": null, "is_active": false })
+                            );
+                            axum::Json(currency(2))
+                        },
+                    ),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+
+        let created = client
+            .create_currency(
+                &url,
+                "tok",
+                &CreateCurrencyRequest {
+                    code: "gbp".into(),
+                    name: "英鎊".into(),
+                    symbol: None,
+                    decimal_places: 2,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.code, "GBP");
+        let req = UpdateCurrencyRequest {
+            version: 1,
+            name: None,
+            symbol: Some(String::new()),
+            decimal_places: None,
+            is_active: Some(false),
+        };
+        let updated = client
+            .update_currency(&url, "tok", "GBP", &req)
+            .await
+            .unwrap();
+        assert_eq!(updated.version, 2);
+
+        // 代碼含其他字元時不送出請求，避免改變路徑
+        let err = client
+            .update_currency(&url, "tok", "../x", &req)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ClientError::InvalidInput { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn exchange_rate_endpoints() {
+        use axum::extract::{Path, RawQuery};
+        use axum::routing::patch;
+
+        let url = serve(
+            Router::new()
+                .route(
+                    "/exchange-rates",
+                    get(|RawQuery(query): RawQuery| async move {
+                        // `None` 的條件（date_to）不放進 query string
+                        assert_eq!(
+                            query.as_deref(),
+                            Some("currency_code=USD&date_from=2026-11-01&page=2&page_size=20")
+                        );
+                        axum::Json(json!({
+                            "items": [exchange_rate_json(1)],
+                            "page": 2, "page_size": 20, "total": 21,
+                        }))
+                    })
+                    .post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                        // 匯率以字串送出，不轉成浮點數
+                        assert_eq!(
+                            body,
+                            json!({ "currency_code": "USD", "rate_date": "2026-11-17", "rate": "32.15" })
+                        );
+                        (
+                            AxumStatus::UNPROCESSABLE_ENTITY,
+                            axum::Json(json!({
+                                "code": "VALIDATION",
+                                "message": "同一幣別同一天已有匯率",
+                                "details": { "field": "rate_date" },
+                            })),
+                        )
+                    }),
+                )
+                .route(
+                    "/exchange-rates/{id}",
+                    patch(
+                        |Path(id): Path<String>, axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert!(id.ends_with("00e1"));
+                            assert_eq!(body, json!({ "version": 1, "rate": "32.200000" }));
+                            axum::Json(exchange_rate_json(2))
+                        },
+                    )
+                    .delete(|RawQuery(query): RawQuery| async move {
+                        assert_eq!(query.as_deref(), Some("version=2"));
+                        AxumStatus::NO_CONTENT
+                    }),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+        let id: Id = "0190a000-0000-7000-8000-0000000000e1".parse().unwrap();
+
+        let page = client
+            .list_exchange_rates(
+                &url,
+                "tok",
+                &ExchangeRateQuery {
+                    currency_code: Some("USD".into()),
+                    date_from: Some(time::macros::date!(2026 - 11 - 01)),
+                    date_to: None,
+                    page: Some(2),
+                    page_size: Some(20),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.total, 21);
+        assert_eq!(page.items[0].rate.to_string(), "32.150000");
+
+        let err = client
+            .create_exchange_rate(
+                &url,
+                "tok",
+                &CreateExchangeRateRequest {
+                    currency_code: "USD".into(),
+                    rate_date: time::macros::date!(2026 - 11 - 17),
+                    rate: "32.15".parse().unwrap(),
+                },
+            )
+            .await
+            .unwrap_err();
+        let ClientError::Api(api) = err else {
+            panic!("應該是 ApiError：{err:?}");
+        };
+        assert_eq!(api.code, ErrorCode::Validation);
+
+        let updated = client
+            .update_exchange_rate(
+                &url,
+                "tok",
+                id,
+                &UpdateExchangeRateRequest {
+                    version: 1,
+                    rate: "32.200000".parse().unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.version, 2);
+        client
+            .delete_exchange_rate(&url, "tok", id, &DeleteExchangeRateQuery { version: 2 })
+            .await
+            .unwrap();
     }
 }
