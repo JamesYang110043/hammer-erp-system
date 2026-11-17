@@ -587,19 +587,15 @@ fn normalize_default(def: &FieldDefinition) -> Result<Option<Value>, CoreError> 
     }
 }
 
-/// `relation` 欄位的目標資料類別（§7.3）：必須存在、是自訂資料類別（`storage = custom_records`）、
-/// 有效，且 `kind` 為 `master` 或 `document`。`target` 為依 `relation_entity_id` 查到的
-/// 未刪除資料類別。不符合 → 錯誤（`relation_entity_id`）。
-///
-/// 系統資料類別在 M3 支援。
+/// `relation` 欄位的目標資料類別（§7.3）：必須存在、有效，且 `kind` 為 `master` 或 `document`；
+/// 自訂與系統資料類別都可以（M3 起，例如 `customer`），明細子表（含系統明細子表
+/// `customer_contact`）不可以。`target` 為依 `relation_entity_id` 查到的未刪除資料類別。
+/// 不符合 → 錯誤（`relation_entity_id`）。
 pub fn validate_relation_target(target: Option<&EntityDefinition>) -> Result<(), CoreError> {
     let fail = |message: &str| Err(invalid(field::RELATION_ENTITY_ID, message));
     let Some(target) = target else {
         return fail("找不到關聯的資料類別");
     };
-    if target.is_system || target.storage != EntityStorage::CustomRecords {
-        return fail("目前只能關聯到自訂資料類別");
-    }
     if !target.is_active {
         return fail("關聯的資料類別已停用");
     }
@@ -2091,17 +2087,17 @@ mod tests {
             is_active: false,
             ..entity(false)
         };
-        let table = EntityDefinition {
+        // 系統資料類別（M3 起）可以，系統明細子表不可以
+        let system = EntityDefinition {
             storage: EntityStorage::Table,
-            ..entity(false)
+            ..entity(true)
         };
-        for target in [
-            None,
-            Some(&detail),
-            Some(&inactive),
-            Some(&entity(true)),
-            Some(&table),
-        ] {
+        assert!(validate_relation_target(Some(&system)).is_ok());
+        let system_detail = EntityDefinition {
+            kind: EntityKind::Detail,
+            ..system.clone()
+        };
+        for target in [None, Some(&detail), Some(&inactive), Some(&system_detail)] {
             let err = validate_relation_target(target).unwrap_err();
             assert_eq!(err.code(), ErrorCode::Validation);
             assert_eq!(field_of(&err), field::RELATION_ENTITY_ID, "{target:?}");

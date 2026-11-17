@@ -7,7 +7,7 @@
 //! 純邏輯（[`changed_relations`]、[`missing_relations`]、[`relation_values`]）有單元測試；
 //! 存取資料庫的部分由 `crates/server/tests/relation_api.rs` 的整合測試涵蓋。
 //!
-//! 欄位定義的目標資料類別限制（自訂、有效、`master` / `document`）在
+//! 欄位定義的目標資料類別限制（有效、`master` / `document`，自訂或系統資料類別）在
 //! [`crate::schema::rules::validate_relation_target`]。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -23,7 +23,8 @@ use serde_json::{Map, Value};
 
 use crate::CoreError;
 use crate::record_data::FieldError;
-use crate::schema::{entity_from_row, field_from_row};
+use crate::records::fields_and_table;
+use crate::schema::entity_from_row;
 use crate::title::TitleRenderer;
 
 /// 關聯的資料不存在、已刪除或屬於其他資料類別時的錯誤訊息。
@@ -159,7 +160,8 @@ pub async fn check_relations(
 
 /// 依 `fields`（資料所屬資料類別的欄位定義）填入每筆資料的 [`Record::relations`]。
 ///
-/// 目標資料依目標資料類別的標題規則產生標題（含已刪除的資料）；找不到目標資料或目標資料類別時，
+/// 目標資料依目標資料類別的標題規則產生標題（含已刪除的資料）；目標為系統資料類別時讀取其專屬
+/// 資料表（系統欄位與 `custom_data`）。找不到目標資料或目標資料類別時，
 /// `title` 為空字串、`deleted` 為 `true`。
 pub async fn attach_relations(
     conn: &mut PgConnection,
@@ -182,17 +184,19 @@ pub async fn attach_relations(
     for (entity_id, mut ids) in by_entity {
         ids.sort();
         ids.dedup();
-        let Some(entity) = schema_db::find_entity_by_id(&mut *conn, entity_id).await? else {
+        let Some(row) = schema_db::find_entity_by_id(&mut *conn, entity_id).await? else {
             continue;
         };
-        let entity = entity_from_row(entity)?;
-        let target_fields = schema_db::list_fields(&mut *conn, entity_id)
-            .await?
-            .into_iter()
-            .map(field_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
+        let table_name = row.table_name.clone();
+        let entity = entity_from_row(row)?;
+        // 系統資料類別（storage = table）的資料在專屬資料表，系統欄位與 custom_data 合成 data（§7.1）
+        let (target_fields, table) = fields_and_table(conn, &entity, table_name).await?;
         let titles = TitleRenderer::new(entity.title_template.as_deref(), &target_fields);
-        for row in record_db::find_records_by_ids(&mut *conn, entity_id, &ids).await? {
+        let rows = match &table {
+            Some(table) => system_db::find_records_by_ids(&mut *conn, table, &ids).await?,
+            None => record_db::find_records_by_ids(&mut *conn, entity_id, &ids).await?,
+        };
+        for row in rows {
             let title = match row.data.as_object() {
                 Some(data) => titles.render(row.id, row.record_no.as_deref(), data),
                 None => String::new(),

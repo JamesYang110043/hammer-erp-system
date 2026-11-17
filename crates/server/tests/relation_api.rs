@@ -1,6 +1,7 @@
 //! 關聯欄位（`relation`）的 API 整合測試（#70）。
 //!
-//! - 欄位定義：目標只能是自訂、有效、`master` / `document` 的資料類別；建立後不可修改；
+//! - 欄位定義：目標只能是有效、`master` / `document` 的資料類別（指向系統資料類別見
+//!   `relation_system_api.rs`）；建立後不可修改；
 //!   型態變更只能轉成 `text` / `long_text`
 //! - 寫入：值必須是目標資料類別中未刪除的資料 id
 //! - 回應：`relations` 列出目標資料的標題與是否已刪除
@@ -325,7 +326,7 @@ async fn relation_field_is_created_with_target(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db/migrations")]
-async fn relation_target_must_be_active_custom_master_or_document(pool: PgPool) {
+async fn relation_target_must_be_active_master_or_document(pool: PgPool) {
     let (admin, equipment) = setup(&pool).await;
 
     // 沒有指定目標、目標不存在
@@ -356,14 +357,14 @@ async fn relation_target_must_be_active_custom_master_or_document(pool: PgPool) 
         create_field_raw(&pool, &admin, REPAIR, relation_field("x", detail_id)).await;
     assert_invalid(status, &body, "relation_entity_id");
 
-    // 系統資料類別（migration 寫入，§8.6）
-    let system_id: Id =
-        sqlx::query_scalar("SELECT id FROM entity_definitions WHERE key = 'customer'")
+    // 系統明細子表（migration 寫入，§8.7）；系統主檔可以關聯，見 relation_system_api.rs（#110）
+    let system_detail: Id =
+        sqlx::query_scalar("SELECT id FROM entity_definitions WHERE key = 'customer_contact'")
             .fetch_one(&pool)
             .await
             .unwrap();
     let (status, body) =
-        create_field_raw(&pool, &admin, REPAIR, relation_field("x", system_id)).await;
+        create_field_raw(&pool, &admin, REPAIR, relation_field("x", system_detail)).await;
     assert_invalid(status, &body, "relation_entity_id");
 
     // 單據（document）可以
