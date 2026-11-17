@@ -13,7 +13,7 @@ use hammer_core::test_util::{TestUser, create_user_with_session};
 use hammer_server::{AppState, Config, router};
 use hammer_shared::record::Record;
 use hammer_shared::schema::{EntityDefinition, EntityDetail, EntityKind};
-use hammer_shared::{ApiError, ErrorCode, Id, audit, new_id, role};
+use hammer_shared::{ApiError, ErrorCode, Id, audit, role};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -258,21 +258,6 @@ async fn schema_change_count(pool: &PgPool) -> i64 {
         .unwrap()
 }
 
-/// 直接在資料庫插入一個系統資料類別（`is_system = true`、`storage = table`）。
-async fn insert_system_entity(pool: &PgPool, key: &str) -> Id {
-    let id = new_id();
-    sqlx::query(
-        "INSERT INTO entity_definitions (id, key, label, kind, is_system, storage, table_name)
-         VALUES ($1, $2, '客戶', 'master', true, 'table', 'customers')",
-    )
-    .bind(id)
-    .bind(key)
-    .execute(pool)
-    .await
-    .unwrap();
-    id
-}
-
 // ---------------------------------------------------------------------------
 // 單據
 // ---------------------------------------------------------------------------
@@ -393,6 +378,7 @@ async fn list_entities_including_inactive(pool: PgPool) {
         body.as_array()
             .unwrap()
             .iter()
+            .filter(|e| e["is_system"] == false)
             .map(|e| e["key"].as_str().unwrap().to_owned())
             .collect()
     };
@@ -414,7 +400,11 @@ async fn list_entities_including_inactive(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let all: Vec<EntityDefinition> = serde_json::from_value(body).unwrap();
-    let listed: Vec<(&str, bool)> = all.iter().map(|e| (e.key.as_str(), e.is_active)).collect();
+    let listed: Vec<(&str, bool)> = all
+        .iter()
+        .filter(|e| !e.is_system)
+        .map(|e| (e.key.as_str(), e.is_active))
+        .collect();
     assert_eq!(listed, [("active_one", true), ("inactive_one", false)]);
 
     for (name, role) in [("editor", role::EDITOR), ("viewer", role::VIEWER)] {
@@ -438,7 +428,7 @@ async fn list_entities_including_inactive(pool: PgPool) {
 #[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
 async fn system_entity_cannot_be_deactivated_or_deleted(pool: PgPool) {
     let token = admin(&pool).await;
-    insert_system_entity(&pool, "customer").await;
+    // migration 寫入的系統資料類別（§8.6）
     let system = current(&pool, &token, "customer").await;
 
     let (status, body) = patch_entity(&pool, &token, &system, json!({ "is_active": false })).await;
@@ -478,7 +468,11 @@ async fn reorder_entities_in_one_request(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let list: Vec<EntityDefinition> = serde_json::from_value(body).unwrap();
-    let keys: Vec<&str> = list.iter().map(|e| e.key.as_str()).collect();
+    let keys: Vec<&str> = list
+        .iter()
+        .filter(|e| !e.is_system)
+        .map(|e| e.key.as_str())
+        .collect();
     // 依 sort_order、id 排序
     assert_eq!(keys, ["beta", "gamma", "alpha"]);
     let by_key = |k: &str| list.iter().find(|e| e.key == k).unwrap().clone();
@@ -542,12 +536,12 @@ async fn entity_named_order_is_still_reachable(pool: PgPool) {
 #[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
 async fn delete_rejected_while_referenced_by_relation(pool: PgPool) {
     let token = admin(&pool).await;
-    let customer = create_master(&pool, &token, "customer").await;
+    let customer = create_master(&pool, &token, "client").await;
     // 自己引用自己
     add_field(
         &pool,
         &token,
-        "customer",
+        "client",
         json!({ "field_key": "referrer", "label": "介紹人", "data_type": "relation",
                 "relation_entity_id": customer.id }),
     )
@@ -571,8 +565,8 @@ async fn delete_rejected_while_referenced_by_relation(pool: PgPool) {
     )
     .await;
 
-    let customer = current(&pool, &token, "customer").await;
-    let (status, body) = delete_entity(&pool, &token, "customer", customer.version).await;
+    let customer = current(&pool, &token, "client").await;
+    let (status, body) = delete_entity(&pool, &token, "client", customer.version).await;
     let err = assert_invalid_field(status, &body, "relation_entity_id");
     assert_eq!(
         err.details.unwrap()["fields"],
@@ -583,7 +577,7 @@ async fn delete_rejected_while_referenced_by_relation(pool: PgPool) {
               "field_key": "who", "field_label": "拜訪對象" },
         ])
     );
-    assert!(get_entity(&pool, &token, "customer").await.0.is_success());
+    assert!(get_entity(&pool, &token, "client").await.0.is_success());
 
     // 停用引用的欄位、停用引用的資料類別後就可以刪除
     let (status, body) = call(
@@ -599,7 +593,7 @@ async fn delete_rejected_while_referenced_by_relation(pool: PgPool) {
     let (status, body) = patch_entity(&pool, &token, &visit, json!({ "is_active": false })).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
-    let (status, body) = delete_entity(&pool, &token, "customer", customer.version).await;
+    let (status, body) = delete_entity(&pool, &token, "client", customer.version).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 
     // 刪除後不能再建立指向它的關聯欄位

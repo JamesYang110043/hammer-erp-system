@@ -27,7 +27,7 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 
 /// 關聯目標（客戶）。
-const CUSTOMER: &str = "customer";
+const CUSTOMER: &str = "client";
 /// 有公式欄位的主表（訂單）。
 const ORDER: &str = "sales_order";
 /// 訂單的明細子表（品項）。
