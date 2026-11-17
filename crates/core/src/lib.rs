@@ -6,6 +6,7 @@
 //! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定、目前使用者與權限檢查
 //! - [`formulas`]：存檔時計算公式欄位
 //! - [`layouts`]：列表版面（`view_layouts`）
+//! - [`master_data`]：基本資料（單位、商品分類、商品、客戶、廠商）的業務規則
 //! - [`numbering`]：單號規則的解析與產生
 //! - [`record_data`]：依欄位定義驗證並正規化資料的 `data`
 //! - [`record_lines`]：明細子表的明細與主表一起存檔時的檢查（比對 id、不可重複、操作紀錄）
@@ -27,6 +28,7 @@ pub mod auth;
 mod error;
 pub mod formulas;
 pub mod layouts;
+pub mod master_data;
 pub mod numbering;
 pub mod recalculate;
 pub mod record_data;

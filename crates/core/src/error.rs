@@ -96,6 +96,17 @@ pub enum CoreError {
     #[error("還有 {} 個公式欄位引用，請先修改或停用這些公式欄位", .0.len())]
     FormulaReferenced(Vec<RelationReference>),
 
+    /// 刪除基本資料時，還有其他資料使用它（§7.2，[`crate::master_data`]）：單位、分類還有未刪除的商品
+    /// 使用，或分類還有子分類。`products`、`children` 為使用中的商品數、子分類數（至少一個大於 0）。
+    /// API 回應為 `VALIDATION`，`details` 為 `{ "fields": [], "in_use_count": 3, "child_count": 1 }`
+    /// （只列出大於 0 的數量）。
+    #[error("{message}")]
+    RecordInUse {
+        message: String,
+        products: i64,
+        children: i64,
+    },
+
     /// 操作後系統沒有任何有效（啟用、未刪除）的管理者（§6.2）。
     /// API 回應為 `VALIDATION`，`details.reason` 為 [`LAST_ADMIN_REASON`]。
     #[error("系統至少需要保留一個有效的管理者，無法停用、刪除最後一個管理者或變更其角色")]
@@ -159,6 +170,7 @@ impl CoreError {
             | Self::EntityReferenced(_)
             | Self::InvalidFormula(_)
             | Self::FormulaReferenced(_)
+            | Self::RecordInUse { .. }
             | Self::LastAdmin => ErrorCode::Validation,
             Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::PayloadTooLarge(_) => ErrorCode::PayloadTooLarge,
@@ -299,6 +311,18 @@ impl From<CoreError> for ApiError {
                 "field": "formula",
                 "formulas": formulas,
             }))
+        } else if let CoreError::RecordInUse {
+            products, children, ..
+        } = &err
+        {
+            let mut details = serde_json::json!({ "fields": [] });
+            if *products > 0 {
+                details["in_use_count"] = serde_json::json!(products);
+            }
+            if *children > 0 {
+                details["child_count"] = serde_json::json!(children);
+            }
+            ApiError::new(code, err.to_string()).with_details(details)
         } else if let CoreError::LastAdmin = err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "reason": LAST_ADMIN_REASON }))
@@ -334,6 +358,33 @@ mod tests {
         let api: ApiError = err.into();
         assert_eq!(api.code, ErrorCode::Validation);
         assert_eq!(api.message, "密碼至少需要 10 個字元");
+    }
+
+    #[test]
+    fn record_in_use_lists_counts_in_details() {
+        let err = CoreError::RecordInUse {
+            message: "此單位還有 3 筆商品使用中，無法刪除".into(),
+            products: 3,
+            children: 0,
+        };
+        assert_eq!(err.code(), ErrorCode::Validation);
+        let api: ApiError = err.into();
+        assert_eq!(api.message, "此單位還有 3 筆商品使用中，無法刪除");
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "fields": [], "in_use_count": 3 }))
+        );
+
+        let api: ApiError = CoreError::RecordInUse {
+            message: String::new(),
+            products: 0,
+            children: 2,
+        }
+        .into();
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "fields": [], "child_count": 2 }))
+        );
     }
 
     #[test]

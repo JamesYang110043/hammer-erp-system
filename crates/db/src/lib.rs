@@ -7,6 +7,7 @@
 //! - [`audit`]：寫入與查詢 `audit_logs`
 //! - [`dynamic_index`]：自訂欄位的動態索引（可搜尋、不可重複；`custom_records` 與系統資料表）
 //! - [`lock`]：advisory lock
+//! - [`master_data`]：基本資料業務規則的查詢（幣別有效、分類上層、使用中的商品數）
 //! - [`number_sequence`]：單號流水號（`number_sequences`）的取號
 //! - [`record`]：自訂資料類別的資料（`custom_records`）
 //! - [`role`]：角色與權限查詢
@@ -25,6 +26,7 @@ pub mod audit;
 pub mod dynamic_index;
 mod error;
 pub mod lock;
+pub mod master_data;
 mod migrate;
 pub mod number_sequence;
 mod optimistic;

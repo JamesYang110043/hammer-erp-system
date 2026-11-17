@@ -15,9 +15,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use hammer_db::record as record_db;
 use hammer_db::schema as schema_db;
 use hammer_db::sqlx::{PgConnection, PgTransaction};
+use hammer_db::system_record as system_db;
 use hammer_shared::Id;
 use hammer_shared::record::{Record, RelationRef};
-use hammer_shared::schema::{DataType, FieldDefinition, FieldValue, parse_value};
+use hammer_shared::schema::{DataType, EntityStorage, FieldDefinition, FieldValue, parse_value};
 use serde_json::{Map, Value};
 
 use crate::CoreError;
@@ -114,7 +115,8 @@ pub fn missing_relations(values: &[RelationValue], found: &HashSet<(Id, Id)>) ->
 }
 
 /// 檢查有變動的關聯欄位（[`changed_relations`]）所指的資料存在於目標資料類別且未刪除，
-/// 並以 `FOR SHARE` 鎖定到 transaction 結束。有任何一個不符合 → [`CoreError::InvalidFields`]。
+/// 並以 `FOR SHARE` 鎖定到 transaction 結束。目標為系統資料類別（`storage = table`，例如商品的
+/// `unit_id`）時檢查其專屬資料表（§7.2）。有任何一個不符合 → [`CoreError::InvalidFields`]。
 pub async fn check_relations(
     tx: &mut PgTransaction<'_>,
     fields: &[FieldDefinition],
@@ -134,7 +136,16 @@ pub async fn check_relations(
     for (entity_id, mut ids) in by_entity {
         ids.sort();
         ids.dedup();
-        for id in record_db::lock_existing_records(&mut **tx, entity_id, &ids).await? {
+        // 系統資料類別（storage = table）的資料在專屬資料表；目標資料類別不存在時視為找不到資料
+        let table_name = schema_db::find_entity_by_id(&mut **tx, entity_id)
+            .await?
+            .filter(|e| e.storage == EntityStorage::Table.as_str())
+            .and_then(|e| e.table_name);
+        let existing = match table_name {
+            Some(table) => system_db::lock_existing_records(&mut **tx, &table, &ids).await?,
+            None => record_db::lock_existing_records(&mut **tx, entity_id, &ids).await?,
+        };
+        for id in existing {
             found.insert((entity_id, id));
         }
     }

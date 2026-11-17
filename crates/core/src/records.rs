@@ -17,6 +17,9 @@
 //! 寫入都在單一 transaction 內完成，並寫入一筆 `audit_logs`：`entity_key` 為資料類別代碼，
 //! `before_data` / `after_data` 只包含有變動的欄位（[`AuditDiff`]）。修改沒有任何變動時不寫入。
 //!
+//! 系統資料類別另外套用基本資料的業務規則（[`crate::master_data`]）：系統欄位的固定限制、廠商的預設
+//! 幣別、商品分類不可循環，以及單位、分類使用中時不能刪除。
+//!
 //! 違反「不可重複」欄位的唯一索引（§7.5）時，找出與其他資料重複的欄位，回傳
 //! [`CoreError::InvalidFields`]（`422 VALIDATION`）。
 //!
@@ -79,6 +82,7 @@ use crate::auth::AuthContext;
 use crate::formulas::{
     FormulaErrors, Formulas, errors_from_json, errors_to_json, load_targets, today_of, value_type,
 };
+use crate::master_data;
 use crate::numbering::{NumberingPattern, numbering_date};
 use crate::record_data::{FieldError, WriteMode, normalize_record_data};
 use crate::record_lines::{
@@ -246,11 +250,15 @@ pub async fn create_record(
     let details = store_details_for_write(&mut tx, &entity, &store).await?;
     let formulas = formulas_of(&fields, &details);
     let master = normalize_record_data(&fields, &req.data, WriteMode::Create);
+    let master = system_rules(&store, &entity.key, master, None);
     let mut line_errors = Vec::new();
     let mut lines =
         prepare_lines(&mut tx, &details, &req.lines, None, false, &mut line_errors).await?;
     let mut data = validation_error(master, line_errors)?;
     check_relations(&mut tx, &fields, &data, None).await?;
+    if let Store::Table(_) = store {
+        master_data::check_references(&mut tx, &entity.key, None, &data, None).await?;
+    }
     let files = prepare_file_changes(&mut tx, &fields, &data, None).await?;
     ensure_unique_attachments(&files, &lines)?;
     let formula_errors = compute_formulas(&mut tx, &formulas, &mut data, &mut lines, now).await?;
@@ -347,6 +355,7 @@ pub async fn update_record(
     let formulas = formulas_of(&fields, &details);
     let existing = data_object(&current.data)?;
     let master = normalize_record_data(&fields, &req.data, WriteMode::Update { existing });
+    let master = system_rules(&store, &entity.key, master, Some(existing));
     let mut line_errors = Vec::new();
     // 有公式時所有明細都要重算（主表的子表彙總也需要沒帶到的明細）
     let recompute_all = !formulas.is_empty();
@@ -374,6 +383,10 @@ pub async fn update_record(
     }
     // 只檢查有變動的關聯：目標之後被刪除時，仍可修改其他欄位
     check_relations(&mut tx, &fields, &data, Some(existing)).await?;
+    if let Store::Table(_) = store {
+        master_data::check_references(&mut tx, &entity.key, Some(id), &data, Some(existing))
+            .await?;
+    }
     let files = prepare_file_changes(&mut tx, &fields, &data, Some(existing)).await?;
     ensure_unique_attachments(&files, &lines)?;
     let data = Value::Object(data);
@@ -449,6 +462,9 @@ pub async fn delete_record(
     let (entity, _, store) = load_target_for_write(&mut tx, entity_key).await?;
     let current = lock_record(&mut tx, &store, entity.id, id).await?;
     ensure_version(current.version, version)?;
+    if let Store::Table(_) = store {
+        master_data::check_delete(&mut tx, &entity.key, id).await?;
+    }
     let (details, lines) = match store {
         Store::CustomRecords => (
             schema_db::list_detail_entities_for_share(&mut *tx, entity.id).await?,
@@ -1007,6 +1023,26 @@ impl Store {
                 system_db::value_taken(pool, table, exclude_id, field_key, value).await
             }
         }
+    }
+}
+
+/// 系統資料類別在通用欄位驗證之後，再檢查基本資料的業務規則（[`master_data::check_data`]）。
+/// 通用欄位驗證已有錯誤時直接回傳，不再檢查。
+fn system_rules(
+    store: &Store,
+    entity_key: &str,
+    master: Result<Map<String, Value>, Vec<FieldError>>,
+    existing: Option<&Map<String, Value>>,
+) -> Result<Map<String, Value>, Vec<FieldError>> {
+    let Store::Table(_) = store else {
+        return master;
+    };
+    let mut data = master?;
+    let errors = master_data::check_data(entity_key, &mut data, existing);
+    if errors.is_empty() {
+        Ok(data)
+    } else {
+        Err(errors)
     }
 }
 
