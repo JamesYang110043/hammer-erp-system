@@ -161,10 +161,14 @@ desktop(src-tauri) ──▶ shared, formula
 | `data.export` | 匯出 Excel、列印 | ✅ | ✅ | ✅ |
 | `schema.manage` | 欄位與資料類別客製化 | ✅ | ❌ | ❌ |
 | `user.manage` | 帳號管理 | ✅ | ❌ | ❌ |
-| `settings.manage` | 系統設定（單號規則、匯率等） | ✅ | ❌ | ❌ |
+| `settings.manage` | 系統設定（幣別等） | ✅ | ❌ | ❌ |
 | `audit.read` | 查看操作紀錄 | ✅ | ❌ | ❌ |
 
-> 匯率維護：目前歸在 `settings.manage`。如果可編輯者也需要輸入匯率，再調整。
+> 幣別與匯率（Q5 已決定，規則見 §8.6 `currencies`、`exchange_rates`）：
+>
+> - 匯率的新增、修改、刪除需要 `record.write`（可編輯者可以），查看需要 `record.read`。匯率是日常輸入的業務資料，不是系統設定。
+> - 幣別的新增、修改、停用需要 `settings.manage`（只有管理者），查看只需要登入。
+> - 單號規則屬於資料類別設定，需要 `schema.manage`（§8.5）。
 
 ### 6.2 安全規則
 
@@ -186,10 +190,23 @@ desktop(src-tauri) ──▶ shared, formula
 
 | | 系統資料類別 | 自訂資料類別 |
 |---|---|---|
-| 例子 | 客戶、商品、訂單、進貨單 | 管理者自建的「維修單」 |
-| 儲存 | 專屬資料表 + `custom_data` JSONB | 通用資料表 `custom_records.data` JSONB |
-| 可否刪除 | 不可 | 可（軟刪除） |
+| 例子 | 客戶、商品（M3）；訂單、進貨單（M4） | 管理者自建的「維修單」 |
+| `entity_definitions` | `is_system = true`、`storage = table`，由 migration 建立 | `is_system = false`、`storage = custom_records` |
+| 儲存 | 專屬資料表：系統欄位是實體欄位（`storage = column`），自訂欄位存在 `custom_data` JSONB | 通用資料表 `custom_records.data` JSONB |
+| 資料 API 與畫面 | 通用資料 API（`/api/v1/entities/{key}/records`）與桌面的動態列表、表單；M4 的過帳、作廢等動作另有專屬端點（§10） | 通用資料 API 與動態列表、表單 |
+| 可否刪除資料類別 | 不可，也不可停用 | 可（軟刪除） |
 | 影響庫存與財務 | 依系統邏輯 | 第一版不影響（D8） |
+
+**系統資料類別共用通用資料 API**（M3 起）：
+
+- 列表、單筆、新增、修改、刪除、選擇器（`lookup`）、篩選與排序、`view_layouts`、操作紀錄都與自訂資料類別相同；權限一樣是 `record.read` / `record.write`。差別只在 `hammer_core` 依 `storage` 把資料讀寫到專屬資料表。
+- request 與回應的 `data` 以 `field_key` 為鍵，同時包含系統欄位與自訂欄位，客戶端不需要區分；伺服器把系統欄位寫入實體欄位，其餘寫入 `custom_data`。值的格式一律依 §7.3（例如 `NUMERIC` 欄位讀出時是補齊 `decimal_places` 的字串）。
+- 系統欄位的 `field_key` 與 `column_name` 相同（例如 `unit_id`）。外鍵也是欄位（`relation`，§7.3）；`id`、明細的父資料欄位（`customer_id` / `supplier_id`）與 `sort_order`、共通欄位、`custom_data`、`formula_errors` 不是欄位；request 帶到時與其他未定義的欄位相同（`422`）。
+- 系統資料類別在 M3 沒有單號：`record_no` 為 `null`，`numbering_pattern` 不可設定（`422`，`details.field = numbering_pattern`）；單據的單號在 M4 處理。
+- 系統明細子表（`customer_contact`、`supplier_contact`）與自訂明細子表的規則相同（§8.5 `custom_records`「明細子表」、§10「主表與明細」）：只能透過主表存取，以 `lines.<明細子表代碼>` 整組取代。順序存在明細資料表的 `sort_order`，父資料存在 `customer_id` / `supplier_id`。
+- 管理者可以在系統資料類別（含系統明細子表）新增自訂欄位（含公式、關聯、附件欄位），規則與自訂資料類別相同；不可新增系統欄位，也不可在系統資料類別下建立新的明細子表。
+- 公式欄位的計算結果存在 `custom_data`，錯誤存在該資料表的 `formula_errors`（§7.6「存檔時計算」）；公式可以引用系統欄位（依其 `data_type` 讀取）。
+- 系統資料表的 `is_active` 欄位（商品、客戶、廠商）是一般的 `boolean` 系統欄位：選擇器（`lookup`）不列出 `is_active = false` 的資料；寫入關聯欄位時不檢查，既有資料仍可指向已停用的資料。
 
 ### 7.2 欄位的兩個層級
 
@@ -199,6 +216,38 @@ desktop(src-tauri) ──▶ shared, formula
 | 可修改 | 顯示名稱、顯示或隱藏、排序、欄寬、說明文字；必填與預設值在不違反系統規則下可改 | 全部屬性 |
 | 不可修改 | 資料型態、欄位代碼，也不可刪除 | 欄位代碼（建立後就固定） |
 | 刪除 | 不可 | 只能停用（`is_active = false`），資料保留 |
+
+**系統欄位的修改**（`hammer_core::schema::rules` 的 `plan_update_field`；欄位定義由 migration 寫入，清單見 §8.6、§8.7）：
+
+| 屬性 | 可否修改 |
+|---|---|
+| `label`、`is_visible`、`sort_order`、`column_width`、`help_text` | 可以 |
+| `is_required` | 可以設為必填；migration 定義為必填的不可取消（`422`，`details.field = is_required`） |
+| `default_value` | 可以，必須符合欄位型態與該欄位的系統限制；`relation` 欄位不可設定（與自訂欄位相同） |
+| `field_key`、`data_type`、`column_name`、`storage` | 不可 |
+| `is_readonly`、`is_searchable`、`is_unique`、`validation`、`options`、`decimal_places`、`ui_widget`、`relation_entity_id`、`formula`、`formula_result_type` | 不可（`422`，`details.field` 為該屬性） |
+| `is_active` | 不可停用 |
+
+- 系統欄位的 `is_searchable`、`is_unique` 反映 migration 建立的靜態索引，不會觸發 §7.5 的動態索引。
+- 新增資料時沒有帶值的欄位套用 `default_value`（與自訂欄位相同）；修改資料時不套用。
+
+**各系統欄位的系統限制**（伺服器端檢查，違反時 `422 VALIDATION`，`details.fields` 指出欄位）：
+
+| 欄位 | 限制 |
+|---|---|
+| `code`（單位、商品、客戶、廠商） | 一律必填；去除前後空白後儲存，不可有控制字元，最長 50 字元；**不分大小寫**不可重複（`A001` 與 `a001` 視為重複，儲存時保留輸入的大小寫），只比對未刪除的資料，刪除後代碼可以再使用。建立後可以修改（關聯以 id 指向資料，不受影響）。重複時訊息與「不可重複」的自訂欄位相同 |
+| `name`（所有系統資料類別） | 一律必填；去除前後空白後不可為空 |
+| `unit_id`（商品） | 一律必填；指向未刪除的單位 |
+| `category_id`（商品） | 指向未刪除的商品分類 |
+| `parent_id`（商品分類） | 指向未刪除的商品分類；不可指向自己或自己的下層分類（會形成循環） |
+| `product_type`、`tax_type` | 一律必填；選項固定（§8.6），不可新增、修改或移除選項 |
+| `default_currency_code`（廠商） | 一律必填，預設 `TWD`；值必須是有效（`is_active`）的幣別代碼。修改資料時只在值有變動時檢查，所以幣別停用後既有資料可以保留原值 |
+| `payment_terms_days` | 0 以上的整數 |
+| `credit_limit`、`default_sale_price`、`safety_stock` | 0 以上 |
+| `is_primary`（聯絡人） | 同一個客戶（廠商）最多一位主要聯絡人：存檔時檢查整組明細中 `is_primary = true` 最多一列（`422`，`details.lines` 指出第二列） |
+| `is_active` | 必填，預設 `true` |
+
+上表中「一律必填」「0 以上」等限制由 migration 寫入欄位定義（`is_required`、`validation`），因為這些屬性不可修改，所以限制固定；`code` 的不分大小寫唯一、`parent_id` 的循環、`default_currency_code` 的幣別檢查、`is_primary` 的檢查另外寫在 `hammer_core`。
 
 ### 7.3 欄位資料型態
 
@@ -220,12 +269,13 @@ desktop(src-tauri) ──▶ shared, formula
 
 **關聯欄位（`relation`）**（檢查在 `hammer_core::schema::rules`、`hammer_core::relations`；API 格式見 `hammer_shared::record`）：
 
-- 建立欄位時必須指定 `relation_entity_id`，建立後不可修改。目標只能是**自訂**（`storage = custom_records`）、有效、`kind` 為 `master` 或 `document` 的資料類別（可以是自己）；不可指向明細子表。指向系統資料類別在 M3 支援。關聯欄位不可設定預設值；可以開啟可搜尋、不可重複（§7.5）。
-- 寫入：值必須是目標資料類別中**未刪除**的資料 id，否則 `422 VALIDATION`（`details.fields` 指出欄位）。修改資料時只檢查有變動的關聯欄位，並以 `FOR SHARE` 鎖定目標資料到 transaction 結束，避免同時被刪除。
+- 建立欄位時必須指定 `relation_entity_id`，建立後不可修改。目標只能是有效、`kind` 為 `master` 或 `document` 的資料類別（可以是自己），自訂與系統資料類別都可以（M3 起，例如指向 `product`、`customer`）；不可指向明細子表（自訂或系統的都不可以，例如 `customer_contact`）。關聯欄位不可設定預設值；可以開啟可搜尋、不可重複（§7.5）。
+- 寫入：值必須是目標資料類別中**未刪除**的資料 id，否則 `422 VALIDATION`（`details.fields` 指出欄位）。修改資料時只檢查有變動的關聯欄位，並以 `FOR SHARE` 鎖定目標資料到 transaction 結束，避免同時被刪除。目標是系統資料類別時查詢並鎖定它的專屬資料表；目標的 `is_active = false` 不影響寫入（§7.1）。
+- 系統資料表的外鍵（`unit_id`、`category_id`、`parent_id`）也是指向系統資料類別的 `relation` 系統欄位，寫入、回應、篩選的規則與此相同；另外有資料庫外鍵（`REFERENCES`）。
 - 目標資料之後被刪除：允許刪除，關聯欄位保留原值。
 - 回應：列表與單筆回應有 `relations: { "<field_key>": { "id", "title", "deleted" } }`，列出 `data` 中每個有值的關聯欄位；`title` 依目標資料類別的標題規則產生（§8.5），目標已刪除時 `deleted = true`、`title` 為刪除前的標題。
 - 篩選只支援 `eq`（值為資料 id）、`empty`；不能排序（§10）。
-- 選擇器：`GET /api/v1/entities/{key}/records/lookup?q=&limit=` 依標題比對（以空白分隔的每個詞都要出現，不分大小寫），回傳未刪除資料的 `id`、`title`，由新到舊；`limit` 預設 20、上限 50。需要 `record.read`。標題不存入資料庫，所以依 id 分批讀取資料、產生標題後比對。
+- 選擇器：`GET /api/v1/entities/{key}/records/lookup?q=&limit=` 依標題比對（以空白分隔的每個詞都要出現，不分大小寫），回傳未刪除資料的 `id`、`title`，由新到舊（系統資料類別另外排除 `is_active = false` 的資料）；`limit` 預設 20、上限 50。需要 `record.read`。標題不存入資料庫，所以依 id 分批讀取資料、產生標題後比對。
 - 不做：反向列表（「這台設備的所有維修單」）、多選關聯。
 
 **附件欄位（`file`）**（上傳、下載、綁定與清理在 `hammer_core::attachments`；API 格式見 `hammer_shared::attachment`）：
@@ -278,7 +328,14 @@ desktop(src-tauri) ──▶ shared, formula
 - 索引名稱：`{前綴}_{entity_key}_{field_key}_{雜湊}`，前綴為 `cfs`（可搜尋）或 `cfu`（不可重複）；前綴與代碼的部分超過 54 個字元時截斷，雜湊為兩個代碼的 SHA-256 前 8 碼，名稱最長 63 個字元（PostgreSQL 識別字上限）。規則在 `crates/core/src/schema/index.rs`。
 - DDL 無法使用 bind 參數：`field_key` 與索引名稱拼接前一律檢查只含 `a-z`、`0-9`、`_` 並加上引號（`crates/db/src/dynamic_index.rs`）。
 - 有重複而無法開啟「不可重複」時回傳 `422 VALIDATION`，`details` 為 `{ "field": "is_unique", "total", "values": [{ "value", "count", "record_ids" }] }`。
-- 系統資料表 `custom_data` 的動態索引在 M3 建立系統資料表時處理。
+- **系統資料表的動態索引**（自訂欄位存在 `custom_data`）：
+  - 可搜尋：`CREATE INDEX … ON <table_name> ((custom_data->>'field_key'))`。
+  - 不可重複：`CREATE UNIQUE INDEX … ON <table_name> ((custom_data->>'field_key')) WHERE deleted_at IS NULL`。
+  - 資料表只存一個資料類別，所以**不加** `entity_id` 條件；系統明細子表（聯絡人）與自訂明細子表相同，所有明細（不分主表）不可重複。
+  - 名稱規則、前綴（`cfs` / `cfu`）與自訂資料類別相同，以資料類別代碼組成（例如 `cfs_customer_region_…`）；資料類別代碼不分自訂或系統都不可重複，所以名稱不會衝突。
+  - `table_name` 只來自 migration 寫入的 `entity_definitions`，拼接 DDL 前與 `field_key` 一樣檢查只含 `a-z`、`0-9`、`_` 並加上引號。
+  - 建立前檢查重複、停用時移除、重新啟用時再建立、與欄位定義修改在同一個交易內等規則都與自訂資料類別相同。
+- 系統欄位（實體欄位）不使用動態索引：需要的索引（`code` 的不分大小寫唯一索引、外鍵索引等）由 migration 建立（§8.6、§8.7）。
 
 ### 7.6 公式引擎（crates/formula）
 
@@ -330,10 +387,10 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 - 修改時所有公式都重算（不只有變動的欄位）。資料類別有公式時，request 沒帶到的明細子表也一起重算（視為列出所有既有明細且不修改欄位），主表的彙總因此使用全部明細；明細的值有變動時一併寫入。重算後主表與明細都沒有變動時不寫入、`version` 不變。
 - request 的 `data`（主表與明細）帶了公式欄位的值時一律忽略，不回傳錯誤（含已停用的公式欄位）。已停用的公式欄位不計算，既有的值保留。
 - 公式引用的欄位依目前的欄位定義，只能讀取有效的欄位；`formula` 欄位以 `formula_result_type` 讀取。
-- 關聯引用讀取目標資料**目前**的值，目標已軟刪除時仍讀取其資料；關聯欄位沒有值時為空值。目標資料之後被修改，引用它的公式**不會**自動更新，要等該筆資料再次存檔或執行「重新計算」。
+- 關聯引用讀取目標資料**目前**的值（目標是系統資料類別時，系統欄位與 `custom_data` 都可以引用），目標已軟刪除時仍讀取其資料；關聯欄位沒有值時為空值。目標資料之後被修改，引用它的公式**不會**自動更新，要等該筆資料再次存檔或執行「重新計算」。
 - `TODAY()` 為存檔時間在 Asia/Taipei 的日期（D13）。
 - 結果依 `formula_result_type` 轉成 §7.3 的存值寫入 `data`；空值與空字串不寫入（與一般欄位相同，沒有值的欄位不出現在 `data`）。
-- 計算失敗（除以零、型態不符、溢位、引用的欄位不存在等）時不中斷存檔：該欄位沒有值，錯誤原因寫入 `custom_records.formula_errors`（`{ "<field_key>": "除數不可為零" }`），回應帶 `formula_errors`（§10）。資料庫中的公式無法解析或有循環引用（資料不一致）時，相關欄位同樣記錄錯誤。
+- 計算失敗（除以零、型態不符、溢位、引用的欄位不存在等）時不中斷存檔：該欄位沒有值，錯誤原因寫入 `custom_records.formula_errors`（系統資料類別為該資料表的 `formula_errors`；`{ "<field_key>": "除數不可為零" }`），回應帶 `formula_errors`（§10）。資料庫中的公式無法解析或有循環引用（資料不一致）時，相關欄位同樣記錄錯誤。
 - 操作紀錄的 diff 包含公式欄位值的變動（公式的值存在 `data`）；`formula_errors` 不記錄。
 - 不做：被引用資料變動時自動重算。
 
@@ -346,7 +403,7 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 
 **重新計算**（`hammer_core::recalculate`，`POST /api/v1/entities/{key}/recalculate`，§10）：
 
-- 需要 `schema.manage`。只能對主表（`master` / `document`）執行，明細隨主表一起重算；明細子表、系統資料類別、不存在或已停用的資料類別回傳 `404`。
+- 需要 `schema.manage`。只能對主表（`master` / `document`）執行，明細隨主表一起重算；明細子表、不存在或已停用的資料類別回傳 `404`。系統資料類別（M3 起）也可以執行，處理其專屬資料表與系統明細子表。
 - 處理該資料類別所有**未刪除**的主表資料與其未刪除的明細（只有有效的明細子表）。計算方式與「存檔時計算」相同（先明細、再主表；`TODAY()` 為執行時間在 Asia/Taipei 的日期）。
 - 同步執行，依 `id` 由小到大每 500 筆主表資料一個 transaction（鎖定該批主表與明細，並以 `FOR SHARE` 鎖定資料類別）；每批重新讀取欄位定義。
 - 主表或任一列明細的值（含 `formula_errors`）有變動時寫入：主表的 `version` + 1，有變動的明細也 + 1；都沒有變動的資料不寫入、`version` 不變。
@@ -549,7 +606,7 @@ products ───────────────────────�
 | is_system | BOOLEAN | |
 | storage | TEXT | `table`（系統資料表）/ `custom_records` |
 | table_name | TEXT | storage = table 時，對應的資料表 |
-| parent_entity_id | UUID FK → self | 明細子表所屬的主表（`kind = detail` 時必填，其他為空）；必須是有效的自訂 `master` 或 `document`，不可是另一個明細子表；建立後不可更換 |
+| parent_entity_id | UUID FK → self | 明細子表所屬的主表（`kind = detail` 時必填，其他為空）；管理者建立的明細子表，主表必須是有效的自訂 `master` 或 `document`，不可是另一個明細子表（系統明細子表由 migration 建立，§8.6）；建立後不可更換 |
 | numbering_pattern | TEXT | 單號規則；明細子表不可設定 |
 | title_template | TEXT | 資料標題範本，例如 `{record_no} {name}`；規則見下方 |
 | sort_order | INTEGER | 選單排序 |
@@ -558,9 +615,15 @@ products ───────────────────────�
 
 **資料標題**（`title_template`，解析與產生在 `hammer_core::title`）：關聯欄位、選擇器、操作紀錄用來表示「這筆資料叫什麼」的文字。通用資料 API 的列表與單筆回應都有 `title`。
 
-- 範本中 `{}` 內可寫 `{record_no}`（單號）或本資料類別的欄位代碼 `{field_key}`；`{}` 以外的文字原樣保留。長度上限 200 字元，不可有單獨的 `{` `}` 或控制字元。
+- 範本中 `{}` 內可寫 `{record_no}`（單號）、本資料類別的欄位代碼 `{field_key}`，或關聯引用 `{relation_field.field_key}`（見下方）；`{}` 以外的文字原樣保留。長度上限 200 字元，不可有單獨的 `{` `}` 或控制字元。
 - 建立與修改資料類別時檢查：只能引用 `record_no` 或此資料類別已定義的欄位（含已停用）；新的資料類別還沒有欄位，只能引用 `{record_no}`。不合法 → `422 VALIDATION`（`details.field = title_template`）。空白視為沒有範本。
-- 引用關聯欄位的欄位（例如 `{customer.name}`）目前不支援（422），等 M3 系統資料類別一起評估。
+- **關聯引用** `{relation_field.field_key}`（M3 起；例如商品的 `{code} {name}（{unit_id.name}）`、自訂單據的 `{record_no} {customer.short_name}`）：
+  - 只能一層：`relation_field` 必須是本資料類別已定義（含已停用）、型態為 `relation` 的欄位；`field_key` 必須是它的目標資料類別已定義（含已停用）的欄位，或 `record_no`。檢查不合法 → `422 VALIDATION`（`details.field = title_template`）。
+  - 值依目標欄位的型態套用下表的格式化；目標欄位本身是 `relation` 或 `file` 時為空字串（不會再往下一層）。
+  - 讀取目標資料**目前**的值；目標已軟刪除時仍讀取其資料（與公式的關聯引用相同，§7.6）。
+  - 以下情況為空字串：關聯欄位沒有值、找不到目標資料、關聯欄位或目標欄位已停用、關聯欄位已變更為其他型態（§7.4）。
+  - 不使用目標資料的標題範本。產生「關聯目標的標題」（`relations.<field>.title`、選擇器）時，目標範本中的關聯引用也照常讀取；每一次產生標題最多多讀一層資料，不會遞迴。
+  - 列表產生標題時，依關聯欄位分組，以 id 批次讀取目標資料（不逐筆查詢）。
 - 值依欄位型態格式化，與桌面程式列表的顯示相同，但數值不加千分位、不補小數位數（存值寫入時已補齊）：
 
   | 型態 | 標題中的文字 |
@@ -573,7 +636,7 @@ products ───────────────────────�
   | `select` | 選項名稱（選項已移除時為選項值） |
   | `multi_select` | 選項名稱，以 `、` 連接 |
   | `formula` | 依 `formula_result_type` 套用上列規則；計算失敗（存值為 `null`）時為空字串 |
-  | `relation`、`file` | 目前為空字串 |
+  | `relation`、`file` | 空字串（關聯目標的欄位請用關聯引用） |
 
 - 空值、引用已停用的欄位、存值格式不正確 → 空字串；結果去除前後空白。範本產生的結果是空字串時就回傳空字串，不改用預設規則。
 - 沒有設定範本時，依序使用第一個有值的：單號 → 排序最前面、有效的 `text` 欄位的值 → id 前 8 碼。資料庫中的範本不合法（加入檢查前存入的）時也使用預設規則。
@@ -695,116 +758,204 @@ products ───────────────────────�
 
 ### 8.6 基本資料
 
+#### M3 的系統資料類別
+
+M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`storage = table`、`is_active = true`，id 為 migration 中固定的 UUID）。規則見 §7.1；幣別、匯率、稅別**不是**資料類別，使用專屬端點（見 `currencies`、`exchange_rates`、`tax_rates`）。
+
+| key | label | kind | table_name | 主表 | title_template | sort_order |
+|---|---|---|---|---|---|---|
+| `product` | 商品 | master | `products` | | `{code} {name}` | 10 |
+| `product_category` | 商品分類 | master | `product_categories` | | `{name}` | 20 |
+| `unit` | 單位 | master | `units` | | `{name}` | 30 |
+| `customer` | 客戶 | master | `customers` | | `{code} {name}` | 40 |
+| `customer_contact` | 客戶聯絡人 | detail | `customer_contacts` | `customer` | `{name}` | 0 |
+| `supplier` | 廠商 | master | `suppliers` | | `{code} {name}` | 50 |
+| `supplier_contact` | 廠商聯絡人 | detail | `supplier_contacts` | `supplier` | `{name}` | 0 |
+
+`icon`、`numbering_pattern` 為 `NULL`。管理者可以修改名稱、圖示、標題範本、選單排序（§8.5「資料類別管理」），不可停用、刪除，也不可設定單號規則。
+
+#### 系統資料表的共同規則
+
+下列資料表（`units` 到 `supplier_contacts`）都依照以下規則：
+
+- 欄位依序為：`id UUID PRIMARY KEY`、表中列出的系統欄位、`custom_data`、`formula_errors`、共通欄位（§8.1）：
+  ```sql
+  custom_data    JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(custom_data) = 'object'),
+  formula_errors JSONB CHECK (formula_errors IS NULL OR jsonb_typeof(formula_errors) = 'object'),
+  ```
+- 建立 `set_updated_at` trigger、`GIN (custom_data)` 索引、每個外鍵欄位的索引。
+- 表中「定義」欄寫「必填」的欄位為 `NOT NULL`，其他可為 `NULL`；文字欄位沒有值時存 `NULL`，不存空字串。
+- 「唯一」：`CREATE UNIQUE INDEX … ON <table> (lower(code)) WHERE deleted_at IS NULL`（不分大小寫、只限未刪除的資料，§7.2）。
+- 每個系統欄位在 `field_definitions` 寫入一筆：`is_system = true`、`storage = column`、`field_key` 與 `column_name` 都是欄位名稱、`label` 為表中的「顯示名稱」、`sort_order` 依表中順序為 10、20、30…、`is_visible = true`、`is_active = true`；「定義」欄的寫法對應如下：
+
+  | 寫法 | 欄位定義 |
+  |---|---|
+  | 必填 | `is_required = true`（不可取消，§7.2） |
+  | 唯一 | `is_unique = true`，並有上述唯一索引 |
+  | 可搜尋 | `is_searchable = true`，並有 `(lower(<欄位>))` 索引（`code` 由唯一索引涵蓋） |
+  | 小數 n | `decimal_places = n`（與實體欄位的小數位數相同） |
+  | `min 0`、`max_length 50` | `validation`，例如 `{"min":"0"}`、`{"max_length":50}` |
+  | 預設 x | `default_value` |
+  | → `unit` | `relation_entity_id` 為該系統資料類別 |
+  | `ui_widget = currency` | 桌面程式以幣別選單輸入（`GET /api/v1/currencies`） |
+
+- 明細資料表（聯絡人）的父資料欄位（`customer_id` / `supplier_id`）與 `sort_order` 不是欄位，不寫入 `field_definitions`；欄位定義的 `entity_id` 為明細子表（`customer_contact` / `supplier_contact`）。
+- 操作紀錄的 `entity_key` 為資料類別代碼（例如 `customer`），diff 的鍵為 `field_key`（系統欄位與自訂欄位一起）；聯絡人的變動記在主表的紀錄（`lines.customer_contact`，§8.5 `custom_records`）。
+
 #### `units`
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| id | UUID PK | |
-| code | TEXT UNIQUE | 例如 `pcs`、`box` |
-| name | TEXT | 個、箱 |
-| ＋共通欄位 | | |
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| code | TEXT | `text` | 代碼 | 必填、唯一、`max_length 50`；例如 `pcs`、`box` |
+| name | TEXT | `text` | 名稱 | 必填、可搜尋；例如 個、箱 |
 
 #### `product_categories`
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| id | UUID PK | |
-| parent_id | UUID FK → self | 支援多層分類 |
-| name | TEXT | |
-| sort_order | INTEGER | |
-| ＋共通欄位 | | |
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| name | TEXT | `text` | 名稱 | 必填、可搜尋 |
+| parent_id | UUID FK → product_categories | `relation` | 上層分類 | → `product_category`；不可形成循環（§7.2）；支援多層分類 |
+| sort_order | INTEGER | `integer` | 排序 | 必填、預設 `0`；同一層分類的顯示順序 |
 
 #### `products`
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| id | UUID PK | |
-| code | TEXT UNIQUE | 料號 |
-| name | TEXT | |
-| spec | TEXT | 規格 |
-| product_type | TEXT | `goods`（實體商品，有批號和庫存）/ `service`（服務，無庫存） |
-| category_id | UUID FK | |
-| unit_id | UUID FK | |
-| barcode | TEXT | |
-| tax_type | TEXT | `taxable`（應稅）/ `zero_rated`（零稅率）/ `exempt`（免稅） |
-| default_sale_price | NUMERIC(18,4) | 台幣 |
-| safety_stock | NUMERIC(18,4) | 安全庫存 |
-| is_active | BOOLEAN | |
-| notes | TEXT | |
-| custom_data | JSONB | |
-| ＋共通欄位 | | |
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| code | TEXT | `text` | 料號 | 必填、唯一、`max_length 50` |
+| name | TEXT | `text` | 品名 | 必填、可搜尋 |
+| spec | TEXT | `text` | 規格 | |
+| product_type | TEXT CHECK | `select` | 類型 | 必填、預設 `goods`；選項 `goods`（實體商品，有批號和庫存）/ `service`（服務，無庫存） |
+| category_id | UUID FK → product_categories | `relation` | 分類 | → `product_category` |
+| unit_id | UUID FK → units | `relation` | 單位 | 必填、→ `unit` |
+| barcode | TEXT | `text` | 條碼 | 可搜尋 |
+| tax_type | TEXT CHECK | `select` | 稅別 | 必填、預設 `taxable`；選項 `taxable`（應稅）/ `zero_rated`（零稅率）/ `exempt`（免稅），與 `tax_rates.code` 相同 |
+| default_sale_price | NUMERIC(18,4) | `money` | 預設售價 | 小數 4、`min 0`；台幣 |
+| safety_stock | NUMERIC(18,4) | `decimal` | 安全庫存 | 小數 4、`min 0` |
+| is_active | BOOLEAN | `boolean` | 啟用 | 必填、預設 `true` |
+| notes | TEXT | `long_text` | 備註 | |
+
+`select` 欄位的 `options` 以表中的值與括號內的名稱寫入（例如 `[{"value":"goods","label":"實體商品"},{"value":"service","label":"服務"}]`），實體欄位另有 `CHECK` 限制相同的值。
 
 #### `currencies`
 | 欄位 | 型態 | 說明 |
 |---|---|---|
-| code | TEXT PK | ISO 4217，例如 `TWD`、`USD`、`JPY` |
-| name | TEXT | |
-| symbol | TEXT | |
-| decimal_places | SMALLINT | |
-| is_base | BOOLEAN | 只有 TWD 為 true |
-| is_active | BOOLEAN | |
+| id | UUID PK | |
+| code | TEXT UNIQUE | ISO 4217 代碼，3 個大寫英文字母（`CHECK (code ~ '^[A-Z]{3}$')`）；建立後不可修改 |
+| name | TEXT NOT NULL | 例如 新台幣 |
+| symbol | TEXT | 例如 `NT$` |
+| decimal_places | SMALLINT NOT NULL | 金額的小數位數，0–4（外幣金額為 `NUMERIC(18,4)`，§8.1） |
+| is_base | BOOLEAN NOT NULL DEFAULT false | 本位幣，只有 TWD 為 true；部分唯一索引 `(is_base) WHERE is_base` |
+| is_active | BOOLEAN NOT NULL DEFAULT true | |
+| created_at / created_by / updated_at / updated_by / version | | 共通欄位中除了 `deleted_at` 以外的欄位；幣別不可刪除，只能停用 |
+
+> 主鍵依 §5 使用 uuid；其他資料表以 `code` 參照幣別（`REFERENCES currencies(code)`），單據上存的也是代碼。
+
+**預設資料**（migration 寫入，都是啟用中）：
+
+| code | name | symbol | decimal_places | is_base |
+|---|---|---|---|---|
+| TWD | 新台幣 | NT$ | 0 | true |
+| USD | 美元 | US$ | 2 | false |
+| JPY | 日圓 | JP¥ | 0 | false |
+| EUR | 歐元 | € | 2 | false |
+| CNY | 人民幣 | CN¥ | 2 | false |
+| HKD | 港幣 | HK$ | 2 | false |
+
+**維護規則**（`hammer_core::currencies`；型別在 `hammer_shared::currency`）：
+
+- 列表 `GET /api/v1/currencies`：需要登入；預設只列出啟用中的，`?include_inactive=true` 含已停用的。筆數很少，不分頁，依 `is_base` 優先、再依 `code` 排序。
+- 新增 `POST /api/v1/currencies`、修改 `PATCH /api/v1/currencies/{code}`（帶 `version`，§9.4）：需要 `settings.manage`。
+  - 新增：`code` 必須是 3 個大寫英文字母（輸入的小寫轉成大寫），不可與既有幣別重複（含已停用）；只檢查格式，不內建 ISO 4217 清單。
+  - 可修改 `name`、`symbol`、`decimal_places`、`is_active`；`code`、`is_base` 不可修改。`decimal_places` 只影響之後輸入的金額，已存的金額不變。
+  - 停用：TWD 不可停用（`422`，`details.field = is_active`）。停用的幣別不出現在幣別選單、不可用於新的資料（廠商的 `default_currency_code`、M4 的單據），也不可新增或修改它的匯率；已存的資料、匯率保留，可以查看。重新啟用即恢復。
+- 不可刪除。
+- 寫入操作紀錄（`entity_key = currencies`、`record_id` 為幣別的 `id`）。
 
 #### `exchange_rates`
 | 欄位 | 型態 | 說明 |
 |---|---|---|
 | id | UUID PK | |
-| currency_code | TEXT FK → currencies | |
-| rate_date | DATE | |
-| rate | NUMERIC(18,6) | 1 外幣 = ? 台幣 |
-| | | UNIQUE (currency_code, rate_date) |
+| currency_code | TEXT NOT NULL FK → currencies(code) | 不可為本位幣（TWD） |
+| rate_date | DATE NOT NULL | 匯率適用的日期（Asia/Taipei） |
+| rate | NUMERIC(18,6) NOT NULL CHECK (rate > 0) | 1 外幣 = ? 台幣 |
 | ＋共通欄位 | | |
 
-> 單據會帶入當天（或最近一天）的匯率作為預設值，使用者可以修改。單據上存的是實際使用的匯率，之後修改匯率表不會影響已建立的單據。
+索引：部分唯一索引 `(currency_code, rate_date) WHERE deleted_at IS NULL`（刪除後同一天可以重新輸入），也用於查詢適用的匯率。
+
+> 單據會帶入適用的匯率作為預設值，使用者可以修改。單據上存的是實際使用的匯率，之後修改匯率表不會影響已建立的單據。
+
+**維護規則**（`hammer_core::exchange_rates`；型別在 `hammer_shared::exchange_rate`）：
+
+- 權限（§6.1）：查看需要 `record.read`；新增、修改、刪除需要 `record.write`。
+- 列表 `GET /api/v1/exchange-rates?currency_code=&date_from=&date_to=&page=&page_size=`：分頁（§10），只列出未刪除的，依 `rate_date DESC, currency_code, id` 排序；日期區間含開始、含結束。
+- 新增 `POST /api/v1/exchange-rates`（`currency_code`、`rate_date`、`rate`）：幣別必須存在、啟用中、不是本位幣；`rate` 大於 0，最多 6 位小數（超過時 `422`，不自動四捨五入）；同一幣別同一天已有未刪除的匯率時 `422 VALIDATION`（`details.field = rate_date`）。日期不限制，可以輸入未來的日期。
+- 修改 `PATCH /api/v1/exchange-rates/{id}`（帶 `version`）：只能修改 `rate`；要換日期或幣別時刪除後重新新增。幣別已停用時不可修改。
+- 刪除 `DELETE /api/v1/exchange-rates/{id}?version=N`：軟刪除。
+- 寫入操作紀錄（`entity_key = exchange_rates`、`record_id` 為匯率的 `id`）。
+
+**適用的匯率**（`GET /api/v1/exchange-rates/effective?currency_code=USD&date=2026-11-17`，需要 `record.read`）：
+
+- 取該幣別 `rate_date` **小於或等於**單據日期、未刪除的匯率中 `rate_date` 最大的一筆（`ORDER BY rate_date DESC LIMIT 1`）。不使用單據日期之後的匯率。
+- 回應 `{ "currency_code": "USD", "date": "2026-11-17", "rate": "32.150000", "rate_date": "2026-11-15" }`；找不到時 `rate`、`rate_date` 為 `null`（不是錯誤，單據的匯率欄位留空讓使用者輸入）。
+- `currency_code` 為本位幣時固定回傳 `rate = "1.000000"`、`rate_date = null`。幣別不存在 → `422 VALIDATION`（`details.field = currency_code`）；幣別已停用仍可查詢（查看既有單據時使用）。
+- 單據日期是單據上的日期欄位（Asia/Taipei，D13），不是存檔時間。
 
 #### `tax_rates`
 | 欄位 | 型態 | 說明 |
 |---|---|---|
 | code | TEXT PK | `taxable` / `zero_rated` / `exempt` |
-| name | TEXT | |
-| rate | NUMERIC(6,4) | 0.0500 / 0 / 0 |
+| name | TEXT NOT NULL | 應稅 / 零稅率 / 免稅 |
+| rate | NUMERIC(6,4) NOT NULL | 0.0500 / 0 / 0 |
+
+由 migration 寫入，M3 不提供修改（所以不需要 uuid 主鍵與 `version`）；`GET /api/v1/tax-rates` 需要登入，回傳全部（不分頁）。商品的 `tax_type` 選項與此相同。
 
 ---
 
 ### 8.7 客戶與廠商
 
-#### `customers`
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| id | UUID PK | |
-| code | TEXT UNIQUE | 客戶編號 |
-| name | TEXT | 公司名稱 |
-| short_name | TEXT | 簡稱 |
-| tax_id | TEXT | 統一編號 |
-| phone / fax / email | TEXT | |
-| address | TEXT | 聯絡地址 |
-| invoice_title | TEXT | 發票抬頭 |
-| invoice_address | TEXT | 發票地址 |
-| payment_terms_days | INTEGER | 付款條件（月結天數） |
-| credit_limit | NUMERIC(18,2) | 信用額度 |
-| is_active | BOOLEAN | |
-| notes | TEXT | |
-| custom_data | JSONB | |
-| ＋共通欄位 | | |
+依照 §8.6「系統資料表的共同規則」。
 
-#### `customer_contacts`
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| id | UUID PK | |
-| customer_id | UUID FK | |
-| name / title / phone / mobile / email | TEXT | |
-| is_primary | BOOLEAN | 主要聯絡人 |
-| notes | TEXT | |
-| custom_data | JSONB | |
-| ＋共通欄位 | | |
+#### `customers`
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| code | TEXT | `text` | 客戶編號 | 必填、唯一、`max_length 50` |
+| name | TEXT | `text` | 公司名稱 | 必填、可搜尋 |
+| short_name | TEXT | `text` | 簡稱 | 可搜尋 |
+| tax_id | TEXT | `text` | 統一編號 | 可搜尋；不限制格式（國外客戶沒有統一編號） |
+| phone | TEXT | `text` | 電話 | |
+| fax | TEXT | `text` | 傳真 | |
+| email | TEXT | `text` | Email | |
+| address | TEXT | `text` | 聯絡地址 | |
+| invoice_title | TEXT | `text` | 發票抬頭 | |
+| invoice_address | TEXT | `text` | 發票地址 | |
+| payment_terms_days | INTEGER | `integer` | 付款天數 | `min 0`；月結天數 |
+| credit_limit | NUMERIC(18,2) | `money` | 信用額度 | 小數 2、`min 0`；台幣 |
+| is_active | BOOLEAN | `boolean` | 啟用 | 必填、預設 `true` |
+| notes | TEXT | `long_text` | 備註 | |
+
+#### `customer_contacts`（明細子表 `customer_contact`）
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| customer_id | UUID NOT NULL FK → customers | （不是欄位） | | 所屬客戶 |
+| sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序（§8.5 `custom_records`「明細子表」） |
+| name | TEXT | `text` | 姓名 | 必填 |
+| title | TEXT | `text` | 職稱 | |
+| phone | TEXT | `text` | 電話 | |
+| mobile | TEXT | `text` | 手機 | |
+| email | TEXT | `text` | Email | |
+| is_primary | BOOLEAN | `boolean` | 主要聯絡人 | 必填、預設 `false`；每個客戶最多一位（§7.2） |
+| notes | TEXT | `long_text` | 備註 | |
+
+索引：`(customer_id, sort_order, id) WHERE deleted_at IS NULL`。
 
 #### `suppliers`
-欄位與 `customers` 相同，另外加上：
+欄位與 `customers` 相同（`code` 的顯示名稱為「廠商編號」），在 `credit_limit` 之後另外加上：
 
-| 欄位 | 型態 | 說明 |
-|---|---|---|
-| default_currency_code | TEXT FK → currencies | 預設交易幣別 |
-| country | TEXT | |
-| bank_info | TEXT | 匯款資訊 |
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| default_currency_code | TEXT FK → currencies(code) | `text` | 預設幣別 | 必填、預設 `"TWD"`、`ui_widget = currency`；必須是有效的幣別（§7.2） |
+| country | TEXT | `text` | 國家 | |
+| bank_info | TEXT | `long_text` | 匯款資訊 | |
 
-#### `supplier_contacts`
-欄位與 `customer_contacts` 相同（`customer_id` 改為 `supplier_id`）。
+#### `supplier_contacts`（明細子表 `supplier_contact`）
+欄位與 `customer_contacts` 相同（`customer_id` 改為 `supplier_id`，FK → suppliers）。
 
 ---
 
@@ -1097,8 +1248,10 @@ GROUP BY product_id;
 - REST + JSON，路徑前綴 `/api/v1`。
 - 認證：`Authorization: Bearer <session token>`。
 - 客戶端在 `X-Client-Version` 標頭帶上版本號。版本低於伺服器要求時回傳 `426`，介面提示更新。
-- 系統資料類別有各自的端點（例如 `/api/v1/shipments/{id}/post`）。
-- 自訂資料類別共用通用端點：`/api/v1/entities/{entity_key}/records`。
+- **通用資料 API**：`/api/v1/entities/{entity_key}/records`（列表、單筆、新增、修改、刪除、`lookup`）。自訂資料類別與系統資料類別（M3 起的 `unit`、`product_category`、`product`、`customer`、`supplier` 與其明細子表）都使用這組端點，行為相同（§7.1「系統資料類別共用通用資料 API」）。
+- **專屬端點**，只用於以下兩種情況：
+  - 系統資料類別在一般新增、修改、刪除以外的動作：M4 單據的過帳、作廢等（例如 `POST /api/v1/entities/shipment/records/{id}/post`；路徑在 M4 定案），這些動作有自己的權限（`record.post`）與規則。單據的一般新增、修改仍使用通用資料 API。
+  - 不是資料類別的資料：幣別 `/api/v1/currencies`、匯率 `/api/v1/exchange-rates`、稅別 `/api/v1/tax-rates`（§8.6）。它們沒有自訂欄位、版面、關聯，也不出現在 `GET /api/v1/entities`。
 - 重新計算公式：`POST /api/v1/entities/{entity_key}/recalculate`（需要 `schema.manage`，無 request body），回應 `{ "processed": 120, "changed": 37, "with_errors": 2 }`（型別 `hammer_shared::schema::RecalculateResult`；規則見 §7.6「重新計算」）。
 - 錯誤格式統一：
   ```json
@@ -1114,7 +1267,7 @@ GROUP BY product_id;
   - 排序必須是確定的：主要排序欄位之後加上 `id` 作為次要排序（uuid v7 依時間遞增），避免同值的資料在頁與頁之間重複或遺漏。
   - 篩選條件與分頁參數放在同一個 query 型別，不使用 `#[serde(flatten)]`（query string 搭配 flatten 時數字欄位無法解析）。空字串的文字條件視為未指定；時間使用 RFC 3339，區間為「含開始、不含結束」。
   - 筆數很少、不會持續增加的列表（角色、帳號、幣別等）可以不分頁，直接回傳陣列。
-- 業務資料列表的篩選與排序（通用資料 API 先採用，之後系統資料類別的列表與 `view_layouts` 的篩選條件沿用同一格式；型別在 `hammer_shared::record`）：
+- 業務資料列表的篩選與排序（通用資料 API 與 `view_layouts` 的篩選條件使用同一格式，系統資料類別的系統欄位與自訂欄位都適用；型別在 `hammer_shared::record`）：
   - 排序：`sort=<field_key>` 由小到大，`sort=-<field_key>` 由大到小；省略時依建立順序由新到舊（`id DESC`）。只能使用有效（未停用）的欄位。依欄位型態比較（`integer`、`decimal`、`money` 以數值，`date`、`datetime` 以時間），不會按字串排序；沒有值的資料排在最後。
   - 篩選：`filter.<field_key>.<op>=<value>`，例如 `filter.qty.gte=10`。多個條件須全部符合（AND）。
     | op | 說明 | 適用型態 |
@@ -1188,5 +1341,5 @@ GROUP BY product_id;
 | Q2 | 財務模組深度（是否做複式記帳、匯兌損益） | M6 開始前 |
 | Q3 | 進口成本分攤（運費、關稅、報關費）到批號成本 | M4 進貨功能開始前 |
 | Q4 | Tailscale 方案、伺服器主機、備份存放位置 | 開放多人使用前 |
-| Q5 | 可編輯者能不能維護匯率 | M3 開始前 |
+| Q5 | 可編輯者能不能維護匯率 | ✅ 已決定：可以（`record.write`）；幣別維持 `settings.manage`（§6.1） |
 | Q6 | 程式碼簽章 | 正式發佈前 |
