@@ -45,7 +45,7 @@ use time::OffsetDateTime;
 use crate::CoreError;
 use crate::audit::AuditDiff;
 use crate::auth::AuthContext;
-use crate::purchasing::{PURCHASE_ORDER, PurchaseOrderHandler};
+use crate::purchasing::{GOODS_RECEIPT, GoodsReceiptHandler, PURCHASE_ORDER, PurchaseOrderHandler};
 use crate::record_lines::{audit_key, audit_value};
 use crate::records::{
     Detail, commit, detail_lines, document_status, fetch_record, invalid_status,
@@ -75,6 +75,8 @@ pub struct DocumentContext<'a> {
     pub actor: Id,
     /// 過帳、作廢的時間。
     pub now: OffsetDateTime,
+    /// 用戶端資訊（處理函式寫入其他資料的操作紀錄時使用）。
+    pub client_info: Option<&'a str>,
 }
 
 /// 一個動作的狀態轉換。
@@ -187,6 +189,7 @@ impl DocumentHandlers {
         Self::empty()
             .register(STOCK_ADJUSTMENT, StockAdjustmentHandler)
             .register(PURCHASE_ORDER, PurchaseOrderHandler)
+            .register(GOODS_RECEIPT, GoodsReceiptHandler)
     }
 
     /// 註冊（或取代）資料類別 `entity_key` 的處理函式。
@@ -367,6 +370,7 @@ async fn run(
         data,
         actor: ctx.user_id,
         now,
+        client_info,
     };
     match action {
         DocumentAction::Post => handler.post(&mut tx, &doc).await?,
@@ -453,11 +457,12 @@ mod tests {
         let handlers = DocumentHandlers::standard();
         assert!(handlers.get(STOCK_ADJUSTMENT).is_some());
         assert!(handlers.get(PURCHASE_ORDER).is_some());
+        assert!(handlers.get(GOODS_RECEIPT).is_some());
         assert!(handlers.get("customer").is_none());
         assert!(DocumentHandlers::empty().get(STOCK_ADJUSTMENT).is_none());
         assert_eq!(
             format!("{handlers:?}"),
-            "{\"purchase_order\", \"stock_adjustment\"}"
+            "{\"goods_receipt\", \"purchase_order\", \"stock_adjustment\"}"
         );
     }
 

@@ -482,7 +482,7 @@ pub async fn find_products<'e>(
 // 庫存查詢（§8.10「庫存查詢 API」）
 // ---------------------------------------------------------------------------
 //
-// 來源單據的單號：依來源類型 LEFT JOIN 單據主表。M4a 只有盤點調整單；M4b、M4c 加上各自的單據。
+// 來源單據的單號：依來源類型 LEFT JOIN 單據主表（盤點調整單、進貨單）；進貨退回、M4c 的單據之後加上。
 
 /// 商品庫存列表的條件。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -624,11 +624,13 @@ pub async fn list_lots_of_product<'e>(
         LotListRow,
         r#"
         SELECT l.id, l.lot_no, l.received_date, l.source_type, l.source_doc_id,
-               COALESCE(sa.record_no, '') AS "source_record_no!",
+               COALESCE(sa.record_no, gr.record_no, '') AS "source_record_no!",
                l.qty_in, l.qty_remaining, l.unit_cost_twd
         FROM inventory_lots l
         LEFT JOIN stock_adjustments sa
                ON l.source_type = 'stock_adjustment_line' AND sa.id = l.source_doc_id
+        LEFT JOIN goods_receipts gr
+               ON l.source_type = 'goods_receipt_line' AND gr.id = l.source_doc_id
         WHERE l.product_id = $1 AND l.deleted_at IS NULL
           AND ($2::bool OR l.qty_remaining > 0)
           AND ($3::text IS NULL OR strpos(lower(l.lot_no), lower($3)) > 0)
@@ -719,13 +721,15 @@ pub async fn list_transactions<'e>(
                p.code AS product_code, p.name AS product_name,
                t.lot_id, l.lot_no, t.qty_change, t.unit_cost_twd,
                t.ref_doc_type, t.ref_doc_id,
-               COALESCE(sa.record_no, '') AS "ref_record_no!",
+               COALESCE(sa.record_no, gr.record_no, '') AS "ref_record_no!",
                t.ref_line_id, t.created_by, u.display_name AS "created_by_name?"
         FROM inventory_transactions t
         JOIN products p ON p.id = t.product_id
         JOIN inventory_lots l ON l.id = t.lot_id
         LEFT JOIN stock_adjustments sa
                ON t.ref_doc_type = 'stock_adjustment' AND sa.id = t.ref_doc_id
+        LEFT JOIN goods_receipts gr
+               ON t.ref_doc_type = 'goods_receipt' AND gr.id = t.ref_doc_id
         LEFT JOIN users u ON u.id = t.created_by
         WHERE ($1::uuid IS NULL OR t.product_id = $1)
           AND ($2::uuid IS NULL OR t.lot_id = $2)

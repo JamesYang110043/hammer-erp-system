@@ -198,7 +198,7 @@ async fn goods_receipt_draft_refers_to_purchase_order(pool: PgPool) {
         "purchase_order",
         json!({
             "data": { "supplier_id": supplier, "order_date": "2026-11-18", "currency_code": "USD",
-                      "tax_type": "zero_rated" },
+                      "tax_type": "zero_rated", "exchange_rate": "32" },
             "lines": { "purchase_order_line": [
                 { "data": { "product_id": goods, "qty": "10", "unit_price": "12" } },
             ] },
@@ -206,6 +206,16 @@ async fn goods_receipt_draft_refers_to_purchase_order(pool: PgPool) {
     )
     .await;
     let po_line = lines(&po, "purchase_order_line")[0].id;
+    // 進貨單只能指向已確認的採購單（#140）
+    let (status, body) = call(
+        &pool,
+        Method::POST,
+        &format!("{}/{}/confirm", records_uri("purchase_order"), po.id),
+        &token,
+        Some(json!({ "version": po.version })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     let gr = create(
         &pool,
