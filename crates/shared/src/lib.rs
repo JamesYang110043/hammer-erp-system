@@ -9,6 +9,7 @@ pub mod auth;
 pub mod constants;
 pub mod currency;
 pub mod decimal;
+pub mod document;
 pub mod error;
 pub mod exchange_rate;
 pub mod health;

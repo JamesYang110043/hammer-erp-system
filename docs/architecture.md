@@ -211,7 +211,7 @@ desktop(src-tauri) ──▶ shared, formula
 **系統單據**（M4 起；`kind = document` 的系統資料類別，例如 `stock_adjustment`、M4b 的進貨單、M4c 的出貨單）：除了上述規則，另外依照以下規則。邏輯在 `hammer_core::documents`，型別在 `hammer_shared::document`。管理者自建的 `document` 資料類別（自訂資料類別）不適用，沒有狀態與過帳（§8.5）。
 
 - **單號**：
-  - 單據的主表一律有 `record_no TEXT NOT NULL` 欄位，取代各單據自己的單號欄位（`order_no`、`receipt_no`、`shipment_no`、`adjustment_no` 等都不再使用）；唯一索引 `(record_no)` 包含已刪除的資料。單據明細沒有單號。
+  - 單據的主表一律有 `record_no TEXT NOT NULL` 欄位，取代各單據自己的單號欄位（`order_no`、`receipt_no`、`shipment_no`、`adjustment_no` 等都不再使用）；唯一索引 `(record_no)` 包含已刪除的資料，名稱一律為 `uq_<資料表>_record_no`（例如 `uq_stock_adjustments_record_no`；伺服器依名稱辨識單號重複）。單據明細沒有單號。
   - 新增時依 `entity_definitions.numbering_pattern` 取號，規則與自訂資料類別相同（§8.4「單號規則」「取號」「規則」）：以建立當下的 Asia/Taipei 日期產生（不是單據日期）、不可由客戶端指定或修改、已刪除資料的單號不重複使用、規則修改後與既有單號重複時新增失敗（`422`）。
   - 每張單據的預設單號規則由 migration 寫入（盤點調整單為 `ADJ{yyyyMM}-{0000}`，M4b、M4c 的單據在各自的設計中定義）。管理者可以修改（`PATCH /api/v1/entities/{key}`，需要 `schema.manage`），**不可清空**（`422`，`details.field = numbering_pattern`）。主檔類的系統資料類別（M3）仍不可設定單號規則。
   - 回應的 `record_no`、標題範本的 `{record_no}`、列表依 `record_no` 排序與篩選（§10）都與自訂資料類別相同。

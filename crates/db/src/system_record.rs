@@ -32,8 +32,9 @@
 //! - 寫入：實體欄位的值從 request 的 `data`（JSON 物件）以 `data ->> 'field_key'` 取出後轉型；沒有值時
 //!   寫入 `NULL`。`custom_data` 由上層分出，只包含自訂欄位。
 //!
-//! 已軟刪除（`deleted_at IS NOT NULL`）的資料一律視為不存在。系統資料類別沒有單號，`record_no` 一律為
-//! `None`。
+//! 已軟刪除（`deleted_at IS NOT NULL`）的資料一律視為不存在。主檔類的系統資料類別沒有單號，`record_no`
+//! 一律為 `None`；系統單據（[`SystemTable::document`]）的主表有 `record_no` 實體欄位（§7.1「系統單據」），
+//! 新增時寫入、讀取時回傳，列表可依它排序與篩選。
 
 use serde_json::Value;
 use sqlx::postgres::PgQueryResult;
@@ -98,6 +99,8 @@ pub struct SystemTable {
     entity_id: Uuid,
     name: String,
     columns: Vec<SystemColumn>,
+    /// 系統單據的主表：有 `record_no` 實體欄位（不是欄位）。
+    document: bool,
 }
 
 impl SystemTable {
@@ -118,7 +121,28 @@ impl SystemTable {
             entity_id,
             name,
             columns,
+            document: false,
         })
+    }
+
+    /// 標記為系統單據的主表（§7.1「系統單據」）：讀寫 `record_no` 實體欄位。
+    pub fn document(mut self) -> Self {
+        self.document = true;
+        self
+    }
+
+    /// 是否為系統單據的主表（有 `record_no`）。
+    pub fn is_document(&self) -> bool {
+        self.document
+    }
+
+    /// 單號的 SQL 運算式：系統單據為 `record_no` 欄位，其他為 `NULL`。
+    pub(crate) fn record_no_sql(&self) -> &'static str {
+        if self.document {
+            "record_no"
+        } else {
+            "NULL::text"
+        }
     }
 
     /// 資料表名稱。
@@ -135,7 +159,9 @@ impl SystemTable {
     fn push_select(&self, qb: &mut QueryBuilder<Postgres>) {
         qb.push("SELECT id, ")
             .push_bind(self.entity_id)
-            .push("::uuid AS entity_id, NULL::text AS record_no, ");
+            .push("::uuid AS entity_id, ")
+            .push(self.record_no_sql())
+            .push(" AS record_no, ");
         self.push_data(qb);
         qb.push(
             " AS data, formula_errors, created_at, created_by, updated_at, updated_by, version \
@@ -219,6 +245,8 @@ fn find_query(table: &SystemTable, id: Uuid, for_update: bool) -> QueryBuilder<P
 #[derive(Debug, Clone)]
 pub struct NewSystemRecord<'a> {
     pub id: Uuid,
+    /// 系統單據的單號；不是系統單據時必須為 `None`（不寫入）。
+    pub record_no: Option<&'a str>,
     /// 完整的資料（JSON 物件），實體欄位的值從這裡取出。
     pub data: &'a Value,
     /// 自訂欄位（JSON 物件）。
@@ -253,6 +281,9 @@ fn insert_query_with_parent(
 ) -> QueryBuilder<Postgres> {
     let mut qb = QueryBuilder::new("INSERT INTO \"");
     qb.push(&table.name).push("\" (id");
+    if table.document {
+        qb.push(", record_no");
+    }
     if let Some((column, _, _)) = parent {
         qb.push(", \"").push(column).push("\", sort_order");
     }
@@ -263,6 +294,9 @@ fn insert_query_with_parent(
         ", custom_data, formula_errors, created_at, created_by, updated_at, updated_by) SELECT ",
     )
     .push_bind(new.id);
+    if table.document {
+        qb.push(", ").push_bind(new.record_no.map(str::to_owned));
+    }
     if let Some((_, parent_id, sort_order)) = parent {
         qb.push(", ")
             .push_bind(parent_id)
@@ -572,8 +606,8 @@ fn push_value_equals(
     }
 }
 
-/// 依 id 查詢資料（**含已軟刪除**），格式與 [`crate::record::find_records_by_ids`] 相同（`record_no` 為
-/// `None`）。供公式的關聯引用讀取目標資料使用（§7.6）。
+/// 依 id 查詢資料（**含已軟刪除**），格式與 [`crate::record::find_records_by_ids`] 相同（`record_no` 只有
+/// 系統單據有值）。供公式的關聯引用讀取目標資料使用（§7.6）。
 pub async fn find_records_by_ids<'e>(
     executor: impl PgExecutor<'e>,
     table: &SystemTable,
@@ -587,7 +621,8 @@ pub async fn find_records_by_ids<'e>(
 }
 
 fn by_ids_query(table: &SystemTable, ids: &[Uuid]) -> QueryBuilder<Postgres> {
-    let mut qb = QueryBuilder::new("SELECT id, NULL::text AS record_no, ");
+    let mut qb = QueryBuilder::new("SELECT id, ");
+    qb.push(table.record_no_sql()).push(" AS record_no, ");
     table.push_data(&mut qb);
     qb.push(" AS data, deleted_at IS NOT NULL AS deleted FROM \"")
         .push(&table.name)
@@ -998,10 +1033,72 @@ mod tests {
     }
 
     #[test]
+    fn document_table_reads_and_writes_record_no() {
+        let table = SystemTable::new(
+            Uuid::nil(),
+            "stock_adjustments",
+            vec![SystemColumn {
+                name: "notes".into(),
+                column_type: ColumnType::Text,
+            }],
+        )
+        .unwrap()
+        .document();
+        assert!(table.is_document());
+        assert!(
+            find_query(&table, Uuid::nil(), false)
+                .sql()
+                .as_str()
+                .starts_with("SELECT id, $1::uuid AS entity_id, record_no AS record_no, ")
+        );
+        let data = serde_json::json!({});
+        let new = NewSystemRecord {
+            id: Uuid::nil(),
+            record_no: Some("ADJ202611-0001"),
+            data: &data,
+            custom_data: &data,
+            formula_errors: None,
+            created_by: Uuid::nil(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        assert_eq!(
+            insert_query(&table, &new).sql().as_str(),
+            "INSERT INTO \"stock_adjustments\" (id, record_no, \"notes\", custom_data, \
+             formula_errors, created_at, created_by, updated_at, updated_by) SELECT $1, $2, \
+             (v.d ->> 'notes'), $3, $4, $5, $6, $7, $8 FROM (SELECT $9::jsonb AS d) AS v"
+        );
+        assert!(
+            by_ids_query(&table, &[Uuid::nil()])
+                .sql()
+                .as_str()
+                .starts_with("SELECT id, record_no AS record_no, ")
+        );
+        let filter = RecordListFilter {
+            entity_id: Uuid::nil(),
+            conditions: vec![crate::record::RecordCondition::RecordNoContains(
+                "26".into(),
+            )],
+            order: Some(crate::record::RecordOrder {
+                target: crate::record::OrderTarget::RecordNo,
+                descending: true,
+            }),
+        };
+        let sql = list_query(&table, &filter).sql().as_str().to_owned();
+        assert!(
+            sql.ends_with(
+                "WHERE deleted_at IS NULL AND record_no ILIKE $2 ESCAPE '\\' \
+                 ORDER BY record_no DESC NULLS LAST, id DESC"
+            ),
+            "{sql}"
+        );
+    }
+
+    #[test]
     fn insert_and_update_read_columns_from_data() {
         let data = serde_json::json!({});
         let new = NewSystemRecord {
             id: Uuid::nil(),
+            record_no: None,
             data: &data,
             custom_data: &data,
             formula_errors: None,
@@ -1239,6 +1336,7 @@ mod tests {
         let data = serde_json::json!({});
         let new = NewSystemRecord {
             id: Uuid::nil(),
+            record_no: None,
             data: &data,
             custom_data: &data,
             formula_errors: None,

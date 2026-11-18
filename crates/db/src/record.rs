@@ -778,7 +778,7 @@ fn push_where(qb: &mut QueryBuilder<Postgres>, filter: &RecordListFilter) {
 pub(crate) enum Source<'a> {
     /// `custom_records`：所有欄位都在 `data`。
     CustomRecords,
-    /// 系統資料表：系統欄位是實體欄位，其他欄位在 `custom_data`；沒有單號。
+    /// 系統資料表：系統欄位是實體欄位，其他欄位在 `custom_data`；只有系統單據有單號。
     Table(&'a SystemTable),
 }
 
@@ -791,11 +791,11 @@ impl<'a> Source<'a> {
         }
     }
 
-    /// 單號的運算式；系統資料表沒有單號，一律為 `NULL`。
+    /// 單號的運算式；系統資料表只有系統單據有單號，其他為 `NULL`。
     fn record_no(self) -> &'static str {
         match self {
             Self::CustomRecords => "record_no",
-            Self::Table(_) => "NULL::text",
+            Self::Table(table) => table.record_no_sql(),
         }
     }
 

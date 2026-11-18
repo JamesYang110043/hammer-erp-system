@@ -9,6 +9,7 @@ use crate::schema::formula::{FormulaError, FormulaErrorLocation};
 use crate::schema::index::DuplicateValue;
 use crate::schema::type_change::ConversionFailure;
 use hammer_db::DbError;
+use hammer_shared::document::{DocumentStatus, InvalidStatusDetails};
 use hammer_shared::{ApiError, ErrorCode};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -107,6 +108,14 @@ pub enum CoreError {
         children: i64,
     },
 
+    /// 單據目前的狀態不允許此操作（§7.1「系統單據」、§10「單據動作」）：修改、刪除非草稿，過帳非草稿，
+    /// 作廢非已過帳。API 回應為 `INVALID_STATUS`，`details` 為 `{ "status": "posted" }`（目前狀態）。
+    #[error("{message}")]
+    InvalidStatus {
+        status: DocumentStatus,
+        message: String,
+    },
+
     /// 操作後系統沒有任何有效（啟用、未刪除）的管理者（§6.2）。
     /// API 回應為 `VALIDATION`，`details.reason` 為 [`LAST_ADMIN_REASON`]。
     #[error("系統至少需要保留一個有效的管理者，無法停用、刪除最後一個管理者或變更其角色")]
@@ -172,6 +181,7 @@ impl CoreError {
             | Self::FormulaReferenced(_)
             | Self::RecordInUse { .. }
             | Self::LastAdmin => ErrorCode::Validation,
+            Self::InvalidStatus { .. } => ErrorCode::InvalidStatus,
             Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::PayloadTooLarge(_) => ErrorCode::PayloadTooLarge,
             Self::NotFound(_) => ErrorCode::NotFound,
@@ -323,6 +333,10 @@ impl From<CoreError> for ApiError {
                 details["child_count"] = serde_json::json!(children);
             }
             ApiError::new(code, err.to_string()).with_details(details)
+        } else if let CoreError::InvalidStatus { status, .. } = &err {
+            let details = InvalidStatusDetails { status: *status };
+            ApiError::new(code, err.to_string())
+                .with_details(serde_json::to_value(details).unwrap_or(serde_json::Value::Null))
         } else if let CoreError::LastAdmin = err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "reason": LAST_ADMIN_REASON }))
@@ -358,6 +372,18 @@ mod tests {
         let api: ApiError = err.into();
         assert_eq!(api.code, ErrorCode::Validation);
         assert_eq!(api.message, "密碼至少需要 10 個字元");
+    }
+
+    #[test]
+    fn invalid_status_reports_current_status() {
+        let err = CoreError::InvalidStatus {
+            status: DocumentStatus::Posted,
+            message: "已過帳的單據不可修改".into(),
+        };
+        assert_eq!(err.code(), ErrorCode::InvalidStatus);
+        let api: ApiError = err.into();
+        assert_eq!(api.message, "已過帳的單據不可修改");
+        assert_eq!(api.details, Some(serde_json::json!({ "status": "posted" })));
     }
 
     #[test]

@@ -11,7 +11,7 @@ use specta::Type;
 
 /// 錯誤碼。JSON 中為 `SCREAMING_SNAKE_CASE` 字串。
 ///
-/// 之後各模組的業務錯誤碼（例如 `STOCK_INSUFFICIENT`）加在這裡。
+/// 之後各模組的業務錯誤碼加在這裡。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
@@ -41,6 +41,15 @@ pub enum ErrorCode {
     AccountLocked,
     /// 帳號已停用，無法登入。
     AccountDisabled,
+    /// 單據狀態不允許此操作（修改、刪除非草稿；過帳非草稿；作廢非已過帳，§7.1「系統單據」）。
+    /// `details` 為 [`crate::document::InvalidStatusDetails`]。
+    InvalidStatus,
+    /// 過帳或作廢時批號或商品的數量不足（§10「單據動作」）。
+    /// `details` 為 [`crate::document::StockInsufficientDetails`]。
+    StockInsufficient,
+    /// 作廢時要刪除的批號已被其他有效單據使用（§10「單據動作」）。
+    /// `details` 為 [`crate::document::LotInUseDetails`]。
+    LotInUse,
 }
 
 impl ErrorCode {
@@ -49,7 +58,9 @@ impl ErrorCode {
         match self {
             Self::Internal => 500,
             Self::BadRequest => 400,
-            Self::Validation => 422,
+            Self::Validation | Self::InvalidStatus | Self::StockInsufficient | Self::LotInUse => {
+                422
+            }
             Self::NotFound => 404,
             Self::Unauthorized => 401,
             Self::Forbidden => 403,
@@ -156,6 +167,9 @@ mod tests {
             ),
             (ErrorCode::AccountLocked, "ACCOUNT_LOCKED"),
             (ErrorCode::AccountDisabled, "ACCOUNT_DISABLED"),
+            (ErrorCode::InvalidStatus, "INVALID_STATUS"),
+            (ErrorCode::StockInsufficient, "STOCK_INSUFFICIENT"),
+            (ErrorCode::LotInUse, "LOT_IN_USE"),
         ];
         for (code, s) in cases {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(s));
@@ -172,5 +186,8 @@ mod tests {
         assert_eq!(ErrorCode::PasswordChangeRequired.http_status(), 403);
         assert_eq!(ErrorCode::AccountLocked.http_status(), 403);
         assert_eq!(ErrorCode::AccountDisabled.http_status(), 403);
+        assert_eq!(ErrorCode::InvalidStatus.http_status(), 422);
+        assert_eq!(ErrorCode::StockInsufficient.http_status(), 422);
+        assert_eq!(ErrorCode::LotInUse.http_status(), 422);
     }
 }

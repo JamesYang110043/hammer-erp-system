@@ -6,6 +6,7 @@
 //! - [`attachment`]：附件（`attachments`）的新增、綁定、標記刪除與清理
 //! - [`audit`]：寫入與查詢 `audit_logs`
 //! - [`currency`]：幣別（`currencies`）的查詢、新增、修改
+//! - [`document`]：系統單據主表的狀態與過帳、作廢資訊
 //! - [`dynamic_index`]：自訂欄位的動態索引（可搜尋、不可重複；`custom_records` 與系統資料表）
 //! - [`exchange_rate`]：匯率（`exchange_rates`）的查詢、新增、修改、軟刪除與適用匯率查詢
 //! - [`inventory`]：庫存（批號、批號扣除、異動流水帳、商品庫存）的基本讀寫
@@ -28,6 +29,7 @@
 pub mod attachment;
 pub mod audit;
 pub mod currency;
+pub mod document;
 pub mod dynamic_index;
 mod error;
 pub mod exchange_rate;
