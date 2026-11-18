@@ -33,6 +33,7 @@ use std::str::FromStr;
 use hammer_db::lock::advisory_xact_lock;
 use hammer_db::master_data as db;
 use hammer_db::purchasing as purchasing_db;
+use hammer_db::sales as sales_db;
 use hammer_db::sqlx::PgTransaction;
 use hammer_shared::Id;
 use hammer_shared::decimal::Decimal;
@@ -80,6 +81,8 @@ pub const MSG_PRODUCT_TYPE_STOCK: &str = "此商品已有庫存異動，無法�
 pub const MSG_PRODUCT_UNIT_STOCK: &str = "此商品已有庫存異動，無法修改單位";
 pub const MSG_PRODUCT_TYPE_ORDER: &str = "此商品有未結案的採購單，無法改為服務";
 pub const MSG_PRODUCT_UNIT_ORDER: &str = "此商品有未結案的採購單，無法修改單位";
+pub const MSG_PRODUCT_TYPE_SALES_ORDER: &str = "此商品有未結案的訂單，無法改為服務";
+pub const MSG_PRODUCT_UNIT_SALES_ORDER: &str = "此商品有未結案的訂單，無法修改單位";
 
 /// 有 `code` 欄位的資料類別（§7.2）。
 const WITH_CODE: &[&str] = &[UNIT, PRODUCT, CUSTOMER, SUPPLIER];
@@ -300,6 +303,11 @@ pub(crate) async fn check_references(
                             > 0
                         {
                             (MSG_PRODUCT_TYPE_ORDER, MSG_PRODUCT_UNIT_ORDER)
+                        } else if sales_db::count_open_orders_by_product(&mut **tx, record_id)
+                            .await?
+                            > 0
+                        {
+                            (MSG_PRODUCT_TYPE_SALES_ORDER, MSG_PRODUCT_UNIT_SALES_ORDER)
                         } else {
                             ("", "")
                         };
@@ -352,10 +360,12 @@ pub struct Usage {
     pub children: i64,
     /// 商品的庫存異動筆數。
     pub transactions: i64,
-    /// 廠商的採購、進貨單據張數（不論狀態）。
+    /// 廠商的採購、進貨單據張數，或客戶的訂單、出貨單據張數（不論狀態）。
     pub documents: i64,
     /// 明細引用商品的未結案採購單張數。
     pub open_orders: i64,
+    /// 明細引用商品的未結案訂單張數。
+    pub open_sales_orders: i64,
 }
 
 /// 依使用狀況決定能否刪除：都沒有使用時為 `None`，否則為 [`CoreError::RecordInUse`]。
@@ -367,6 +377,7 @@ pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
         transactions: usage.transactions,
         documents: usage.documents,
         open_orders: usage.open_orders,
+        open_sales_orders: usage.open_sales_orders,
     };
     if usage.transactions > 0 {
         return Some(blocked(
@@ -377,21 +388,39 @@ pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
             },
         ));
     }
-    if usage.open_orders > 0 {
+    if usage.open_orders > 0 || usage.open_sales_orders > 0 {
+        // 兩種都有時兩個數量都列出，訊息為採購單（§8.9「客戶、商品被銷貨單據引用時的限制」）
+        let message = if usage.open_orders > 0 {
+            format!("此商品有 {} 張未結案的採購單，無法刪除", usage.open_orders)
+        } else {
+            format!(
+                "此商品有 {} 張未結案的訂單，無法刪除",
+                usage.open_sales_orders
+            )
+        };
         return Some(blocked(
-            format!("此商品有 {} 張未結案的採購單，無法刪除", usage.open_orders),
+            message,
             Usage {
                 open_orders: usage.open_orders,
+                open_sales_orders: usage.open_sales_orders,
                 ..Usage::default()
             },
         ));
     }
     if usage.documents > 0 {
-        return Some(blocked(
+        let message = if entity_key == CUSTOMER {
+            format!(
+                "此客戶已有 {} 張訂單或出貨單據，無法刪除，請改為停用",
+                usage.documents
+            )
+        } else {
             format!(
                 "此廠商已有 {} 張採購或進貨單據，無法刪除，請改為停用",
                 usage.documents
-            ),
+            )
+        };
+        return Some(blocked(
+            message,
             Usage {
                 documents: usage.documents,
                 ..Usage::default()
@@ -424,7 +453,8 @@ pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
 }
 
 /// 刪除單位、商品分類前，檢查是否還有未刪除的商品使用它，或分類還有子分類；刪除商品前檢查是否已有
-/// 庫存異動或未結案的採購單；刪除廠商前檢查是否已有採購、進貨單據 → [`CoreError::RecordInUse`]。
+/// 庫存異動、未結案的採購單或訂單；刪除廠商前檢查是否已有採購、進貨單據，刪除客戶前檢查是否已有訂單、
+/// 出貨單據 → [`CoreError::RecordInUse`]。
 /// 其他資料類別不檢查。
 ///
 /// 必須在已鎖定（`FOR UPDATE`）要刪除的資料之後呼叫：新增、修改商品或分類時，關聯檢查會以 `FOR SHARE`
@@ -447,6 +477,11 @@ pub(crate) async fn check_delete(
         PRODUCT => Usage {
             transactions: db::count_product_transactions(&mut **tx, id).await?,
             open_orders: purchasing_db::count_open_orders_by_product(&mut **tx, id).await?,
+            open_sales_orders: sales_db::count_open_orders_by_product(&mut **tx, id).await?,
+            ..Usage::default()
+        },
+        CUSTOMER => Usage {
+            documents: sales_db::count_customer_documents(&mut **tx, id).await?,
             ..Usage::default()
         },
         SUPPLIER => Usage {
@@ -843,6 +878,64 @@ mod tests {
         assert_eq!(
             api.message,
             "此廠商已有 3 張採購或進貨單據，無法刪除，請改為停用"
+        );
+        assert_eq!(
+            api.details,
+            Some(json!({ "fields": [], "document_count": 3 }))
+        );
+    }
+
+    #[test]
+    fn product_delete_is_blocked_by_open_sales_orders() {
+        let api: ApiError = delete_blocked(
+            PRODUCT,
+            Usage {
+                open_sales_orders: 2,
+                ..Usage::default()
+            },
+        )
+        .unwrap()
+        .into();
+        assert_eq!(api.message, "此商品有 2 張未結案的訂單，無法刪除");
+        assert_eq!(
+            api.details,
+            Some(json!({ "fields": [], "open_sales_order_count": 2 }))
+        );
+        // 同時有未結案的採購單：兩個數量都列出，訊息為採購單
+        let api: ApiError = delete_blocked(
+            PRODUCT,
+            Usage {
+                open_orders: 1,
+                open_sales_orders: 2,
+                ..Usage::default()
+            },
+        )
+        .unwrap()
+        .into();
+        assert_eq!(api.message, "此商品有 1 張未結案的採購單，無法刪除");
+        assert_eq!(
+            api.details,
+            Some(json!({
+                "fields": [], "open_purchase_order_count": 1, "open_sales_order_count": 2
+            }))
+        );
+    }
+
+    #[test]
+    fn customer_delete_is_blocked_by_documents() {
+        assert!(delete_blocked(CUSTOMER, Usage::default()).is_none());
+        let api: ApiError = delete_blocked(
+            CUSTOMER,
+            Usage {
+                documents: 3,
+                ..Usage::default()
+            },
+        )
+        .unwrap()
+        .into();
+        assert_eq!(
+            api.message,
+            "此客戶已有 3 張訂單或出貨單據，無法刪除，請改為停用"
         );
         assert_eq!(
             api.details,

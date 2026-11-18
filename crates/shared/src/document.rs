@@ -47,8 +47,9 @@ pub const STATUS_FIELD: &str = "status";
 
 /// 單據的狀態（§8.2）。
 ///
-/// 影響庫存的單據（盤點調整單、進貨單、進貨退回）為 `draft` / `posted` / `void`；採購單為 `draft` /
-/// `confirmed` / `partially_received` / `closed` / `void`（§8.8「採購單的狀態」）。
+/// 影響庫存的單據（盤點調整單、進貨單、進貨退回、出貨單、銷貨退回）為 `draft` / `posted` / `void`；
+/// 採購單為 `draft` / `confirmed` / `partially_received` / `closed` / `void`（§8.8「採購單的狀態」）；
+/// 訂單為 `draft` / `confirmed` / `partially_shipped` / `closed` / `void`（§8.9「訂單的狀態」）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum DocumentStatus {
@@ -56,11 +57,13 @@ pub enum DocumentStatus {
     Draft,
     /// 已過帳：不可修改、刪除；可以作廢。
     Posted,
-    /// 已確認（採購單）：不可修改、刪除；可以結案、作廢，等待進貨。
+    /// 已確認（採購單、訂單）：不可修改、刪除；可以結案、作廢，等待進貨或出貨。
     Confirmed,
     /// 部分進貨（採購單）：已有進貨，可以結案。
     PartiallyReceived,
-    /// 已結案（採購單）：全部進貨或手動結案。
+    /// 部分出貨（訂單）：已有出貨，可以結案。
+    PartiallyShipped,
+    /// 已結案（採購單、訂單）：全部進貨、出貨或手動結案。
     Closed,
     /// 已作廢：不可再做任何操作。
     Void,
@@ -68,11 +71,12 @@ pub enum DocumentStatus {
 
 impl DocumentStatus {
     /// 所有狀態。
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Draft,
         Self::Posted,
         Self::Confirmed,
         Self::PartiallyReceived,
+        Self::PartiallyShipped,
         Self::Closed,
         Self::Void,
     ];
@@ -84,6 +88,7 @@ impl DocumentStatus {
             Self::Posted => "posted",
             Self::Confirmed => "confirmed",
             Self::PartiallyReceived => "partially_received",
+            Self::PartiallyShipped => "partially_shipped",
             Self::Closed => "closed",
             Self::Void => "void",
         }
@@ -101,6 +106,7 @@ impl DocumentStatus {
             Self::Posted => "已過帳",
             Self::Confirmed => "已確認",
             Self::PartiallyReceived => "部分進貨",
+            Self::PartiallyShipped => "部分出貨",
             Self::Closed => "已結案",
             Self::Void => "已作廢",
         }
@@ -108,9 +114,9 @@ impl DocumentStatus {
 }
 
 /// 單據動作（§10「單據動作」）。各單據支援哪些動作、前後的狀態由 `hammer_core::documents` 依資料類別
-/// 決定：一般單據為過帳（`draft` → `posted`）、作廢（`posted` → `void`）；採購單為確認
-/// （`draft` → `confirmed`）、結案（`confirmed` / `partially_received` → `closed`）、作廢
-/// （`confirmed` → `void`）。
+/// 決定：一般單據為過帳（`draft` → `posted`）、作廢（`posted` → `void`）；採購單、訂單為確認
+/// （`draft` → `confirmed`）、結案（`confirmed` / `partially_received`（訂單為 `partially_shipped`）→
+/// `closed`）、作廢（`confirmed` → `void`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum DocumentAction {
@@ -118,9 +124,9 @@ pub enum DocumentAction {
     Post,
     /// 作廢。
     Void,
-    /// 確認（只有採購單）。
+    /// 確認（只有採購單、訂單）。
     Confirm,
-    /// 手動結案（只有採購單）。
+    /// 手動結案（只有採購單、訂單）。
     Close,
 }
 
@@ -273,6 +279,11 @@ mod tests {
         );
         assert_eq!(DocumentStatus::Confirmed.label(), "已確認");
         assert_eq!(DocumentStatus::PartiallyReceived.label(), "部分進貨");
+        assert_eq!(
+            DocumentStatus::parse("partially_shipped"),
+            Some(DocumentStatus::PartiallyShipped)
+        );
+        assert_eq!(DocumentStatus::PartiallyShipped.label(), "部分出貨");
         assert_eq!(DocumentStatus::Closed.label(), "已結案");
         assert_eq!(DocumentStatus::Posted.label(), "已過帳");
         assert_eq!(DocumentStatus::Void.label(), "已作廢");

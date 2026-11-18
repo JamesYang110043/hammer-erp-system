@@ -1063,19 +1063,22 @@ export type DocumentRef = {
 /**
  *  單據的狀態（§8.2）。
  * 
- *  影響庫存的單據（盤點調整單、進貨單、進貨退回）為 `draft` / `posted` / `void`；採購單為 `draft` /
- *  `confirmed` / `partially_received` / `closed` / `void`（§8.8「採購單的狀態」）。
+ *  影響庫存的單據（盤點調整單、進貨單、進貨退回、出貨單、銷貨退回）為 `draft` / `posted` / `void`；
+ *  採購單為 `draft` / `confirmed` / `partially_received` / `closed` / `void`（§8.8「採購單的狀態」）；
+ *  訂單為 `draft` / `confirmed` / `partially_shipped` / `closed` / `void`（§8.9「訂單的狀態」）。
  */
 export type DocumentStatus = 
 /**  草稿：可以修改、刪除、過帳（採購單：確認）。 */
 "draft" | 
 /**  已過帳：不可修改、刪除；可以作廢。 */
 "posted" | 
-/**  已確認（採購單）：不可修改、刪除；可以結案、作廢，等待進貨。 */
+/**  已確認（採購單、訂單）：不可修改、刪除；可以結案、作廢，等待進貨或出貨。 */
 "confirmed" | 
 /**  部分進貨（採購單）：已有進貨，可以結案。 */
 "partially_received" | 
-/**  已結案（採購單）：全部進貨或手動結案。 */
+/**  部分出貨（訂單）：已有出貨，可以結案。 */
+"partially_shipped" | 
+/**  已結案（採購單、訂單）：全部進貨、出貨或手動結案。 */
 "closed" | 
 /**  已作廢：不可再做任何操作。 */
 "void";
