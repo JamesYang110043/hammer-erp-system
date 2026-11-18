@@ -81,14 +81,19 @@ import {
   showsRecordNo,
 } from '../../records/lines';
 import type { DetailTable, LineFormValues } from '../../records/lines';
-import { PURCHASING_FIELDS, lineFormFields, pricedDocument } from '../../records/purchasing';
+import {
+  PURCHASE_RETURN,
+  PURCHASING_FIELDS,
+  lineFormFields,
+  pricedDocument,
+} from '../../records/purchasing';
 import { entityIcon } from '../schema/entityIcons';
 import { formatTaipei, taipeiToday } from '../../utils/time';
 import { DocumentStatusTag } from './DocumentStatusTag';
 import { FormulaValue } from './FieldValue';
 import { LinesTable } from './LinesTable';
 import type { LineRefs } from './LinesTable';
-import { ExchangeRateInput, PurchasingAutofill } from './PurchasingInputs';
+import { ExchangeRateInput, PurchaseReturnAutofill, PurchasingAutofill } from './PurchasingInputs';
 import { useAmountPreview } from './useAmountPreview';
 import { RecordFieldInput } from './RecordFieldInput';
 
@@ -226,7 +231,7 @@ function RecordForm({
     [previewTables, current, record],
   );
   const preview = useFormulaPreview(previewRequest).data;
-  useAmountPreview(form, entityKey, current, editable && priced);
+  useAmountPreview(form, entityKey, current, editable);
 
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -460,6 +465,9 @@ function RecordForm({
           onValuesChange={onValuesChange}
           onFinish={onFinish}
         >
+          {editable && entityKey === PURCHASE_RETURN && !record && (
+            <PurchaseReturnAutofill details={details} onChange={onValuesChange} />
+          )}
           {editable && priced && (
             <PurchasingAutofill
               entityKey={entityKey}
@@ -529,7 +537,14 @@ function RecordForm({
                   ) : (
                     <RecordFieldInput
                       field={field}
-                      disabled={field.is_readonly || undefined}
+                      // 進貨退回建立後不可更換進貨單（§8.8 `purchase_returns`）
+                      disabled={
+                        field.is_readonly ||
+                        (entityKey === PURCHASE_RETURN &&
+                          record !== undefined &&
+                          field.field_key === PURCHASING_FIELDS.goodsReceipt) ||
+                        undefined
+                      }
                       relation={record?.relations?.[field.field_key]}
                       attachment={record?.attachments?.[field.field_key]}
                     />
