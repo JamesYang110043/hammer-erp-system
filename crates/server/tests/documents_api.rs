@@ -2,7 +2,8 @@
 //! 以盤點調整單 `stock_adjustment` 驗證單號、系統維護的欄位、只有草稿可以修改與刪除、過帳與作廢端點
 //! （權限、`version`、狀態、操作紀錄、處理函式失敗時 rollback）。
 //!
-//! 過帳的庫存處理在盤點調整單的 issue 實作，這裡使用不做事（或測試用）的處理函式。
+//! 盤點調整單的庫存處理另見 `stock_adjustments_api.rs`；這裡驗證共通的部分（處理函式失敗時 rollback
+//! 等使用測試用的處理函式）。
 //!
 //! 使用 `#[sqlx::test]`，需要 `DATABASE_URL`（見 README「整合測試」）。
 //! 透過完整的 router 呼叫，包含所有中介層。
@@ -117,6 +118,35 @@ async fn draft(pool: &PgPool, token: &str) -> Record {
         token,
         DOC,
         json!({ "data": { "adjustment_date": "2026-11-17", "notes": "月底盤點" } }),
+    )
+    .await
+}
+
+/// 新增一張可以過帳的盤點調整單草稿：一列盤盈新批號（每次建立新的單位與商品）。
+async fn postable(pool: &PgPool, token: &str) -> Record {
+    let suffix = hammer_shared::new_id().simple().to_string();
+    let unit = create(
+        pool,
+        token,
+        "unit",
+        json!({ "data": { "code": format!("U{suffix}"), "name": "個" } }),
+    )
+    .await;
+    let product = create(
+        pool,
+        token,
+        "product",
+        json!({ "data": { "code": format!("P{suffix}"), "name": "螺絲", "unit_id": unit.id } }),
+    )
+    .await;
+    create(
+        pool,
+        token,
+        DOC,
+        json!({
+            "data": { "adjustment_date": "2026-11-17", "notes": "月底盤點" },
+            "lines": { LINE: [{ "data": { "product_id": product.id, "qty": "1", "unit_cost_twd": "1" } }] },
+        }),
     )
     .await
 }
@@ -393,7 +423,7 @@ async fn draft_can_be_updated_and_status_is_ignored(pool: PgPool) {
 async fn list_sorts_and_filters_by_record_no_and_status(pool: PgPool) {
     let token = token_for(&pool, "editor", role::EDITOR).await;
     let a = draft(&pool, &token).await;
-    let b = draft(&pool, &token).await;
+    let b = postable(&pool, &token).await;
     let c = draft(&pool, &token).await;
     act_ok(&pool, &token, &b, "post").await;
 
@@ -666,15 +696,35 @@ async fn post_then_void(pool: PgPool) {
         "已作廢的單據不可刪除"
     );
 
-    // 操作紀錄：create、post、void；diff 只有 status
+    // 操作紀錄：create、post、void；過帳的 diff 為 status 與自動產生的批號，作廢只有 status
     let logs = audit_logs(&pool, record.id).await;
     let actions: Vec<&str> = logs.iter().map(|l| l.action.as_str()).collect();
     assert_eq!(actions, ["create", "post", "void"]);
     for log in &logs {
         assert_eq!(log.entity_key.as_deref(), Some(DOC));
     }
-    assert_eq!(logs[1].before_data, Some(json!({ "status": "draft" })));
-    assert_eq!(logs[1].after_data, Some(json!({ "status": "posted" })));
+    let line = &posted.lines.as_ref().unwrap()[LINE][0];
+    let lot_no = format!("{}-01", record.record_no.as_deref().unwrap());
+    assert_eq!(line.data["lot_no"], json!(lot_no));
+    let before_line = json!({
+        "line_type": "gain_new", "product_id": product, "qty": "5.0000", "unit_cost_twd": "12.0000",
+    });
+    let mut after_line = before_line.clone();
+    after_line["lot_no"] = json!(lot_no);
+    assert_eq!(
+        logs[1].before_data,
+        Some(json!({
+            "status": "draft",
+            "lines.stock_adjustment_line": [{ "id": line.id, "data": before_line }],
+        }))
+    );
+    assert_eq!(
+        logs[1].after_data,
+        Some(json!({
+            "status": "posted",
+            "lines.stock_adjustment_line": [{ "id": line.id, "data": after_line }],
+        }))
+    );
     assert_eq!(logs[2].before_data, Some(json!({ "status": "posted" })));
     assert_eq!(logs[2].after_data, Some(json!({ "status": "void" })));
 }
@@ -684,7 +734,7 @@ async fn post_then_void(pool: PgPool) {
 async fn action_checks_permission_existence_version_then_status(pool: PgPool) {
     let editor = token_for(&pool, "editor", role::EDITOR).await;
     let viewer = token_for(&pool, "viewer", role::VIEWER).await;
-    let record = draft(&pool, &editor).await;
+    let record = postable(&pool, &editor).await;
 
     for action in ["post", "void"] {
         // 唯讀者沒有 record.post，即使資料不存在也是 403
@@ -893,7 +943,7 @@ async fn handler_changes_are_audited(pool: PgPool) {
 #[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
 async fn handler_failure_rolls_back(pool: PgPool) {
     let token = token_for(&pool, "editor", role::EDITOR).await;
-    let record = draft(&pool, &token).await;
+    let record = postable(&pool, &token).await;
     let (status, body) = call_with(
         app_with(&pool, WriteNotes { fail: true }),
         Method::POST,

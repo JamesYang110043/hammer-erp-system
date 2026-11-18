@@ -47,6 +47,7 @@ use crate::records::{
     load_details_for_write, load_target_for_write, lock_record, record_audit,
 };
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version};
+use crate::stock_adjustments::StockAdjustmentHandler;
 
 /// 盤點調整單的資料類別代碼（§8.10）。
 pub const STOCK_ADJUSTMENT: &str = "stock_adjustment";
@@ -91,9 +92,7 @@ pub trait DocumentHandler: Send + Sync {
     ) -> HandlerFuture<'a>;
 }
 
-/// 不做任何處理的處理函式：只變更狀態與寫入操作紀錄。
-///
-/// 盤點調整單的過帳、作廢邏輯（庫存異動）實作前先使用它（§8.10，#131）；也供測試使用。
+/// 不做任何處理的處理函式：只變更狀態與寫入操作紀錄。供測試使用。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoopHandler;
 
@@ -129,8 +128,7 @@ impl DocumentHandlers {
 
     /// 系統內建的單據與其處理函式。
     pub fn standard() -> Self {
-        // 盤點調整單的庫存處理在 #131 實作，先只變更狀態
-        Self::empty().register(STOCK_ADJUSTMENT, NoopHandler)
+        Self::empty().register(STOCK_ADJUSTMENT, StockAdjustmentHandler)
     }
 
     /// 註冊（或取代）資料類別 `entity_key` 的處理函式。

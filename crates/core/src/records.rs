@@ -92,6 +92,7 @@ use crate::CoreError;
 use crate::attachments::{FileChanges, apply_file_changes, attach_files, prepare_file_changes};
 use crate::audit::{self, AuditDiff, AuditEntry};
 use crate::auth::AuthContext;
+use crate::documents::STOCK_ADJUSTMENT;
 use crate::formulas::{
     FormulaErrors, Formulas, errors_from_json, errors_to_json, load_targets, today_of, value_type,
 };
@@ -105,6 +106,7 @@ use crate::record_lines::{
 use crate::record_titles::Titles;
 use crate::relations::{attach_relations, check_relations};
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version, entity_from_row, field_from_row};
+use crate::stock_adjustments;
 use crate::title::{RelatedRecords, TitleRenderer};
 
 /// 資料不存在或已刪除時的錯誤訊息。
@@ -281,6 +283,9 @@ pub async fn create_record(
     let mut lines =
         prepare_lines(&mut tx, &details, &req.lines, None, false, &mut line_errors).await?;
     line_errors.extend(system_line_rules(&lines));
+    line_errors.extend(
+        document_line_rules(&mut tx, &entity.key, &master, None, &details, &lines, None).await?,
+    );
     let mut data = validation_error(master, line_errors)?;
     check_relations(&mut tx, &fields, &data, None).await?;
     if let Store::Table(_) = store {
@@ -406,6 +411,18 @@ pub async fn update_record(
     )
     .await?;
     line_errors.extend(system_line_rules(&lines));
+    line_errors.extend(
+        document_line_rules(
+            &mut tx,
+            &entity.key,
+            &master,
+            Some(existing),
+            &details,
+            &lines,
+            Some(id),
+        )
+        .await?,
+    );
     let mut data = validation_error(master, line_errors)?;
     let formula_errors = compute_formulas(&mut tx, &formulas, &mut data, &mut lines, now).await?;
     let formula_errors = errors_to_json(&formula_errors);
@@ -1896,7 +1913,10 @@ async fn prepare_line(
         Err(errors) => return Ok(Err(errors)),
     };
     if let LineStore::Table(_) = detail.store {
-        let errors = master_data::check_data(&detail.entity.key, &mut data, existing);
+        let mut errors = master_data::check_data(&detail.entity.key, &mut data, existing);
+        if detail.entity.key == stock_adjustments::STOCK_ADJUSTMENT_LINE {
+            errors.extend(stock_adjustments::check_line_data(&mut data));
+        }
         if !errors.is_empty() {
             return Ok(Err(errors));
         }
@@ -1928,6 +1948,62 @@ fn system_line_rules(details: &[DetailWrite<'_>]) -> Vec<LineError> {
             master_data::check_lines(&d.detail.entity.key, &rows)
         })
         .collect()
+}
+
+/// 系統單據需要查詢資料庫的明細規則：盤點調整單（[`stock_adjustments::check_save`]）。只檢查通過欄位
+/// 驗證的明細。
+///
+/// 修改時沒有帶到明細，但調整類型有變動時，以既有的明細檢查（例如改為期初庫存）。
+#[allow(clippy::too_many_arguments)]
+async fn document_line_rules(
+    tx: &mut PgTransaction<'_>,
+    entity_key: &str,
+    master: &Result<Map<String, Value>, Vec<FieldError>>,
+    existing: Option<&Map<String, Value>>,
+    details: &[Detail],
+    lines: &[DetailWrite<'_>],
+    parent_id: Option<Id>,
+) -> Result<Vec<LineError>, CoreError> {
+    if entity_key != STOCK_ADJUSTMENT {
+        return Ok(Vec::new());
+    }
+    const ADJUSTMENT_TYPE: &str = "adjustment_type";
+    let adjustment_type = match master {
+        Ok(data) => data.get(ADJUSTMENT_TYPE),
+        Err(_) => existing.and_then(|e| e.get(ADJUSTMENT_TYPE)),
+    };
+    if let Some(write) = lines
+        .iter()
+        .find(|d| d.detail.entity.key == stock_adjustments::STOCK_ADJUSTMENT_LINE)
+    {
+        let rows: Vec<(usize, &Map<String, Value>)> = write
+            .lines
+            .iter()
+            .filter_map(|l| Some((l.index, l.data.as_object()?)))
+            .collect();
+        return stock_adjustments::check_save(tx, adjustment_type.and_then(Value::as_str), &rows)
+            .await;
+    }
+    let (Some(parent_id), Some(existing)) = (parent_id, existing) else {
+        return Ok(Vec::new());
+    };
+    if existing.get(ADJUSTMENT_TYPE) == adjustment_type {
+        return Ok(Vec::new());
+    }
+    let Some(position) = details
+        .iter()
+        .position(|d| d.entity.key == stock_adjustments::STOCK_ADJUSTMENT_LINE)
+    else {
+        return Ok(Vec::new());
+    };
+    let current = detail_lines(tx, &details[position..=position], parent_id).await?;
+    let rows: Vec<(usize, &Map<String, Value>)> = current
+        .iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(i, r)| Some((i, r.data.as_object()?)))
+        .collect();
+    stock_adjustments::check_save(tx, adjustment_type.and_then(Value::as_str), &rows).await
 }
 
 /// 主表與有效明細子表的公式欄位（[`Formulas`]）。

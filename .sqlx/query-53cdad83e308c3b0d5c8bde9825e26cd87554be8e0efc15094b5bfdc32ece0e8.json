@@ -1,0 +1,112 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, sort_order, product_id, line_type, lot_no, qty, unit_cost_twd, lot_id\n        FROM stock_adjustment_lines\n        WHERE stock_adjustment_id = $1 AND deleted_at IS NULL\n        ORDER BY sort_order, id\n        FOR UPDATE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "stock_adjustment_lines",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "sort_order",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "stock_adjustment_lines",
+            "name": "sort_order"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "product_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "stock_adjustment_lines",
+            "name": "product_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "line_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "stock_adjustment_lines",
+            "name": "line_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "lot_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "stock_adjustment_lines",
+            "name": "lot_no"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "qty",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "stock_adjustment_lines",
+            "name": "qty"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "unit_cost_twd",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "stock_adjustment_lines",
+            "name": "unit_cost_twd"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "lot_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "stock_adjustment_lines",
+            "name": "lot_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "53cdad83e308c3b0d5c8bde9825e26cd87554be8e0efc15094b5bfdc32ece0e8"
+}
