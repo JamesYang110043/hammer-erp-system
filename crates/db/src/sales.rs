@@ -11,6 +11,9 @@
 //! - 出貨單（訂單轉出貨單、過帳、作廢）：[`find_order_for_shipment`]、[`lock_order_for_shipment`]、
 //!   [`list_order_lines`]、[`list_shipment_lines_for_update`]、[`update_shipment_line_posting`]、
 //!   [`set_shipment_cost_total`]、[`add_shipped_qty`]、[`set_order_status`]、[`posted_returns_of_shipment`]
+//! - 銷貨退回（退回數量上限、過帳、作廢）：[`lock_shipment_for_return`]、[`returned_qty_of_lines`]、
+//!   [`returned_qty_by_lot`]、[`list_return_lines_for_update`]、[`update_return_line_cost`]、
+//!   [`set_return_cost_total`]、[`return_transactions`]
 
 use rust_decimal::Decimal;
 use sqlx::PgExecutor;
@@ -27,6 +30,7 @@ pub struct ShipmentForReturn {
     pub customer_id: Uuid,
     pub tax_type: String,
     pub tax_included: bool,
+    pub ship_date: time::Date,
 }
 
 /// 未刪除的出貨單 `id`，以 `FOR SHARE` 鎖定（存檔期間不會被過帳、作廢或刪除）。不存在或已刪除時為
@@ -38,7 +42,7 @@ pub async fn find_shipment_for_return<'e>(
     let row = sqlx::query_as!(
         ShipmentForReturn,
         r#"
-        SELECT id, status, customer_id, tax_type, tax_included
+        SELECT id, status, customer_id, tax_type, tax_included, ship_date
         FROM shipments
         WHERE id = $1 AND deleted_at IS NULL
         FOR SHARE
@@ -57,6 +61,7 @@ pub struct ShipmentLineForReturn {
     pub product_id: Uuid,
     pub unit_price: Decimal,
     pub discount_rate: Decimal,
+    pub qty: Decimal,
 }
 
 /// 出貨單 `shipment_id` 中 id 在 `ids` 內的未刪除明細（依 id 排序）。不屬於該出貨單的 id 不會出現。
@@ -68,7 +73,7 @@ pub async fn list_shipment_lines_for_return<'e>(
     let rows = sqlx::query_as!(
         ShipmentLineForReturn,
         r#"
-        SELECT id, product_id, unit_price, discount_rate
+        SELECT id, product_id, unit_price, discount_rate, qty
         FROM shipment_lines
         WHERE shipment_id = $1 AND id = ANY($2) AND deleted_at IS NULL
         ORDER BY id
@@ -412,4 +417,171 @@ pub async fn posted_returns_of_shipment<'e>(
     .fetch_all(executor)
     .await?;
     Ok(rows.into_iter().map(|r| (r.id, r.record_no)).collect())
+}
+
+/// 同 [`find_shipment_for_return`]，但以 `FOR UPDATE` 鎖定（銷貨退回過帳時；同一張出貨單的退回依序過帳）。
+pub async fn lock_shipment_for_return<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<ShipmentForReturn>, DbError> {
+    let row = sqlx::query_as!(
+        ShipmentForReturn,
+        r#"
+        SELECT id, status, customer_id, tax_type, tax_included, ship_date
+        FROM shipments
+        WHERE id = $1 AND deleted_at IS NULL
+        FOR UPDATE
+        "#,
+        id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 出貨明細 `ids` 在**已過帳**、未刪除的銷貨退回中的退回數量合計 `(出貨明細 id, 合計)`；沒有退回的不列出。
+pub async fn returned_qty_of_lines<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+) -> Result<Vec<(Uuid, Decimal)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT l.shipment_line_id AS "id!", sum(l.qty) AS "qty!"
+        FROM sales_return_lines l
+        JOIN sales_returns r ON r.id = l.sales_return_id
+        WHERE l.shipment_line_id = ANY($1)
+          AND l.deleted_at IS NULL AND r.deleted_at IS NULL AND r.status = 'posted'
+        GROUP BY l.shipment_line_id
+        "#,
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.qty)).collect())
+}
+
+/// 出貨明細 `shipment_line_id` 的**已過帳**銷貨退回加回各批號的數量 `(批號 id, 合計)`（由
+/// `txn_type = sales_return` 的異動計算）。
+pub async fn returned_qty_by_lot<'e>(
+    executor: impl PgExecutor<'e>,
+    shipment_line_id: Uuid,
+) -> Result<Vec<(Uuid, Decimal)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT t.lot_id, sum(t.qty_change) AS "qty!"
+        FROM inventory_transactions t
+        JOIN sales_return_lines l ON l.id = t.ref_line_id
+        JOIN sales_returns r ON r.id = l.sales_return_id
+        WHERE l.shipment_line_id = $1
+          AND t.txn_type = 'sales_return'
+          AND l.deleted_at IS NULL AND r.deleted_at IS NULL AND r.status = 'posted'
+        GROUP BY t.lot_id
+        "#,
+        shipment_line_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.lot_id, r.qty)).collect())
+}
+
+/// 一列銷貨退回明細。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnLineRow {
+    pub id: Uuid,
+    pub sort_order: i32,
+    pub shipment_line_id: Uuid,
+    pub product_id: Uuid,
+    pub qty: Decimal,
+}
+
+/// 銷貨退回 `sales_return_id` 的未刪除明細，依 `sort_order, id` 排序並鎖定（`FOR UPDATE`）。
+pub async fn list_return_lines_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    sales_return_id: Uuid,
+) -> Result<Vec<ReturnLineRow>, DbError> {
+    let rows = sqlx::query_as!(
+        ReturnLineRow,
+        r#"
+        SELECT id, sort_order, shipment_line_id, product_id, qty
+        FROM sales_return_lines
+        WHERE sales_return_id = $1 AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        FOR UPDATE
+        "#,
+        sales_return_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 寫入銷貨退回明細過帳的 `cost_amount_twd`，`version` + 1。回傳是否有更新。
+pub async fn update_return_line_cost<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    cost_amount_twd: Option<Decimal>,
+    updated_by: Uuid,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE sales_return_lines
+        SET cost_amount_twd = $2, updated_by = $3, version = version + 1
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        cost_amount_twd,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 寫入銷貨退回的 `cost_total_twd`（過帳時）。`version` 由單據框架變更狀態時遞增，這裡不變。
+pub async fn set_return_cost_total<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    cost_total_twd: Decimal,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE sales_returns
+        SET cost_total_twd = $2
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        cost_total_twd,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 銷貨退回加回批號的一筆異動。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnTransactionRow {
+    pub ref_line_id: Uuid,
+    pub product_id: Uuid,
+    pub lot_id: Uuid,
+    pub qty_change: Decimal,
+}
+
+/// 銷貨退回 `sales_return_id` 過帳時加回批號的異動（`txn_type = sales_return`），依建立順序。
+pub async fn return_transactions<'e>(
+    executor: impl PgExecutor<'e>,
+    sales_return_id: Uuid,
+) -> Result<Vec<ReturnTransactionRow>, DbError> {
+    let rows = sqlx::query_as!(
+        ReturnTransactionRow,
+        r#"
+        SELECT ref_line_id, product_id, lot_id, qty_change
+        FROM inventory_transactions
+        WHERE ref_doc_type = 'sales_return' AND ref_doc_id = $1 AND txn_type = 'sales_return'
+        ORDER BY id
+        "#,
+        sales_return_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
 }
