@@ -8,13 +8,15 @@
 //! | `GET /api/v1/inventory/balances` | `record.read` | `200` `Page<StockBalance>` |
 //! | `GET /api/v1/inventory/products/{product_id}/lots` | `record.read` | `200` `Page<InventoryLot>` |
 //! | `GET /api/v1/inventory/transactions` | `record.read` | `200` `Page<InventoryTransaction>` |
+//! | `POST /api/v1/inventory/allocation-preview` | `record.read` | `200` `AllocationPreview` |
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use hammer_core::inventory_queries;
 use hammer_shared::Id;
 use hammer_shared::inventory::{
-    InventoryLot, InventoryTransaction, LotQuery, StockBalance, StockBalanceQuery, TransactionQuery,
+    AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
+    StockBalance, StockBalanceQuery, TransactionQuery,
 };
 use hammer_shared::pagination::Page;
 
@@ -51,5 +53,16 @@ pub async fn list_transactions(
 ) -> Result<Json<Page<InventoryTransaction>>, AppError> {
     Ok(Json(
         inventory_queries::list_transactions(&state.pool, &auth, &query).await?,
+    ))
+}
+
+/// `POST /api/v1/inventory/allocation-preview`
+pub async fn allocation_preview(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<AllocationPreviewRequest>,
+) -> Result<Json<AllocationPreview>, AppError> {
+    Ok(Json(
+        inventory_queries::allocation_preview(&state.pool, &auth, &req).await?,
     ))
 }

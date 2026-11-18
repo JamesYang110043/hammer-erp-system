@@ -100,7 +100,20 @@ fn display_qty(value: Decimal) -> String {
 
 /// 先進先出的扣減計畫：依序從 `lots`（`(批號 id, 目前數量)`，已依先進先出排序）扣 `qty`。
 /// 足夠時回傳每個批號扣除的數量（略過數量為 0 的批號）；不足時回傳可用的總數量。
+///
+/// 出貨過帳（[`Inventory::issue_fifo`]）與建議批號（[`preview_allocations`]）都以 [`take_fifo`] 選擇批號。
 pub fn plan_fifo(lots: &[(Id, Decimal)], qty: Decimal) -> Result<Vec<(Id, Decimal)>, Decimal> {
+    let (out, shortage) = take_fifo(lots, qty);
+    if shortage > Decimal::ZERO {
+        Err(lots.iter().map(|(_, q)| (*q).max(Decimal::ZERO)).sum())
+    } else {
+        Ok(out)
+    }
+}
+
+/// 依序從 `lots`（已依先進先出排序）扣 `qty`，能扣多少扣多少：回傳每個批號扣除的數量（略過數量為 0 的
+/// 批號）與不足的數量（足夠時為 0）。
+pub fn take_fifo(lots: &[(Id, Decimal)], qty: Decimal) -> (Vec<(Id, Decimal)>, Decimal) {
     let mut remaining = qty;
     let mut out = Vec::new();
     for &(id, available) in lots {
@@ -114,11 +127,71 @@ pub fn plan_fifo(lots: &[(Id, Decimal)], qty: Decimal) -> Result<Vec<(Id, Decima
         out.push((id, take));
         remaining -= take;
     }
-    if remaining > Decimal::ZERO {
-        Err(lots.iter().map(|(_, q)| (*q).max(Decimal::ZERO)).sum())
-    } else {
-        Ok(out)
+    (out, remaining.max(Decimal::ZERO))
+}
+
+/// 建議批號的一列（[`preview_allocations`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviewLine {
+    pub product_id: Id,
+    /// 是否為實體商品；`service` 不分配。
+    pub is_goods: bool,
+    pub qty: Decimal,
+    /// 手動指定的批號；`None` 為先進先出。
+    pub lot_id: Option<Id>,
+}
+
+/// 建議批號用的批號狀態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviewLot {
+    pub id: Id,
+    pub product_id: Id,
+    pub received_date: Date,
+    pub qty_remaining: Decimal,
+}
+
+/// 依出貨過帳的順序試算分配（§8.9「出貨過帳與作廢」）：先依陣列順序扣有指定批號的列，再依陣列順序以
+/// 先進先出（`received_date, id`）扣其他列，同一商品的多列依序接著扣。數量不足時扣到 0 為止，記下不足。
+///
+/// 回傳每一列 `(扣除的 (批號 id, 數量), 不足的數量)`，與 `lines` 的順序相同。`lots` 為相關商品的批號
+/// （指定的批號與先進先出商品所有有庫存的批號）。
+pub fn preview_allocations(
+    lines: &[PreviewLine],
+    lots: &[PreviewLot],
+) -> Vec<(Vec<(Id, Decimal)>, Decimal)> {
+    let mut remaining: BTreeMap<Id, Decimal> =
+        lots.iter().map(|l| (l.id, l.qty_remaining)).collect();
+    let mut fifo_order: Vec<&PreviewLot> = lots.iter().collect();
+    fifo_order.sort_by_key(|l| (l.received_date, l.id));
+    let mut out = vec![(Vec::new(), Decimal::ZERO); lines.len()];
+
+    for (i, line) in lines.iter().enumerate() {
+        let (true, Some(lot_id)) = (line.is_goods, line.lot_id) else {
+            continue;
+        };
+        let available = remaining.get(&lot_id).copied().unwrap_or_default();
+        let (taken, shortage) = take_fifo(&[(lot_id, available)], line.qty);
+        for (id, q) in &taken {
+            *remaining.entry(*id).or_default() -= *q;
+        }
+        out[i] = (taken, shortage);
     }
+    for (i, line) in lines.iter().enumerate() {
+        if !line.is_goods || line.lot_id.is_some() {
+            continue;
+        }
+        let available: Vec<(Id, Decimal)> = fifo_order
+            .iter()
+            .filter(|l| l.product_id == line.product_id)
+            .map(|l| (l.id, remaining.get(&l.id).copied().unwrap_or_default()))
+            .collect();
+        let (taken, shortage) = take_fifo(&available, line.qty);
+        for (id, q) in &taken {
+            *remaining.entry(*id).or_default() -= *q;
+        }
+        out[i] = (taken, shortage);
+    }
+    out
 }
 
 /// 異動的來源單據。
@@ -1001,6 +1074,80 @@ mod tests {
         let lots = [(id(1), d("3")), (id(2), d("5.25"))];
         assert_eq!(plan_fifo(&lots, d("10")), Err(d("8.25")));
         assert_eq!(plan_fifo(&[], d("1")), Err(Decimal::ZERO));
+    }
+
+    #[test]
+    fn take_fifo_takes_what_is_available() {
+        let lots = [(id(1), d("3")), (id(2), d("0")), (id(3), d("5.25"))];
+        assert_eq!(
+            take_fifo(&lots, d("10")),
+            (vec![(id(1), d("3")), (id(3), d("5.25"))], d("1.75"))
+        );
+        assert_eq!(take_fifo(&lots, d("2")), (vec![(id(1), d("2"))], d("0")));
+        assert_eq!(take_fifo(&[], d("1")), (vec![], d("1")));
+    }
+
+    fn preview_lot(n: u128, product: u128, date: &str, qty: &str) -> PreviewLot {
+        PreviewLot {
+            id: id(n),
+            product_id: id(product),
+            received_date: Date::parse(
+                date,
+                time::macros::format_description!("[year]-[month]-[day]"),
+            )
+            .unwrap(),
+            qty_remaining: d(qty),
+        }
+    }
+
+    fn preview_line(product: u128, qty: &str, lot: Option<u128>) -> PreviewLine {
+        PreviewLine {
+            product_id: id(product),
+            is_goods: product != 9,
+            qty: d(qty),
+            lot_id: lot.map(id),
+        }
+    }
+
+    #[test]
+    fn preview_issues_manual_lots_before_fifo() {
+        // 商品 1：L-01（10-02，5）、L-02（11-01，7）；id 順序與日期相反，確認依日期排序
+        let lots = [
+            preview_lot(20, 1, "2026-10-02", "5"),
+            preview_lot(10, 1, "2026-11-01", "7"),
+            preview_lot(30, 2, "2026-10-01", "1"),
+        ];
+        let lines = [
+            // 先進先出 3：指定批號的列先扣 L-01 4，剩 1 → L-01 1 + L-02 2
+            preview_line(1, "3", None),
+            preview_line(1, "4", Some(20)),
+            // 同一商品接著扣：L-02 剩 5，要 6 → 不足 1
+            preview_line(1, "6", None),
+            // 服務類商品不分配
+            preview_line(9, "1", None),
+            // 其他商品
+            preview_line(2, "1", None),
+        ];
+        let out = preview_allocations(&lines, &lots);
+        assert_eq!(out[0], (vec![(id(20), d("1")), (id(10), d("2"))], d("0")));
+        assert_eq!(out[1], (vec![(id(20), d("4"))], d("0")));
+        assert_eq!(out[2], (vec![(id(10), d("5"))], d("1")));
+        assert_eq!(out[3], (vec![], d("0")));
+        assert_eq!(out[4], (vec![(id(30), d("1"))], d("0")));
+    }
+
+    #[test]
+    fn preview_manual_lot_shortage() {
+        let lots = [preview_lot(1, 1, "2026-10-02", "5")];
+        let lines = [
+            preview_line(1, "3", Some(1)),
+            preview_line(1, "4", Some(1)),
+            preview_line(1, "1", None),
+        ];
+        let out = preview_allocations(&lines, &lots);
+        assert_eq!(out[0], (vec![(id(1), d("3"))], d("0")));
+        assert_eq!(out[1], (vec![(id(1), d("2"))], d("2")));
+        assert_eq!(out[2], (vec![], d("1")));
     }
 
     #[test]

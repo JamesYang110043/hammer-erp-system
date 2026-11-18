@@ -271,7 +271,8 @@ impl From<CoreError> for ApiError {
                 .iter()
                 .map(|e| {
                     serde_json::json!({
-                        "detail_key": e.detail_key,
+                        // 不屬於明細子表的列（例如建議批號 API 的 `lines`）為 `null`
+                        "detail_key": (!e.detail_key.is_empty()).then_some(&e.detail_key),
                         "index": e.index,
                         "field_key": e.field_key,
                         "message": e.message,
