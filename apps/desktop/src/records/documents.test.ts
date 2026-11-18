@@ -5,8 +5,10 @@ import type { ClientError } from '../bindings';
 import { STOCK_ADJUSTMENT, adjustment } from '../test/documentFixtures';
 import { REPAIR } from '../test/schemaFixtures';
 import {
-  availableAction,
+  actionConfirmText,
+  availableActions,
   documentActionError,
+  documentStatusNote,
   documentStatus,
   documentStatuses,
   formatQty,
@@ -39,10 +41,50 @@ describe('documents', () => {
     expect(documentStatus(adjustment('posted'))).toBe('posted');
     expect(documentStatus({ data: { status: 'closed' } })).toBe('closed');
     expect(documentStatus({ data: { status: 'partially_done' } })).toBeUndefined();
-    expect(availableAction('draft')).toBe('post');
-    expect(availableAction('posted')).toBe('void');
-    expect(availableAction('void')).toBeUndefined();
-    expect(availableAction(undefined)).toBeUndefined();
+    expect(availableActions('stock_adjustment', 'draft')).toEqual(['post']);
+    expect(availableActions('goods_receipt', 'posted')).toEqual(['void']);
+    expect(availableActions('stock_adjustment', 'void')).toEqual([]);
+    expect(availableActions('stock_adjustment', undefined)).toEqual([]);
+  });
+
+  it('purchase_order_actions', () => {
+    // §8.8「採購單的狀態」：草稿 → 確認；已確認 → 結案、作廢；部分進貨 → 結案
+    expect(availableActions('purchase_order', 'draft')).toEqual(['confirm']);
+    expect(availableActions('purchase_order', 'confirmed')).toEqual(['close', 'void']);
+    expect(availableActions('purchase_order', 'partially_received')).toEqual(['close']);
+    expect(availableActions('purchase_order', 'closed')).toEqual([]);
+    expect(availableActions('purchase_order', 'void')).toEqual([]);
+    expect(actionConfirmText('purchase_order', 'close')).toContain('不能再依這張採購單進貨');
+    expect(actionConfirmText('goods_receipt', 'post')).toContain('異動庫存');
+  });
+
+  it('status_note_shows_times', () => {
+    const fmt = (iso: string) => `[${iso}]`;
+    const doc = {
+      posted_at: 'P',
+      posted_by: null,
+      voided_at: null,
+      voided_by: null,
+      closed_at: 'C',
+      closed_by: null,
+    };
+    expect(documentStatusNote('purchase_order', 'closed', doc, fmt)).toBe(
+      '此單據已結案，不能修改。確認時間：[P]；結案時間：[C]',
+    );
+    expect(
+      documentStatusNote('goods_receipt', 'void', { ...doc, closed_at: null, voided_at: 'V' }, fmt),
+    ).toBe('此單據已作廢，不能修改。過帳時間：[P]；作廢時間：[V]');
+  });
+
+  it('validation_errors_list_fields', () => {
+    const err = apiError('VALIDATION', {
+      fields: [{ field_key: 'exchange_rate', message: '找不到匯率，請輸入匯率' }],
+    });
+    expect(documentActionError(err, 'confirm', { exchange_rate: '匯率' })).toEqual({
+      reload: false,
+      title: '確認失敗：伺服器訊息',
+      items: ['匯率：找不到匯率，請輸入匯率'],
+    });
   });
 
   it('statuses_depend_on_document', () => {

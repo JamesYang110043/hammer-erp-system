@@ -14,8 +14,8 @@ use hammer_shared::currency::{
 };
 use hammer_shared::document::{DocumentAction, DocumentActionRequest};
 use hammer_shared::exchange_rate::{
-    CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
-    UpdateExchangeRateRequest,
+    CreateExchangeRateRequest, DeleteExchangeRateQuery, EffectiveRate, EffectiveRateQuery,
+    ExchangeRate, ExchangeRateQuery, UpdateExchangeRateRequest,
 };
 use hammer_shared::health::HealthResponse;
 use hammer_shared::inventory::{
@@ -37,6 +37,7 @@ use hammer_shared::schema::{
     UpdateFieldRequest,
 };
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
+use hammer_shared::tax_rate::TaxRate;
 use hammer_shared::user::{
     CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
 };
@@ -259,6 +260,24 @@ pub async fn list_exchange_rates(
     query: ExchangeRateQuery,
 ) -> Result<Page<ExchangeRate>, ClientError> {
     state.list_exchange_rates(&query).await
+}
+
+/// 幣別在單據日期的適用匯率（需要 `record.read`）：`rate_date` ≤ `date` 中最近的一筆；
+/// 找不到時 `rate`、`rate_date` 為 `null`，本位幣固定 `1.000000`。
+#[tauri::command]
+#[specta::specta]
+pub async fn effective_exchange_rate(
+    state: State<'_, AppState>,
+    query: EffectiveRateQuery,
+) -> Result<EffectiveRate, ClientError> {
+    state.effective_exchange_rate(&query).await
+}
+
+/// 全部稅別（需要登入），依稅率由高到低。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_tax_rates(state: State<'_, AppState>) -> Result<Vec<TaxRate>, ClientError> {
+    state.list_tax_rates().await
 }
 
 /// 新增匯率（需要 `record.write`）。匯率以字串傳入，不經過浮點數。
@@ -567,6 +586,49 @@ pub async fn void_record(
             &key,
             id,
             DocumentAction::Void,
+            &DocumentActionRequest { version },
+        )
+        .await
+}
+
+/// 採購單確認（需要 `record.post`）：`draft` → `confirmed`，回傳確認後的單據（`version` + 1）。
+///
+/// `version` 不符時回傳 `409 CONFLICT`；不是草稿時回傳 `422 INVALID_STATUS`；
+/// 沒有匯率、沒有明細時回傳 `422 VALIDATION`。
+#[tauri::command]
+#[specta::specta]
+pub async fn confirm_record(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+    version: i32,
+) -> Result<Record, ClientError> {
+    state
+        .document_action(
+            &key,
+            id,
+            DocumentAction::Confirm,
+            &DocumentActionRequest { version },
+        )
+        .await
+}
+
+/// 採購單手動結案（需要 `record.post`）：`confirmed` / `partially_received` → `closed`。
+///
+/// `version` 不符時回傳 `409 CONFLICT`；狀態不符時回傳 `422 INVALID_STATUS`。
+#[tauri::command]
+#[specta::specta]
+pub async fn close_record(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+    version: i32,
+) -> Result<Record, ClientError> {
+    state
+        .document_action(
+            &key,
+            id,
+            DocumentAction::Close,
             &DocumentActionRequest { version },
         )
         .await

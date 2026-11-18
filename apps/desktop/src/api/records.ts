@@ -12,6 +12,7 @@ import type {
   UpdateViewLayoutRequest_Deserialize as UpdateViewLayoutRequest,
   ViewLayout_Serialize as ViewLayout,
 } from '../bindings';
+import type { DocumentAction } from '../records/documents';
 import { useDebouncedValue } from '../utils/useDebouncedValue';
 import { auditLogsKey } from './auditLogs';
 import { inventoryKey } from './inventory';
@@ -154,21 +155,27 @@ export function useUpdateRecord(entityKey: string) {
   );
 }
 
+/** 單據動作對應的 Tauri command。 */
+const ACTION_COMMANDS = {
+  post: commands.postRecord,
+  void: commands.voidRecord,
+  confirm: commands.confirmRecord,
+  close: commands.closeRecord,
+} as const;
+
 /**
- * 系統單據的過帳、作廢（需要 `record.post`，伺服器檢查）。成功後更新單筆快取，
+ * 系統單據的過帳、作廢，採購單的確認、結案（需要 `record.post`，伺服器檢查）。成功後更新單筆快取，
  * 並重新取得列表、操作紀錄與庫存查詢。
+ *
+ * 進貨單過帳、作廢會改變採購單的已進貨數量與狀態，所以一併重新取得其他單據的列表與單筆資料。
  */
-export function useDocumentAction(entityKey: string, action: 'post' | 'void') {
+export function useDocumentAction(entityKey: string, action: DocumentAction) {
   return useRecordMutation(
     entityKey,
     (record: Pick<DataRecord, 'id' | 'version'>) =>
-      unwrap(
-        action === 'post'
-          ? commands.postRecord(entityKey, record.id, record.version)
-          : commands.voidRecord(entityKey, record.id, record.version),
-      ),
-    // 過帳、作廢會異動庫存
-    [inventoryKey],
+      unwrap(ACTION_COMMANDS[action](entityKey, record.id, record.version)),
+    // 過帳、作廢會異動庫存；進貨會回寫採購單
+    [inventoryKey, ['records'], ['record']],
   );
 }
 

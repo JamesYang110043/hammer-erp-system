@@ -11,7 +11,9 @@ import { LINES_FORM_KEY, LINE_ID_KEY, lineFormValues } from '../../records/lines
 import { LINE_FIELDS, STOCK_ADJUSTMENT_LINE } from '../../records/inventory';
 import { isExclusiveLineField, rowsToClear } from '../../records/masterData';
 import type { DetailTable } from '../../records/lines';
+import { GOODS_RECEIPT_LINE, PURCHASING_FIELDS } from '../../records/purchasing';
 import { FormulaValue } from './FieldValue';
+import { ReceiptLotNoInput } from './PurchasingInputs';
 import { RecordFieldInput } from './RecordFieldInput';
 import { CurrentQty, LotNoInput, UnitCostInput } from './StockAdjustmentLineInputs';
 
@@ -55,13 +57,17 @@ export function LinesTable({
   showPending?: boolean;
 }) {
   const { entity, fields } = table;
-  const columnFields: FieldDefinition[] = [...fields, ...(table.formulas ?? [])].sort(
-    (a, b) => a.sort_order - b.sort_order,
-  );
+  // 不顯示的欄位（例如採購單帶入的採購明細）只放在表單值中，不列出
+  const columnFields: FieldDefinition[] = [
+    ...fields.filter((f) => f.is_visible),
+    ...(table.formulas ?? []),
+  ].sort((a, b) => a.sort_order - b.sort_order);
   const form = Form.useFormInstance();
   const listName = [LINES_FORM_KEY, entity.key];
   // 盤點調整明細：批號選擇、成本與目前數量（StockAdjustmentLineInputs）
   const isStockAdjustment = entity.key === STOCK_ADJUSTMENT_LINE;
+  // 進貨明細：批號留空時過帳自動產生，過帳後連到庫存查詢
+  const isGoodsReceipt = entity.key === GOODS_RECEIPT_LINE;
 
   return (
     <Form.List name={listName}>
@@ -124,7 +130,13 @@ export function LinesTable({
                           },
                         ]}
                       >
-                        {isStockAdjustment && field.field_key === LINE_FIELDS.lotNo ? (
+                        {isGoodsReceipt && field.field_key === PURCHASING_FIELDS.lotNo ? (
+                          <ReceiptLotNoInput
+                            row={rowPath}
+                            label={field.label}
+                            disabled={disabled || !canWrite}
+                          />
+                        ) : isStockAdjustment && field.field_key === LINE_FIELDS.lotNo ? (
                           <LotNoInput
                             row={rowPath}
                             label={field.label}
