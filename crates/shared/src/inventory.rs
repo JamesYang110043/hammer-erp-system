@@ -9,12 +9,20 @@
 //! | `GET /api/v1/inventory/balances` | [`StockBalanceQuery`] | `Page<`[`StockBalance`]`>` |
 //! | `GET /api/v1/inventory/products/{product_id}/lots` | [`LotQuery`] | `Page<`[`InventoryLot`]`>` |
 //! | `GET /api/v1/inventory/transactions` | [`TransactionQuery`] | `Page<`[`InventoryTransaction`]`>` |
+//! | `POST /api/v1/inventory/allocation-preview` | body [`AllocationPreviewRequest`] | [`AllocationPreview`] |
 //!
 //! - 篩選參數以字串接收，由伺服器解析：格式錯誤（uuid、日期、`true` / `false`、`txn_type`）→
 //!   `422 VALIDATION`，`details.field` 為參數名稱。空字串視為未指定
 //! - `page`、`page_size` 不是整數 → `400 BAD_REQUEST`（與其他列表相同）
 //! - 數量、單位成本為補齊 4 位小數的字串；`stock_value_twd` 為四捨五入到 2 位小數的字串
 //! - 商品不存在或已刪除（批號列表）→ `404 NOT_FOUND`
+//!
+//! # 建議批號 API（§8.9「建議批號 API」）
+//!
+//! 出貨單草稿試算先進先出的結果：只試算，不鎖定、不寫入，不考慮其他草稿；分配順序與出貨過帳相同
+//! （先扣有 `lot_no` 的列，再依陣列順序以先進先出扣其他列）。庫存不足**不是錯誤**，回傳能分配的部分與
+//! `shortage`。`lines` 1–[`ALLOCATION_PREVIEW_MAX_LINES`] 列；格式錯誤、商品不存在、批號找不到 →
+//! `422 VALIDATION`，`details.lines` 的 `detail_key` 為 `null`、`index` 為 `lines` 中的位置。
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -25,6 +33,9 @@ use crate::Id;
 
 /// 批號的最大長度（字元數，§8.10「批號」）。
 pub const LOT_NO_MAX_CHARS: usize = 50;
+
+/// 建議批號 API 一次最多的列數。
+pub const ALLOCATION_PREVIEW_MAX_LINES: usize = 200;
 
 /// 庫存異動的類型（`inventory_transactions.txn_type`）。JSON 中為 snake_case。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
@@ -236,6 +247,68 @@ pub struct InventoryTransaction {
     pub ref_line_id: Id,
     pub created_by: Option<Id>,
     pub created_by_name: Option<String>,
+}
+
+/// `POST /api/v1/inventory/allocation-preview` 的 request。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct AllocationPreviewRequest {
+    #[serde(default)]
+    pub lines: Vec<AllocationPreviewLineInput>,
+}
+
+/// 建議批號的一列輸入。值以字串接收，由伺服器解析（格式錯誤時回傳該列的欄位錯誤）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct AllocationPreviewLineInput {
+    /// 商品 id。
+    #[serde(default)]
+    pub product_id: Option<String>,
+    /// 數量：大於 0、最多 4 位小數。
+    #[serde(default)]
+    pub qty: Option<String>,
+    /// 手動指定的批號（去除前後空白；省略或空字串為先進先出）。
+    #[serde(default)]
+    pub lot_no: Option<String>,
+}
+
+/// 建議批號的結果，`lines` 與 request 的順序相同。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct AllocationPreview {
+    pub lines: Vec<AllocationPreviewLine>,
+}
+
+/// 一列的建議結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct AllocationPreviewLine {
+    /// request 中的位置（從 0 開始）。
+    pub index: u32,
+    pub product_id: Id,
+    /// `goods` / `service`。
+    pub product_type: String,
+    #[serde(with = "crate::decimal::serde_str")]
+    #[specta(type = String)]
+    pub qty: Decimal,
+    /// 依扣除順序；`service` 為空陣列。
+    pub allocations: Vec<PreviewAllocation>,
+    /// 不足的數量（足夠時為 `"0.0000"`）。
+    #[serde(with = "crate::decimal::serde_str")]
+    #[specta(type = String)]
+    pub shortage: Decimal,
+}
+
+/// 從一個批號扣除的建議。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct PreviewAllocation {
+    pub lot_id: Id,
+    pub lot_no: String,
+    #[serde(with = "crate::time::date_str")]
+    #[specta(type = String)]
+    pub received_date: Date,
+    #[serde(with = "crate::decimal::serde_str")]
+    #[specta(type = String)]
+    pub qty: Decimal,
+    #[serde(with = "crate::decimal::serde_str")]
+    #[specta(type = String)]
+    pub unit_cost_twd: Decimal,
 }
 
 #[cfg(test)]

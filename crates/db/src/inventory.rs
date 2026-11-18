@@ -163,6 +163,31 @@ pub async fn lock_lots<'e>(
     Ok(rows)
 }
 
+/// 同 [`lock_lots`] 的範圍，但**不鎖定**（建議批號 API 的試算）：`lot_ids` 指定的批號，加上
+/// `fifo_product_ids` 商品所有 `qty_remaining > 0` 的未刪除批號，依 `product_id, id` 排序。
+pub async fn list_lots_for_preview<'e>(
+    executor: impl PgExecutor<'e>,
+    lot_ids: &[Uuid],
+    fifo_product_ids: &[Uuid],
+) -> Result<Vec<LotRow>, DbError> {
+    let rows = sqlx::query_as!(
+        LotRow,
+        r#"
+        SELECT id, product_id, lot_no, received_date, source_type, source_doc_id, source_line_id,
+               qty_in, qty_remaining, unit_cost_twd, version
+        FROM inventory_lots
+        WHERE deleted_at IS NULL
+          AND (id = ANY($1) OR (product_id = ANY($2) AND qty_remaining > 0))
+        ORDER BY product_id, id
+        "#,
+        lot_ids,
+        fifo_product_ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
 /// 設定未刪除批號的 `qty_remaining`，`version` + 1。回傳是否有更新。
 ///
 /// 呼叫端必須先以 [`lock_lots`] 鎖定該批號，並依鎖定後讀到的值計算。

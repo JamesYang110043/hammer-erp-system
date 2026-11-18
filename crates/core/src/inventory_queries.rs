@@ -3,10 +3,12 @@
 //! - [`list_stock_balances`]：商品庫存（數量、台幣庫存金額、低於安全庫存）
 //! - [`list_product_lots`]：某商品的批號（先進先出順序）
 //! - [`list_transactions`]：異動流水帳（新到舊）
+//! - [`allocation_preview`]：出貨的建議批號（先進先出試算，§8.9「建議批號 API」）
 //!
 //! 都需要 `record.read`。篩選參數格式錯誤 → [`CoreError::InvalidField`]（`422 VALIDATION`，
 //! `details.field` 為參數名稱）；空字串的參數視為未指定。
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use hammer_db::inventory::{
@@ -16,8 +18,9 @@ use hammer_db::inventory::{
 use hammer_db::sqlx::PgPool;
 use hammer_shared::decimal::{Decimal, RoundingStrategy};
 use hammer_shared::inventory::{
-    InventoryLot, InventoryTransaction, LotQuery, StockBalance, StockBalanceQuery,
-    TransactionQuery, TxnType, query_field,
+    ALLOCATION_PREVIEW_MAX_LINES, AllocationPreview, AllocationPreviewLine,
+    AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery, PreviewAllocation,
+    StockBalance, StockBalanceQuery, TransactionQuery, TxnType, query_field,
 };
 use hammer_shared::pagination::{Page, PageRequest};
 use hammer_shared::{Id, permission};
@@ -26,7 +29,11 @@ use time::macros::format_description;
 
 use crate::CoreError;
 use crate::auth::AuthContext;
-use crate::inventory::{GOODS, qty4};
+use crate::inventory::{
+    GOODS, PreviewLine, PreviewLot, normalize_lot_no, preview_allocations, qty4,
+};
+use crate::record_lines::LineError;
+use crate::stock_adjustments::MSG_LOT_NOT_FOUND;
 
 /// 商品不存在或已刪除時的錯誤訊息。
 pub const PRODUCT_NOT_FOUND: &str = "找不到此商品";
@@ -265,6 +272,223 @@ pub async fn list_transactions(
         .map(to_transaction)
         .collect::<Result<_, _>>()?;
     Ok(Page::new(items, total_of(total), page))
+}
+
+/// 建議批號：商品不存在或已刪除。
+pub const MSG_PREVIEW_PRODUCT: &str = "商品不存在";
+/// 建議批號：列數不在 1–200。
+pub const MSG_PREVIEW_LINES: &str = "明細必須有 1 到 200 列";
+const MSG_REQUIRED: &str = "此欄位為必填";
+const MSG_ID_FORMAT: &str = "不是有效的 id";
+const MSG_QTY_FORMAT: &str = "必須是數字";
+const MSG_QTY_SCALE: &str = "最多 4 位小數";
+const MSG_QTY_POSITIVE: &str = "數量必須大於 0";
+
+/// 解析後的一列。
+struct ParsedLine {
+    product_id: Id,
+    qty: Decimal,
+    lot_no: Option<String>,
+}
+
+fn preview_error(index: usize, field: &str, message: impl Into<String>) -> LineError {
+    // detail_key 為空字串：API 回應為 null（不屬於明細子表）
+    LineError::field("", index, field, message)
+}
+
+/// 解析 request 的一列；格式錯誤時回傳該列的所有錯誤。
+fn parse_preview_line(
+    index: usize,
+    line: &hammer_shared::inventory::AllocationPreviewLineInput,
+) -> Result<ParsedLine, Vec<LineError>> {
+    let mut errors = Vec::new();
+    let product_id = match non_empty(line.product_id.as_deref()) {
+        None => {
+            errors.push(preview_error(index, "product_id", MSG_REQUIRED));
+            None
+        }
+        Some(s) => match Id::parse_str(s) {
+            Ok(id) => Some(id),
+            Err(_) => {
+                errors.push(preview_error(index, "product_id", MSG_ID_FORMAT));
+                None
+            }
+        },
+    };
+    let qty = match non_empty(line.qty.as_deref()) {
+        None => {
+            errors.push(preview_error(index, "qty", MSG_REQUIRED));
+            None
+        }
+        Some(s) => match Decimal::from_str(s) {
+            Err(_) => {
+                errors.push(preview_error(index, "qty", MSG_QTY_FORMAT));
+                None
+            }
+            Ok(q) if q.normalize().scale() > 4 => {
+                errors.push(preview_error(index, "qty", MSG_QTY_SCALE));
+                None
+            }
+            Ok(q) if q <= Decimal::ZERO => {
+                errors.push(preview_error(index, "qty", MSG_QTY_POSITIVE));
+                None
+            }
+            Ok(q) => Some(q),
+        },
+    };
+    let lot_no = match line.lot_no.as_deref().map(normalize_lot_no) {
+        None | Some(Ok(None)) => None,
+        Some(Ok(Some(no))) => Some(no),
+        Some(Err(message)) => {
+            errors.push(preview_error(index, "lot_no", message));
+            None
+        }
+    };
+    match (product_id, qty) {
+        (Some(product_id), Some(qty)) if errors.is_empty() => Ok(ParsedLine {
+            product_id,
+            qty,
+            lot_no,
+        }),
+        _ => Err(errors),
+    }
+}
+
+fn invalid_lines(lines: Vec<LineError>) -> CoreError {
+    CoreError::InvalidLines {
+        fields: Vec::new(),
+        lines,
+    }
+}
+
+/// 出貨的建議批號（`POST /api/v1/inventory/allocation-preview`）。需要 `record.read`。
+///
+/// 只試算：不鎖定批號、不寫入任何資料、不考慮其他草稿；分配邏輯與出貨過帳共用
+/// （[`crate::inventory::preview_allocations`]、[`crate::inventory::take_fifo`]）。
+///
+/// - 列數不是 1–200、格式錯誤、商品不存在或已刪除（`product_id`「商品不存在」）、批號找不到
+///   （`lot_no`「找不到此批號」）→ [`CoreError::InvalidLines`]（`detail_key` 為 `null`）
+/// - 庫存不足不是錯誤：回傳能分配的部分與 `shortage`；`service` 商品的 `allocations` 為空陣列
+pub async fn allocation_preview(
+    pool: &PgPool,
+    ctx: &AuthContext,
+    req: &AllocationPreviewRequest,
+) -> Result<AllocationPreview, CoreError> {
+    ctx.require(permission::RECORD_READ)?;
+    if req.lines.is_empty() || req.lines.len() > ALLOCATION_PREVIEW_MAX_LINES {
+        return Err(invalid_lines(vec![LineError::detail(
+            "",
+            MSG_PREVIEW_LINES,
+        )]));
+    }
+    let mut errors = Vec::new();
+    let mut parsed = Vec::with_capacity(req.lines.len());
+    for (index, line) in req.lines.iter().enumerate() {
+        match parse_preview_line(index, line) {
+            Ok(p) => parsed.push(p),
+            Err(e) => errors.extend(e),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(invalid_lines(errors));
+    }
+
+    let mut conn = pool.acquire().await.map_err(hammer_db::DbError::from)?;
+    let product_ids: Vec<Id> = parsed
+        .iter()
+        .map(|l| l.product_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let products: BTreeMap<Id, String> = db::find_products(&mut *conn, &product_ids)
+        .await?
+        .into_iter()
+        .filter(|p| !p.deleted)
+        .map(|p| (p.id, p.product_type))
+        .collect();
+    let mut lot_ids = Vec::with_capacity(parsed.len());
+    for (index, line) in parsed.iter().enumerate() {
+        let Some(product_type) = products.get(&line.product_id) else {
+            errors.push(preview_error(index, "product_id", MSG_PREVIEW_PRODUCT));
+            lot_ids.push(None);
+            continue;
+        };
+        let lot_id = match (&line.lot_no, product_type == GOODS) {
+            (Some(lot_no), true) => {
+                match db::find_lot_by_no(&mut *conn, line.product_id, lot_no).await? {
+                    Some(lot) => Some(lot.id),
+                    None => {
+                        errors.push(preview_error(index, "lot_no", MSG_LOT_NOT_FOUND));
+                        None
+                    }
+                }
+            }
+            // 服務類商品沒有庫存，忽略批號
+            _ => None,
+        };
+        lot_ids.push(lot_id);
+    }
+    if !errors.is_empty() {
+        return Err(invalid_lines(errors));
+    }
+
+    let lines: Vec<PreviewLine> = parsed
+        .iter()
+        .zip(&lot_ids)
+        .map(|(l, lot_id)| PreviewLine {
+            product_id: l.product_id,
+            is_goods: products.get(&l.product_id).is_some_and(|t| t == GOODS),
+            qty: l.qty,
+            lot_id: *lot_id,
+        })
+        .collect();
+    let fifo_products: Vec<Id> = lines
+        .iter()
+        .filter(|l| l.is_goods && l.lot_id.is_none())
+        .map(|l| l.product_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let explicit: Vec<Id> = lot_ids.iter().flatten().copied().collect();
+    let rows = db::list_lots_for_preview(&mut *conn, &explicit, &fifo_products).await?;
+    let lots: Vec<PreviewLot> = rows
+        .iter()
+        .map(|r| PreviewLot {
+            id: r.id,
+            product_id: r.product_id,
+            received_date: r.received_date,
+            qty_remaining: r.qty_remaining,
+        })
+        .collect();
+    let by_id: BTreeMap<Id, &hammer_db::inventory::LotRow> =
+        rows.iter().map(|r| (r.id, r)).collect();
+
+    let results = preview_allocations(&lines, &lots);
+    let mut out = Vec::with_capacity(lines.len());
+    for (index, (line, (taken, shortage))) in lines.iter().zip(results).enumerate() {
+        let mut allocations = Vec::with_capacity(taken.len());
+        for (lot_id, qty) in taken {
+            let lot = by_id
+                .get(&lot_id)
+                .ok_or_else(|| CoreError::Internal(format!("批號 {lot_id} 沒有讀取")))?;
+            allocations.push(PreviewAllocation {
+                lot_id,
+                lot_no: lot.lot_no.clone(),
+                received_date: lot.received_date,
+                qty: qty4(qty),
+                unit_cost_twd: qty4(lot.unit_cost_twd),
+            });
+        }
+        out.push(AllocationPreviewLine {
+            index: u32::try_from(index).map_err(|_| CoreError::Internal("列數過多".into()))?,
+            product_id: line.product_id,
+            product_type: products.get(&line.product_id).cloned().unwrap_or_default(),
+            qty: qty4(line.qty),
+            allocations,
+            shortage: qty4(shortage),
+        });
+    }
+    Ok(AllocationPreview { lines: out })
 }
 
 #[cfg(test)]

@@ -37,7 +37,8 @@ pub const MSG_DUPLICATE_VALUE: &str = "此值與其他明細重複";
 /// 一個明細的錯誤。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineError {
-    /// 明細子表的代碼（request 中 `lines` 的鍵）。
+    /// 明細子表的代碼（request 中 `lines` 的鍵）。空字串表示不屬於明細子表（例如建議批號 API 的
+    /// `lines`），API 回應為 `null`。
     pub detail_key: String,
     /// 該列在 request 陣列中的位置（從 0 開始）；不屬於某一列（例如明細子表不存在）時為 `None`。
     pub index: Option<usize>,
