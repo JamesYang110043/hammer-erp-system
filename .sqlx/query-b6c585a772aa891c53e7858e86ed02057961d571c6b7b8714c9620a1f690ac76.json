@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE sales_order_lines\n        SET shipped_qty = shipped_qty + $2, updated_by = $3, version = version + 1\n        WHERE id = $1 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Numeric",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b6c585a772aa891c53e7858e86ed02057961d571c6b7b8714c9620a1f690ac76"
+}

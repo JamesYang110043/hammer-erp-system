@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, sort_order, product_id, qty, unit_price, discount_rate, shipped_qty\n        FROM sales_order_lines\n        WHERE sales_order_id = $1 AND deleted_at IS NULL\n        ORDER BY sort_order, id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sales_order_lines",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "sort_order",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "sales_order_lines",
+            "name": "sort_order"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "product_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sales_order_lines",
+            "name": "product_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "qty",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sales_order_lines",
+            "name": "qty"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "unit_price",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sales_order_lines",
+            "name": "unit_price"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "discount_rate",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sales_order_lines",
+            "name": "discount_rate"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "shipped_qty",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sales_order_lines",
+            "name": "shipped_qty"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "20afa4d936d7a4917bd503e239a29308b140bdb2c6ed0715e390b55f0632ccee"
+}

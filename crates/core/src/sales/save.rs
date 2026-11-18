@@ -1,17 +1,17 @@
 //! 銷貨單據存檔時由伺服器處理的部分（docs/architecture.md §8.9「金額與稅額」「存檔時的檢查」）。由
 //! [`crate::records`] 在新增、修改時依序呼叫：
 //!
-//! 1. [`prefill`]（只有新增，欄位驗證之前）：沒有帶 `tax_type`、欄位定義也沒有 `default_value` 時，明細
-//!    商品的稅別全部相同 → 帶入該值，否則 `taxable`
+//! 1. [`prefill`]（只有新增，欄位驗證之前）：沒有帶 `tax_type`、欄位定義也沒有 `default_value` 時，
+//!    出貨單有 `sales_order_id` → 帶入訂單的稅別；否則明細商品的稅別全部相同 → 帶入該值，否則 `taxable`
 //! 2. [`check_line_data`]（每一列明細，欄位驗證之後）：`qty > 0`、`unit_price ≥ 0`、
-//!    `0 ≤ discount_rate ≤ 1`
+//!    `0 ≤ discount_rate ≤ 1`；出貨明細的批號去除前後空白（空字串視為留空）、不可有控制字元
 //! 3. [`apply_amounts`]（全部驗證通過之後）：依明細重新計算 `amount`、`subtotal`、`tax_amount`、
 //!    `total`（[`super::amounts`]）
 //!
 //! 修改時 [`crate::records`] 一律帶入所有明細（[`recalculates_lines`]），所以只改表頭（例如稅別、含稅）
 //! 時也會重新計算明細金額。
 //!
-//! 目前只有訂單；出貨單、銷貨退回的金額計算在之後的 issue 加入（#148、#150）。
+//! 目前有訂單與出貨單；銷貨退回的金額計算在之後的 issue 加入（#150）。
 
 use std::collections::BTreeMap;
 
@@ -25,8 +25,9 @@ use hammer_shared::schema::FieldDefinition;
 use serde_json::{Map, Value};
 
 use super::amounts;
-use super::{SALES_ORDER, SALES_ORDER_LINE};
+use super::{SALES_ORDER, SALES_ORDER_LINE, SHIPMENT, SHIPMENT_LINE};
 use crate::CoreError;
+use crate::inventory::normalize_lot_no;
 use crate::purchasing::amounts::AMOUNT_SCALE;
 use crate::purchasing::save::{decimal_of, id_of, line_errors as qty_price_errors};
 use crate::record_data::FieldError;
@@ -42,6 +43,8 @@ const DEFAULT_PLACES: u32 = 0;
 pub(crate) const CUSTOMER_ID: &str = "customer_id";
 pub(crate) const TAX_TYPE: &str = "tax_type";
 pub(crate) const TAX_INCLUDED: &str = "tax_included";
+pub(crate) const SALES_ORDER_ID: &str = "sales_order_id";
+pub(crate) const LOT_NO: &str = "lot_no";
 const PRODUCT_ID: &str = "product_id";
 const QTY: &str = "qty";
 const UNIT_PRICE: &str = "unit_price";
@@ -60,10 +63,16 @@ pub struct SalesDocument {
     pub line_key: &'static str,
 }
 
-const PRICED: &[SalesDocument] = &[SalesDocument {
-    entity_key: SALES_ORDER,
-    line_key: SALES_ORDER_LINE,
-}];
+const PRICED: &[SalesDocument] = &[
+    SalesDocument {
+        entity_key: SALES_ORDER,
+        line_key: SALES_ORDER_LINE,
+    },
+    SalesDocument {
+        entity_key: SHIPMENT,
+        line_key: SHIPMENT_LINE,
+    },
+];
 
 /// `entity_key` 是否為有金額計算的銷貨單據。
 pub fn with_amounts(entity_key: &str) -> Option<&'static SalesDocument> {
@@ -101,6 +110,13 @@ pub(crate) async fn prefill(
     if !missing || has_default {
         return Ok(());
     }
+    if entity_key == SHIPMENT
+        && let Some(order_id) = id_of(input.get(SALES_ORDER_ID))
+        && let Some(order) = db::find_order_for_shipment(&mut *conn, order_id).await?
+    {
+        input.insert(TAX_TYPE.into(), Value::String(order.tax_type));
+        return Ok(());
+    }
     let mut ids: Vec<_> = lines
         .get(doc.line_key)
         .into_iter()
@@ -119,16 +135,34 @@ pub(crate) async fn prefill(
     Ok(())
 }
 
-/// 一列明細本身的檢查（欄位驗證之後）。不是銷貨單據的明細時為空。
-pub fn check_line_data(detail_key: &str, data: &Map<String, Value>) -> Vec<FieldError> {
+/// 一列明細本身的檢查（欄位驗證之後）；出貨明細的批號去除前後空白後寫回（空字串時移除）並檢查格式。
+/// 不是銷貨單據的明細時為空。
+pub fn check_line_data(detail_key: &str, data: &mut Map<String, Value>) -> Vec<FieldError> {
     if !priced_line(detail_key) {
         return Vec::new();
     }
-    line_errors(
+    let mut errors = line_errors(
         decimal_of(data.get(QTY)),
         decimal_of(data.get(UNIT_PRICE)),
         decimal_of(data.get(DISCOUNT_RATE)),
-    )
+    );
+    if detail_key == SHIPMENT_LINE
+        && let Some(Value::String(raw)) = data.get(LOT_NO)
+    {
+        match normalize_lot_no(raw) {
+            Ok(Some(lot_no)) => {
+                data.insert(LOT_NO.into(), Value::String(lot_no));
+            }
+            Ok(None) => {
+                data.remove(LOT_NO);
+            }
+            Err(message) => errors.push(FieldError {
+                field_key: LOT_NO.into(),
+                message,
+            }),
+        }
+    }
+    errors
 }
 
 /// `qty > 0`、`unit_price ≥ 0`、`0 ≤ discount_rate ≤ 1`；沒有值的不檢查（必填由欄位驗證處理）。
@@ -234,9 +268,28 @@ mod tests {
     #[test]
     fn line_data_checked_only_for_sales_lines() {
         let data = json!({ "qty": "0.0000", "unit_price": "1.0000", "discount_rate": "0" });
-        let data = data.as_object().unwrap();
-        assert_eq!(check_line_data(SALES_ORDER_LINE, data).len(), 1);
-        assert!(check_line_data("customer_contact", data).is_empty());
+        let mut data = data.as_object().unwrap().clone();
+        assert_eq!(check_line_data(SALES_ORDER_LINE, &mut data).len(), 1);
+        assert_eq!(check_line_data(SHIPMENT_LINE, &mut data).len(), 1);
+        assert!(check_line_data("customer_contact", &mut data).is_empty());
+    }
+
+    #[test]
+    fn shipment_lot_no_is_trimmed() {
+        let mut data = json!({ "qty": "1", "unit_price": "1", "lot_no": "  L-01 " })
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(check_line_data(SHIPMENT_LINE, &mut data).is_empty());
+        assert_eq!(data["lot_no"], "L-01");
+        data.insert("lot_no".into(), json!("   "));
+        assert!(check_line_data(SHIPMENT_LINE, &mut data).is_empty());
+        assert!(!data.contains_key("lot_no"));
+        data.insert("lot_no".into(), json!("L\u{7}"));
+        assert_eq!(
+            check_line_data(SHIPMENT_LINE, &mut data)[0].field_key,
+            "lot_no"
+        );
     }
 
     #[test]
@@ -256,9 +309,11 @@ mod tests {
     }
 
     #[test]
-    fn only_sales_orders_are_priced_for_now() {
+    fn orders_and_shipments_are_priced() {
         assert!(recalculates_lines(SALES_ORDER));
+        assert!(recalculates_lines(SHIPMENT));
         assert!(priced_line(SALES_ORDER_LINE));
+        assert!(priced_line(SHIPMENT_LINE));
         assert!(!recalculates_lines("purchase_order"));
         assert!(!recalculates_lines(super::super::SALES_RETURN));
     }

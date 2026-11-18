@@ -55,7 +55,7 @@ use crate::records::{
     Detail, commit, detail_lines, document_status, fetch_record, invalid_status,
     load_details_for_write, load_target_for_write, lock_record, record_audit,
 };
-use crate::sales::{SALES_ORDER, SalesOrderHandler};
+use crate::sales::{SALES_ORDER, SHIPMENT, SalesOrderHandler, ShipmentHandler};
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version};
 use crate::stock_adjustments::StockAdjustmentHandler;
 
@@ -197,6 +197,7 @@ impl DocumentHandlers {
             .register(GOODS_RECEIPT, GoodsReceiptHandler)
             .register(PURCHASE_RETURN, PurchaseReturnHandler)
             .register(SALES_ORDER, SalesOrderHandler)
+            .register(SHIPMENT, ShipmentHandler)
     }
 
     /// 註冊（或取代）資料類別 `entity_key` 的處理函式。
@@ -467,12 +468,13 @@ mod tests {
         assert!(handlers.get(GOODS_RECEIPT).is_some());
         assert!(handlers.get(PURCHASE_RETURN).is_some());
         assert!(handlers.get(SALES_ORDER).is_some());
+        assert!(handlers.get(SHIPMENT).is_some());
         assert!(handlers.get("customer").is_none());
         assert!(DocumentHandlers::empty().get(STOCK_ADJUSTMENT).is_none());
         assert_eq!(
             format!("{handlers:?}"),
             "{\"goods_receipt\", \"purchase_order\", \"purchase_return\", \"sales_order\", \
-             \"stock_adjustment\"}"
+             \"shipment\", \"stock_adjustment\"}"
         );
     }
 

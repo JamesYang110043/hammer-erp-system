@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, record_no, status, customer_id, tax_type,\n               closed_at IS NOT NULL AS \"closed_manually!\"\n        FROM sales_orders\n        WHERE id = $1 AND deleted_at IS NULL\n        FOR UPDATE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sales_orders",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "record_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sales_orders",
+            "name": "record_no"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sales_orders",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sales_orders",
+            "name": "customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "tax_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sales_orders",
+            "name": "tax_type"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "closed_manually!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "aab220c5f8fe7c090352450cff59eba1c01c922fedcd98cb1ec67bd5700b5a30"
+}
