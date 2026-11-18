@@ -13,6 +13,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   delete: '刪除',
   post: '過帳',
   void: '作廢',
+  confirm: '確認',
+  close: '結案',
   login: '登入',
   login_failed: '登入失敗',
   logout: '登出',

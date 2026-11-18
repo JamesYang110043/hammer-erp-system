@@ -8,6 +8,7 @@ import {
   availableAction,
   documentActionError,
   documentStatus,
+  documentStatuses,
   formatQty,
   isEditableDocument,
   isSystemDocument,
@@ -36,11 +37,23 @@ describe('documents', () => {
 
   it('status_and_available_action', () => {
     expect(documentStatus(adjustment('posted'))).toBe('posted');
-    expect(documentStatus({ data: { status: 'closed' } })).toBeUndefined();
+    expect(documentStatus({ data: { status: 'closed' } })).toBe('closed');
+    expect(documentStatus({ data: { status: 'partially_done' } })).toBeUndefined();
     expect(availableAction('draft')).toBe('post');
     expect(availableAction('posted')).toBe('void');
     expect(availableAction('void')).toBeUndefined();
     expect(availableAction(undefined)).toBeUndefined();
+  });
+
+  it('statuses_depend_on_document', () => {
+    expect(documentStatuses('stock_adjustment')).toEqual(['draft', 'posted', 'void']);
+    expect(documentStatuses('purchase_order')).toEqual([
+      'draft',
+      'confirmed',
+      'partially_received',
+      'closed',
+      'void',
+    ]);
   });
 
   it('formats_quantities', () => {

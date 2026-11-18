@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT deleted_at IS NOT NULL AS \"deleted!\"\n        FROM suppliers\n        WHERE id = $1\n        FOR SHARE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "deleted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f0f084e56a98b1764faa76d1ec88e44b799da0109e0e961c46a90ef063b3d2c4"
+}

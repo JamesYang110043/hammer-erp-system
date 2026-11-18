@@ -99,6 +99,7 @@ use crate::formulas::{
 use crate::master_data;
 use crate::numbering::{NumberingPattern, numbering_date};
 use crate::purchasing;
+use crate::purchasing::save::EXCHANGE_RATE;
 use crate::record_data::{FieldError, WriteMode, normalize_record_data};
 use crate::record_lines::{
     LineError, LineFiles, LineTarget, audit_key, audit_value, duplicate_attachments,
@@ -267,7 +268,8 @@ pub async fn create_record(
     let (entity, fields, store) = load_target_for_write(&mut tx, entity_key).await?;
     let details = load_details_for_write(&mut tx, &entity).await?;
     let formulas = formulas_of(&fields, &details);
-    let input = document_input(&store, &fields, &req.data);
+    let mut input = document_input(&store, &fields, &req.data).into_owned();
+    purchasing::save::prefill(&mut tx, &entity.key, &fields, &mut input).await?;
     let master = normalize_record_data(&fields, &input, WriteMode::Create);
     // 系統單據新增時一律是草稿（§7.1「系統單據」）
     let master = master.map(|mut data| {
@@ -280,6 +282,14 @@ pub async fn create_record(
         data
     });
     let master = system_rules(&store, &entity.key, master, None);
+    let master = purchasing::save::derive_currency(
+        &mut tx,
+        &entity.key,
+        master,
+        None,
+        req.data.contains_key(EXCHANGE_RATE),
+    )
+    .await?;
     let mut line_errors = Vec::new();
     let mut lines =
         prepare_lines(&mut tx, &details, &req.lines, None, false, &mut line_errors).await?;
@@ -291,6 +301,7 @@ pub async fn create_record(
         purchase_return_rules(&mut tx, &entity.key, master, None, &mut lines).await?;
     line_errors.extend(return_errors);
     let mut data = validation_error(master, line_errors)?;
+    apply_amounts(&mut tx, &entity.key, &mut data, &mut lines).await?;
     check_relations(&mut tx, &fields, &data, None).await?;
     if let Store::Table(_) = store {
         master_data::check_references(&mut tx, &entity.key, None, &data, None).await?;
@@ -402,9 +413,17 @@ pub async fn update_record(
     let input = document_input(&store, &fields, &req.data);
     let master = normalize_record_data(&fields, &input, WriteMode::Update { existing });
     let master = system_rules(&store, &entity.key, master, Some(existing));
+    let master = purchasing::save::derive_currency(
+        &mut tx,
+        &entity.key,
+        master,
+        Some(existing),
+        req.data.contains_key(EXCHANGE_RATE),
+    )
+    .await?;
     let mut line_errors = Vec::new();
-    // 有公式時所有明細都要重算（主表的子表彙總也需要沒帶到的明細）
-    let recompute_all = !formulas.is_empty();
+    // 有公式時所有明細都要重算（主表的子表彙總也需要沒帶到的明細）；有金額計算的單據也是
+    let recompute_all = !formulas.is_empty() || purchasing::save::recalculates_lines(&entity.key);
     let mut lines = prepare_lines(
         &mut tx,
         &details,
@@ -431,6 +450,7 @@ pub async fn update_record(
         purchase_return_rules(&mut tx, &entity.key, master, Some(existing), &mut lines).await?;
     line_errors.extend(return_errors);
     let mut data = validation_error(master, line_errors)?;
+    apply_amounts(&mut tx, &entity.key, &mut data, &mut lines).await?;
     let formula_errors = compute_formulas(&mut tx, &formulas, &mut data, &mut lines, now).await?;
     let formula_errors = errors_to_json(&formula_errors);
     if data == *existing
@@ -1456,6 +1476,8 @@ async fn attach_documents(
                     posted_by: row.posted_by,
                     voided_at: row.voided_at,
                     voided_by: row.voided_by,
+                    closed_at: row.closed_at,
+                    closed_by: row.closed_by,
                 },
             )
         })
@@ -1937,6 +1959,7 @@ async fn prepare_line(
         if detail.entity.key == stock_adjustments::STOCK_ADJUSTMENT_LINE {
             errors.extend(stock_adjustments::check_line_data(&mut data));
         }
+        errors.extend(purchasing::save::check_line_data(&detail.entity.key, &data));
         if !errors.is_empty() {
             return Ok(Err(errors));
         }
@@ -2041,6 +2064,26 @@ async fn purchase_return_rules(
         .filter_map(|l| Some((l.index, l.data.as_object_mut()?)))
         .collect();
     purchasing::derive_return(tx, entity_key, master, existing, rows).await
+}
+
+/// 有金額計算的單據（[`purchasing::save::apply_amounts`]）：依所有明細重新計算明細金額與合計。修改時
+/// 所有明細都已列入 `lines`（[`purchasing::save::recalculates_lines`]）。
+async fn apply_amounts(
+    tx: &mut PgTransaction<'_>,
+    entity_key: &str,
+    data: &mut Map<String, Value>,
+    lines: &mut [DetailWrite<'_>],
+) -> Result<(), CoreError> {
+    let Some(doc) = purchasing::save::priced(entity_key) else {
+        return Ok(());
+    };
+    let rows: Vec<&mut Map<String, Value>> = lines
+        .iter_mut()
+        .filter(|d| d.detail.entity.key == doc.line_key)
+        .flat_map(|d| d.lines.iter_mut())
+        .filter_map(|l| l.data.as_object_mut())
+        .collect();
+    purchasing::save::apply_amounts(tx, entity_key, data, rows).await
 }
 
 /// 主表與有效明細子表的公式欄位（[`Formulas`]）。

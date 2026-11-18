@@ -32,6 +32,10 @@ pub const DELETE: &str = "delete";
 pub const POST: &str = "post";
 /// 單據作廢。
 pub const VOID: &str = "void";
+/// 採購單確認。
+pub const CONFIRM: &str = "confirm";
+/// 採購單手動結案。
+pub const CLOSE: &str = "close";
 /// 登入成功。
 pub const LOGIN: &str = "login";
 /// 登入失敗。
@@ -52,6 +56,8 @@ pub const ALL: &[&str] = &[
     DELETE,
     POST,
     VOID,
+    CONFIRM,
+    CLOSE,
     LOGIN,
     LOGIN_FAILED,
     LOGOUT,
@@ -143,7 +149,7 @@ mod tests {
     fn codes_are_unique() {
         let set: HashSet<_> = ALL.iter().collect();
         assert_eq!(set.len(), ALL.len());
-        assert_eq!(ALL.len(), 11);
+        assert_eq!(ALL.len(), 13);
         assert!(is_valid(RECALCULATE));
     }
 

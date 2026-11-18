@@ -1,10 +1,11 @@
 //! 系統單據主表的狀態與過帳、作廢資訊（docs/architecture.md §7.1「系統單據」、§8.2、§10「單據動作」）。
 //!
 //! 系統單據的主表（例如 `stock_adjustments`）除了通用資料 API 讀寫的欄位（[`crate::system_record`]），
-//! 另有 `status` 與不是欄位的 `posted_at`、`posted_by`、`voided_at`、`voided_by`：
+//! 另有 `status` 與不是欄位的 `posted_at`、`posted_by`、`voided_at`、`voided_by`（採購單另有
+//! `closed_at`、`closed_by`）：
 //!
-//! - [`find_states`]：讀取一批單據的狀態與過帳、作廢資訊（回應的 `document`）
-//! - [`mark_posted`]、[`mark_voided`]：過帳、作廢時更新狀態並遞增 `version`
+//! - [`find_states`]：讀取一批單據的狀態與過帳、作廢、結案資訊（回應的 `document`）
+//! - [`mark_status`]：過帳、確認、作廢、結案時更新狀態、寫入時間與人員並遞增 `version`
 //! - [`find_record_no`]：依資料表名稱與 id 讀取單號（含已刪除），供錯誤訊息指出是哪張單據
 //!
 //! 資料表名稱來自 [`SystemTable`]（已檢查過名稱），一律加上引號拼接；值以 bind 參數傳入。
@@ -28,9 +29,12 @@ pub struct DocumentStateRow {
     pub posted_by: Option<Uuid>,
     pub voided_at: Option<OffsetDateTime>,
     pub voided_by: Option<Uuid>,
+    /// 手動結案（只有採購單有這兩個欄位，其他單據為 `None`）。
+    pub closed_at: Option<OffsetDateTime>,
+    pub closed_by: Option<Uuid>,
 }
 
-/// `ids` 中未刪除的單據的狀態與過帳、作廢資訊（順序不固定）。
+/// `ids` 中未刪除的單據的狀態與過帳、作廢、結案資訊（順序不固定）。
 pub async fn find_states<'e>(
     executor: impl PgExecutor<'e>,
     table: &SystemTable,
@@ -44,10 +48,14 @@ pub async fn find_states<'e>(
 }
 
 fn states_query(table: &SystemTable, ids: &[Uuid]) -> QueryBuilder<Postgres> {
-    let mut qb =
-        QueryBuilder::new("SELECT id, status, posted_at, posted_by, voided_at, voided_by FROM \"");
+    // closed_at、closed_by 只有採購單有：以 to_jsonb 讀取，沒有這兩個欄位的資料表為 NULL
+    let mut qb = QueryBuilder::new(
+        "SELECT id, status, posted_at, posted_by, voided_at, voided_by, \
+         (to_jsonb(t) ->> 'closed_at')::timestamptz AS closed_at, \
+         (to_jsonb(t) ->> 'closed_by')::uuid AS closed_by FROM \"",
+    );
     qb.push(table.name())
-        .push("\" WHERE id = ANY(")
+        .push("\" t WHERE id = ANY(")
         .push_bind(ids.to_vec())
         .push(") AND deleted_at IS NULL");
     qb
@@ -59,46 +67,59 @@ pub struct StatusChange {
     pub id: Uuid,
     /// 修改前的版本號（§9.4）。
     pub version: i32,
-    /// 過帳或作廢的時間。
+    /// 動作的時間。
     pub at: OffsetDateTime,
-    /// 過帳或作廢的人員。
+    /// 執行動作的人員。
     pub by: Uuid,
 }
 
-/// 過帳：`draft` → `posted`，寫入 `posted_at`、`posted_by`，遞增 `version`。版本號不符或狀態不是
-/// `draft` 時影響 0 筆。
-pub async fn mark_posted<'e>(
+/// 狀態變更時寫入時間與人員的欄位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stamp {
+    /// `posted_at`、`posted_by`（過帳；採購單的確認）。
+    Posted,
+    /// `voided_at`、`voided_by`（作廢）。
+    Voided,
+    /// `closed_at`、`closed_by`（採購單的手動結案）。
+    Closed,
+}
+
+impl Stamp {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Posted => "posted",
+            Self::Voided => "voided",
+            Self::Closed => "closed",
+        }
+    }
+}
+
+/// 狀態從 `from` 之一變為 `to`，寫入 `stamp` 的時間與人員，遞增 `version`。版本號不符或狀態不在 `from`
+/// 中時影響 0 筆。`from`、`to` 為狀態的值（例如 `draft`、`posted`）。
+pub async fn mark_status<'e>(
     executor: impl PgExecutor<'e>,
     table: &SystemTable,
     change: &StatusChange,
+    from: &[&str],
+    to: &str,
+    stamp: Stamp,
 ) -> Result<PgQueryResult, DbError> {
-    let mut qb = status_query(table, change, "posted", "posted", "draft");
+    let mut qb = status_query(table, change, from, to, stamp);
     Ok(qb.build().execute(executor).await?)
 }
 
-/// 作廢：`posted` → `void`，寫入 `voided_at`、`voided_by`，遞增 `version`。版本號不符或狀態不是
-/// `posted` 時影響 0 筆。
-pub async fn mark_voided<'e>(
-    executor: impl PgExecutor<'e>,
-    table: &SystemTable,
-    change: &StatusChange,
-) -> Result<PgQueryResult, DbError> {
-    let mut qb = status_query(table, change, "void", "voided", "posted");
-    Ok(qb.build().execute(executor).await?)
-}
-
-/// `prefix` 為 `posted` / `voided`（常數，不是使用者輸入）。
 fn status_query(
     table: &SystemTable,
     change: &StatusChange,
-    to: &'static str,
-    prefix: &'static str,
-    from: &'static str,
+    from: &[&str],
+    to: &str,
+    stamp: Stamp,
 ) -> QueryBuilder<Postgres> {
+    let prefix = stamp.prefix();
     let mut qb = QueryBuilder::new("UPDATE \"");
     qb.push(table.name())
         .push("\" SET status = ")
-        .push_bind(to)
+        .push_bind(to.to_owned())
         .push(", ")
         .push(prefix)
         .push("_at = ")
@@ -113,9 +134,9 @@ fn status_query(
         .push_bind(change.id)
         .push(" AND version = ")
         .push_bind(change.version)
-        .push(" AND status = ")
-        .push_bind(from)
-        .push(" AND deleted_at IS NULL");
+        .push(" AND status = ANY(")
+        .push_bind(from.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+        .push(") AND deleted_at IS NULL");
     qb
 }
 
@@ -180,21 +201,31 @@ mod tests {
         let qb = states_query(&table(), &[Uuid::nil()]);
         assert_eq!(
             qb.sql().as_str(),
-            "SELECT id, status, posted_at, posted_by, voided_at, voided_by \
-             FROM \"stock_adjustments\" WHERE id = ANY($1) AND deleted_at IS NULL"
+            "SELECT id, status, posted_at, posted_by, voided_at, voided_by, \
+             (to_jsonb(t) ->> 'closed_at')::timestamptz AS closed_at, \
+             (to_jsonb(t) ->> 'closed_by')::uuid AS closed_by \
+             FROM \"stock_adjustments\" t WHERE id = ANY($1) AND deleted_at IS NULL"
         );
     }
 
     #[test]
-    fn post_and_void_check_version_and_status() {
-        let qb = status_query(&table(), &change(), "posted", "posted", "draft");
+    fn status_change_checks_version_and_status() {
+        let qb = status_query(&table(), &change(), &["draft"], "posted", Stamp::Posted);
         assert_eq!(
             qb.sql().as_str(),
             "UPDATE \"stock_adjustments\" SET status = $1, posted_at = $2, posted_by = $3, \
              updated_by = $4, version = version + 1 WHERE id = $5 AND version = $6 \
-             AND status = $7 AND deleted_at IS NULL"
+             AND status = ANY($7) AND deleted_at IS NULL"
         );
-        let qb = status_query(&table(), &change(), "void", "voided", "posted");
+        let qb = status_query(&table(), &change(), &["posted"], "void", Stamp::Voided);
         assert!(qb.sql().as_str().contains("voided_at = $2, voided_by = $3"));
+        let qb = status_query(
+            &table(),
+            &change(),
+            &["confirmed", "partially_received"],
+            "closed",
+            Stamp::Closed,
+        );
+        assert!(qb.sql().as_str().contains("closed_at = $2, closed_by = $3"));
     }
 }

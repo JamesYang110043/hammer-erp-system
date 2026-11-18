@@ -171,3 +171,49 @@ pub async fn void(
     .await?;
     Ok(Json(record))
 }
+
+/// `POST /api/v1/entities/{key}/records/{id}/confirm`（只有採購單）
+pub async fn confirm(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    Path((key, id)): Path<(String, Id)>,
+    Json(req): Json<DocumentActionRequest>,
+) -> Result<Json<Record>, AppError> {
+    let info = request_client_info(&headers);
+    let record = documents::confirm_document(
+        &state.pool,
+        &state.documents,
+        &auth,
+        &key,
+        id,
+        &req,
+        info.as_deref(),
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(Json(record))
+}
+
+/// `POST /api/v1/entities/{key}/records/{id}/close`（只有採購單）
+pub async fn close(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    Path((key, id)): Path<(String, Id)>,
+    Json(req): Json<DocumentActionRequest>,
+) -> Result<Json<Record>, AppError> {
+    let info = request_client_info(&headers);
+    let record = documents::close_document(
+        &state.pool,
+        &state.documents,
+        &auth,
+        &key,
+        id,
+        &req,
+        info.as_deref(),
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(Json(record))
+}

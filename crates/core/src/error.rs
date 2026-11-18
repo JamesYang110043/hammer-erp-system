@@ -99,16 +99,20 @@ pub enum CoreError {
     #[error("還有 {} 個公式欄位引用，請先修改或停用這些公式欄位", .0.len())]
     FormulaReferenced(Vec<RelationReference>),
 
-    /// 刪除基本資料時，還有其他資料使用它（§7.2，[`crate::master_data`]）：單位、分類還有未刪除的商品
-    /// 使用，分類還有子分類，或商品已有庫存異動。`products`、`children`、`transactions` 為使用中的商品數、
-    /// 子分類數、庫存異動筆數（至少一個大於 0）。API 回應為 `VALIDATION`，`details` 為
-    /// `{ "fields": [], "in_use_count": 3, "child_count": 1, "transaction_count": 12 }`（只列出大於 0 的數量）。
+    /// 刪除基本資料時，還有其他資料使用它（§7.2、§8.8，[`crate::master_data`]）：單位、分類還有未刪除的
+    /// 商品使用，分類還有子分類，商品已有庫存異動或未結案的採購單，或廠商已有進貨單據。`products`、
+    /// `children`、`transactions`、`documents`、`open_orders` 為使用中的商品數、子分類數、庫存異動筆數、
+    /// 採購或進貨單據張數、未結案的採購單張數（至少一個大於 0）。API 回應為 `VALIDATION`，`details` 為
+    /// `{ "fields": [], "in_use_count": 3, "child_count": 1, "transaction_count": 12, "document_count": 3,
+    /// "open_purchase_order_count": 2 }`（只列出大於 0 的數量）。
     #[error("{message}")]
     RecordInUse {
         message: String,
         products: i64,
         children: i64,
         transactions: i64,
+        documents: i64,
+        open_orders: i64,
     },
 
     /// 單據目前的狀態不允許此操作（§7.1「系統單據」、§10「單據動作」）：修改、刪除非草稿，過帳非草稿，
@@ -346,6 +350,8 @@ impl From<CoreError> for ApiError {
             products,
             children,
             transactions,
+            documents,
+            open_orders,
             ..
         } = &err
         {
@@ -358,6 +364,12 @@ impl From<CoreError> for ApiError {
             }
             if *transactions > 0 {
                 details["transaction_count"] = serde_json::json!(transactions);
+            }
+            if *documents > 0 {
+                details["document_count"] = serde_json::json!(documents);
+            }
+            if *open_orders > 0 {
+                details["open_purchase_order_count"] = serde_json::json!(open_orders);
             }
             ApiError::new(code, err.to_string()).with_details(details)
         } else if let CoreError::InvalidStatus { status, .. } = &err {
@@ -446,6 +458,8 @@ mod tests {
             products: 3,
             children: 0,
             transactions: 0,
+            documents: 0,
+            open_orders: 0,
         };
         assert_eq!(err.code(), ErrorCode::Validation);
         let api: ApiError = err.into();
@@ -460,6 +474,8 @@ mod tests {
             products: 0,
             children: 2,
             transactions: 0,
+            documents: 0,
+            open_orders: 0,
         }
         .into();
         assert_eq!(
@@ -472,11 +488,29 @@ mod tests {
             products: 0,
             children: 0,
             transactions: 12,
+            documents: 0,
+            open_orders: 0,
         }
         .into();
         assert_eq!(
             api.details,
             Some(serde_json::json!({ "fields": [], "transaction_count": 12 }))
+        );
+
+        let api: ApiError = CoreError::RecordInUse {
+            message: String::new(),
+            products: 0,
+            children: 0,
+            transactions: 0,
+            documents: 3,
+            open_orders: 2,
+        }
+        .into();
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({
+                "fields": [], "document_count": 3, "open_purchase_order_count": 2,
+            }))
         );
     }
 

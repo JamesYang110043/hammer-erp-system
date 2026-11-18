@@ -45,36 +45,53 @@ use crate::decimal::Decimal;
 /// 單據狀態的系統欄位代碼（`data.status`）。
 pub const STATUS_FIELD: &str = "status";
 
-/// 單據的狀態（§8.2）。JSON 中為 `draft` / `posted` / `void`。
+/// 單據的狀態（§8.2）。
+///
+/// 影響庫存的單據（盤點調整單、進貨單、進貨退回）為 `draft` / `posted` / `void`；採購單為 `draft` /
+/// `confirmed` / `partially_received` / `closed` / `void`（§8.8「採購單的狀態」）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum DocumentStatus {
-    /// 草稿：可以修改、刪除、過帳。
+    /// 草稿：可以修改、刪除、過帳（採購單：確認）。
     Draft,
     /// 已過帳：不可修改、刪除；可以作廢。
     Posted,
+    /// 已確認（採購單）：不可修改、刪除；可以結案、作廢，等待進貨。
+    Confirmed,
+    /// 部分進貨（採購單）：已有進貨，可以結案。
+    PartiallyReceived,
+    /// 已結案（採購單）：全部進貨或手動結案。
+    Closed,
     /// 已作廢：不可再做任何操作。
     Void,
 }
 
 impl DocumentStatus {
+    /// 所有狀態。
+    pub const ALL: [Self; 6] = [
+        Self::Draft,
+        Self::Posted,
+        Self::Confirmed,
+        Self::PartiallyReceived,
+        Self::Closed,
+        Self::Void,
+    ];
+
     /// 資料庫與 JSON 中的值。
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Draft => "draft",
             Self::Posted => "posted",
+            Self::Confirmed => "confirmed",
+            Self::PartiallyReceived => "partially_received",
+            Self::Closed => "closed",
             Self::Void => "void",
         }
     }
 
     /// 由資料庫的值解析；不認得的值回傳 `None`。
     pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "draft" => Some(Self::Draft),
-            "posted" => Some(Self::Posted),
-            "void" => Some(Self::Void),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|status| status.as_str() == s)
     }
 
     /// 顯示名稱（繁體中文）。
@@ -82,43 +99,40 @@ impl DocumentStatus {
         match self {
             Self::Draft => "草稿",
             Self::Posted => "已過帳",
+            Self::Confirmed => "已確認",
+            Self::PartiallyReceived => "部分進貨",
+            Self::Closed => "已結案",
             Self::Void => "已作廢",
         }
     }
 }
 
-/// 單據動作（§10「單據動作」）。
+/// 單據動作（§10「單據動作」）。各單據支援哪些動作、前後的狀態由 `hammer_core::documents` 依資料類別
+/// 決定：一般單據為過帳（`draft` → `posted`）、作廢（`posted` → `void`）；採購單為確認
+/// （`draft` → `confirmed`）、結案（`confirmed` / `partially_received` → `closed`）、作廢
+/// （`confirmed` → `void`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum DocumentAction {
-    /// 過帳：`draft` → `posted`。
+    /// 過帳。
     Post,
-    /// 作廢：`posted` → `void`。
+    /// 作廢。
     Void,
+    /// 確認（只有採購單）。
+    Confirm,
+    /// 手動結案（只有採購單）。
+    Close,
 }
 
 impl DocumentAction {
-    /// 端點路徑的最後一段，也是操作紀錄的 `action`（[`crate::audit::POST`]、[`crate::audit::VOID`]）。
+    /// 端點路徑的最後一段，也是操作紀錄的 `action`（[`crate::audit::POST`]、[`crate::audit::VOID`]、
+    /// [`crate::audit::CONFIRM`]、[`crate::audit::CLOSE`]）。
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Post => "post",
             Self::Void => "void",
-        }
-    }
-
-    /// 執行此動作前必須是的狀態。
-    pub fn from_status(self) -> DocumentStatus {
-        match self {
-            Self::Post => DocumentStatus::Draft,
-            Self::Void => DocumentStatus::Posted,
-        }
-    }
-
-    /// 執行此動作後的狀態。
-    pub fn to_status(self) -> DocumentStatus {
-        match self {
-            Self::Post => DocumentStatus::Posted,
-            Self::Void => DocumentStatus::Void,
+            Self::Confirm => "confirm",
+            Self::Close => "close",
         }
     }
 
@@ -127,6 +141,8 @@ impl DocumentAction {
         match self {
             Self::Post => "過帳",
             Self::Void => "作廢",
+            Self::Confirm => "確認",
+            Self::Close => "結案",
         }
     }
 }
@@ -140,7 +156,7 @@ pub struct DocumentActionRequest {
 }
 
 /// 單據主表的過帳、作廢資訊（[`Record::document`](crate::record::Record::document)）。
-/// 這些值不是欄位，不出現在 `data`。
+/// 這些值不是欄位，不出現在 `data`。採購單的 `posted_at`、`posted_by` 是確認的時間與人員。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct DocumentInfo {
     /// 過帳時間（RFC 3339）；草稿為 `null`。
@@ -155,6 +171,12 @@ pub struct DocumentInfo {
     pub voided_at: Option<OffsetDateTime>,
     /// 作廢人員。
     pub voided_by: Option<Id>,
+    /// 手動結案時間（RFC 3339）；只有採購單的手動結案會寫入，其他為 `null`（自動結案也是 `null`）。
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    #[specta(type = Option<String>)]
+    pub closed_at: Option<OffsetDateTime>,
+    /// 手動結案人員。
+    pub closed_by: Option<Id>,
 }
 
 /// `INVALID_STATUS` 的 `details`：單據目前的狀態。
@@ -237,31 +259,34 @@ mod tests {
 
     #[test]
     fn status_round_trips() {
-        for status in [
-            DocumentStatus::Draft,
-            DocumentStatus::Posted,
-            DocumentStatus::Void,
-        ] {
+        for status in DocumentStatus::ALL {
             assert_eq!(DocumentStatus::parse(status.as_str()), Some(status));
             assert_eq!(
                 serde_json::to_value(status).unwrap(),
                 json!(status.as_str())
             );
         }
-        assert_eq!(DocumentStatus::parse("closed"), None);
+        assert_eq!(DocumentStatus::parse("partially_done"), None);
+        assert_eq!(
+            DocumentStatus::parse("partially_received"),
+            Some(DocumentStatus::PartiallyReceived)
+        );
+        assert_eq!(DocumentStatus::Confirmed.label(), "已確認");
+        assert_eq!(DocumentStatus::PartiallyReceived.label(), "部分進貨");
+        assert_eq!(DocumentStatus::Closed.label(), "已結案");
         assert_eq!(DocumentStatus::Posted.label(), "已過帳");
         assert_eq!(DocumentStatus::Void.label(), "已作廢");
         assert_eq!(DocumentStatus::Draft.label(), "草稿");
     }
 
     #[test]
-    fn actions_move_between_statuses() {
-        assert_eq!(DocumentAction::Post.from_status(), DocumentStatus::Draft);
-        assert_eq!(DocumentAction::Post.to_status(), DocumentStatus::Posted);
-        assert_eq!(DocumentAction::Void.from_status(), DocumentStatus::Posted);
-        assert_eq!(DocumentAction::Void.to_status(), DocumentStatus::Void);
+    fn actions_are_audit_actions() {
         assert_eq!(DocumentAction::Post.as_str(), crate::audit::POST);
         assert_eq!(DocumentAction::Void.as_str(), crate::audit::VOID);
+        assert_eq!(DocumentAction::Confirm.as_str(), crate::audit::CONFIRM);
+        assert_eq!(DocumentAction::Close.as_str(), crate::audit::CLOSE);
+        assert_eq!(DocumentAction::Confirm.label(), "確認");
+        assert_eq!(DocumentAction::Close.label(), "結案");
         assert_eq!(DocumentAction::Post.label(), "過帳");
         assert_eq!(DocumentAction::Void.label(), "作廢");
     }
@@ -281,7 +306,10 @@ mod tests {
     fn document_info_serializes_nulls() {
         assert_eq!(
             serde_json::to_value(DocumentInfo::default()).unwrap(),
-            json!({ "posted_at": null, "posted_by": null, "voided_at": null, "voided_by": null })
+            json!({
+                "posted_at": null, "posted_by": null, "voided_at": null, "voided_by": null,
+                "closed_at": null, "closed_by": null,
+            })
         );
         let at = time::macros::datetime!(2026-11-18 02:03:04 UTC);
         let info = DocumentInfo {

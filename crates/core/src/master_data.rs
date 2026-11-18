@@ -12,6 +12,10 @@
 //! - 商品被庫存引用時的限制（§7.2）：有庫存異動（`inventory_transactions` 有該商品的資料，不論來源單據
 //!   之後是否作廢）的商品不可刪除、不可從 `goods` 改為 `service`、不可修改 `unit_id`。修改與刪除都在
 //!   以 `FOR UPDATE` 鎖定商品之後檢查（過帳以 `FOR SHARE` 鎖定商品，兩者互斥）
+//! - 廠商、商品被進貨單據引用時的限制（§8.8）：有任何未刪除的採購單、進貨單、進貨退回（不論狀態）的
+//!   廠商不可刪除；明細被未結案的採購單（`confirmed`、`partially_received`）引用的商品不可刪除、不可從
+//!   `goods` 改為 `service`、不可修改 `unit_id`。同樣在 `FOR UPDATE` 鎖定之後檢查（存檔、確認採購單以
+//!   `FOR SHARE` 鎖定廠商、商品）
 //! - [`check_lines`]（純邏輯）：系統明細子表（聯絡人）一起存檔的所有明細之間的規則——同一個客戶或廠商
 //!   最多一位主要聯絡人（`is_primary = true`）。聯絡人每一列的系統欄位限制也由 [`check_data`] 檢查
 //!
@@ -22,12 +26,13 @@
 //! 修改資料時只檢查值有變動的欄位，避免規則加上之前存入的資料在修改其他欄位時被擋下（與
 //! `default_currency_code`「只在值有變動時檢查」相同，§7.2）。
 //!
-//! 不做：統一編號檢查碼驗證；客戶、廠商被單據引用時的刪除限制（M4）。
+//! 不做：統一編號檢查碼驗證；客戶被單據引用時的刪除限制（M4c）。
 
 use std::str::FromStr;
 
 use hammer_db::lock::advisory_xact_lock;
 use hammer_db::master_data as db;
+use hammer_db::purchasing as purchasing_db;
 use hammer_db::sqlx::PgTransaction;
 use hammer_shared::Id;
 use hammer_shared::decimal::Decimal;
@@ -73,6 +78,8 @@ pub const MSG_SUPPLIER_PRIMARY: &str = "每個廠商最多只能有一位主要�
 pub const MSG_PRODUCT_DELETE_STOCK: &str = "此商品已有庫存異動，無法刪除，請改為停用";
 pub const MSG_PRODUCT_TYPE_STOCK: &str = "此商品已有庫存異動，無法改為服務";
 pub const MSG_PRODUCT_UNIT_STOCK: &str = "此商品已有庫存異動，無法修改單位";
+pub const MSG_PRODUCT_TYPE_ORDER: &str = "此商品有未結案的採購單，無法改為服務";
+pub const MSG_PRODUCT_UNIT_ORDER: &str = "此商品有未結案的採購單，無法修改單位";
 
 /// 有 `code` 欄位的資料類別（§7.2）。
 const WITH_CODE: &[&str] = &[UNIT, PRODUCT, CUSTOMER, SUPPLIER];
@@ -284,19 +291,28 @@ pub(crate) async fn check_references(
                 let to_service = changed("product_type").is_some_and(|v| v == "service")
                     && existing.get("product_type").is_some_and(|v| v == "goods");
                 let unit_changed = changed("unit_id").is_some();
-                if (to_service || unit_changed)
-                    && db::count_product_transactions(&mut **tx, record_id).await? > 0
-                {
-                    if to_service {
+                if to_service || unit_changed {
+                    let (type_msg, unit_msg) =
+                        if db::count_product_transactions(&mut **tx, record_id).await? > 0 {
+                            (MSG_PRODUCT_TYPE_STOCK, MSG_PRODUCT_UNIT_STOCK)
+                        } else if purchasing_db::count_open_orders_by_product(&mut **tx, record_id)
+                            .await?
+                            > 0
+                        {
+                            (MSG_PRODUCT_TYPE_ORDER, MSG_PRODUCT_UNIT_ORDER)
+                        } else {
+                            ("", "")
+                        };
+                    if to_service && !type_msg.is_empty() {
                         errors.push(FieldError {
                             field_key: "product_type".into(),
-                            message: MSG_PRODUCT_TYPE_STOCK.into(),
+                            message: type_msg.into(),
                         });
                     }
-                    if unit_changed {
+                    if unit_changed && !unit_msg.is_empty() {
                         errors.push(FieldError {
                             field_key: "unit_id".into(),
-                            message: MSG_PRODUCT_UNIT_STOCK.into(),
+                            message: unit_msg.into(),
                         });
                     }
                 }
@@ -336,17 +352,51 @@ pub struct Usage {
     pub children: i64,
     /// 商品的庫存異動筆數。
     pub transactions: i64,
+    /// 廠商的採購、進貨單據張數（不論狀態）。
+    pub documents: i64,
+    /// 明細引用商品的未結案採購單張數。
+    pub open_orders: i64,
 }
 
 /// 依使用狀況決定能否刪除：都沒有使用時為 `None`，否則為 [`CoreError::RecordInUse`]。
 pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
+    let blocked = |message: String, usage: Usage| CoreError::RecordInUse {
+        message,
+        products: usage.products,
+        children: usage.children,
+        transactions: usage.transactions,
+        documents: usage.documents,
+        open_orders: usage.open_orders,
+    };
     if usage.transactions > 0 {
-        return Some(CoreError::RecordInUse {
-            message: MSG_PRODUCT_DELETE_STOCK.into(),
-            products: 0,
-            children: 0,
-            transactions: usage.transactions,
-        });
+        return Some(blocked(
+            MSG_PRODUCT_DELETE_STOCK.into(),
+            Usage {
+                transactions: usage.transactions,
+                ..Usage::default()
+            },
+        ));
+    }
+    if usage.open_orders > 0 {
+        return Some(blocked(
+            format!("此商品有 {} 張未結案的採購單，無法刪除", usage.open_orders),
+            Usage {
+                open_orders: usage.open_orders,
+                ..Usage::default()
+            },
+        ));
+    }
+    if usage.documents > 0 {
+        return Some(blocked(
+            format!(
+                "此廠商已有 {} 張採購或進貨單據，無法刪除，請改為停用",
+                usage.documents
+            ),
+            Usage {
+                documents: usage.documents,
+                ..Usage::default()
+            },
+        ));
     }
     if usage.products <= 0 && usage.children <= 0 {
         return None;
@@ -363,16 +413,19 @@ pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
     if usage.children > 0 {
         reasons.push(format!("{} 個子分類", usage.children));
     }
-    Some(CoreError::RecordInUse {
-        message: format!("{subject}還有 {}，無法刪除", reasons.join("、")),
-        products: usage.products.max(0),
-        children: usage.children.max(0),
-        transactions: 0,
-    })
+    Some(blocked(
+        format!("{subject}還有 {}，無法刪除", reasons.join("、")),
+        Usage {
+            products: usage.products.max(0),
+            children: usage.children.max(0),
+            ..Usage::default()
+        },
+    ))
 }
 
 /// 刪除單位、商品分類前，檢查是否還有未刪除的商品使用它，或分類還有子分類；刪除商品前檢查是否已有
-/// 庫存異動 → [`CoreError::RecordInUse`]。其他資料類別不檢查。
+/// 庫存異動或未結案的採購單；刪除廠商前檢查是否已有採購、進貨單據 → [`CoreError::RecordInUse`]。
+/// 其他資料類別不檢查。
 ///
 /// 必須在已鎖定（`FOR UPDATE`）要刪除的資料之後呼叫：新增、修改商品或分類時，關聯檢查會以 `FOR SHARE`
 /// 鎖定所指的單位、分類（[`crate::relations::check_relations`]），所以計數之後不會再有新的使用者。
@@ -393,6 +446,11 @@ pub(crate) async fn check_delete(
         },
         PRODUCT => Usage {
             transactions: db::count_product_transactions(&mut **tx, id).await?,
+            open_orders: purchasing_db::count_open_orders_by_product(&mut **tx, id).await?,
+            ..Usage::default()
+        },
+        SUPPLIER => Usage {
+            documents: purchasing_db::count_supplier_documents(&mut **tx, id).await?,
             ..Usage::default()
         },
         _ => return Ok(()),
@@ -737,6 +795,58 @@ mod tests {
         assert_eq!(
             api.details,
             Some(json!({ "fields": [], "transaction_count": 12 }))
+        );
+    }
+
+    #[test]
+    fn product_delete_is_blocked_by_open_purchase_orders() {
+        let api: ApiError = delete_blocked(
+            PRODUCT,
+            Usage {
+                open_orders: 2,
+                ..Usage::default()
+            },
+        )
+        .unwrap()
+        .into();
+        assert_eq!(api.message, "此商品有 2 張未結案的採購單，無法刪除");
+        assert_eq!(
+            api.details,
+            Some(json!({ "fields": [], "open_purchase_order_count": 2 }))
+        );
+        // 庫存異動優先
+        let api: ApiError = delete_blocked(
+            PRODUCT,
+            Usage {
+                transactions: 1,
+                open_orders: 2,
+                ..Usage::default()
+            },
+        )
+        .unwrap()
+        .into();
+        assert_eq!(api.message, MSG_PRODUCT_DELETE_STOCK);
+    }
+
+    #[test]
+    fn supplier_delete_is_blocked_by_documents() {
+        assert!(delete_blocked(SUPPLIER, Usage::default()).is_none());
+        let api: ApiError = delete_blocked(
+            SUPPLIER,
+            Usage {
+                documents: 3,
+                ..Usage::default()
+            },
+        )
+        .unwrap()
+        .into();
+        assert_eq!(
+            api.message,
+            "此廠商已有 3 張採購或進貨單據，無法刪除，請改為停用"
+        );
+        assert_eq!(
+            api.details,
+            Some(json!({ "fields": [], "document_count": 3 }))
         );
     }
 }

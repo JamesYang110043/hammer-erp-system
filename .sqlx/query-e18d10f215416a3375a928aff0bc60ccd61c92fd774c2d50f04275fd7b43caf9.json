@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rate FROM tax_rates WHERE code = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rate",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "tax_rates",
+            "name": "rate"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e18d10f215416a3375a928aff0bc60ccd61c92fd774c2d50f04275fd7b43caf9"
+}

@@ -293,12 +293,15 @@ async fn create_generates_record_no_and_draft_status(pool: PgPool) {
         Some(format!("ADJ{period}-0002").as_str())
     );
 
-    // 單筆查詢的回應也有 `document`（JSON 為四個 null）
+    // 單筆查詢的回應也有 `document`（JSON 都是 null；盤點調整單沒有結案）
     let (status, body) = call(&pool, Method::GET, &record_uri(DOC, first.id), &token, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body["document"],
-        json!({ "posted_at": null, "posted_by": null, "voided_at": null, "voided_by": null })
+        json!({
+            "posted_at": null, "posted_by": null, "voided_at": null, "voided_by": null,
+            "closed_at": null, "closed_by": null,
+        })
     );
     assert_eq!(body["record_no"], json!(format!("ADJ{period}-0001")));
 

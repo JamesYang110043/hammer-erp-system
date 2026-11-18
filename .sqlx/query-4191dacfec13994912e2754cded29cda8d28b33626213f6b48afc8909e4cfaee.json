@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT default_currency_code\n        FROM suppliers\n        WHERE id = $1 AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "default_currency_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "suppliers",
+            "name": "default_currency_code"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4191dacfec13994912e2754cded29cda8d28b33626213f6b48afc8909e4cfaee"
+}

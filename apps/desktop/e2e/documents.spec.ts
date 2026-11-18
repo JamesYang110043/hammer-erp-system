@@ -130,7 +130,12 @@ test('stock adjustment: create, post and void', async ({ page }) => {
   const row = page.getByRole('row', { name: /ADJ202611-0001/ });
   await expect(row.locator('.ant-tag-red', { hasText: '已作廢' })).toBeVisible();
   await expect(row.getByRole('button', { name: /刪\s?除/ })).toHaveCount(0);
-  await expect(page.getByRole('combobox', { name: '狀態篩選' })).toBeVisible();
+  // 盤點調整單的狀態篩選只有草稿、已過帳、已作廢（採購單的狀態不列出）
+  await page
+    .locator('.ant-select', { has: page.getByRole('combobox', { name: '狀態篩選' }) })
+    .click();
+  const options = page.locator('.ant-select-dropdown:visible .ant-select-item-option');
+  await expect(options).toHaveText(['全部狀態', '草稿', '已過帳', '已作廢']);
 });
 
 test('stock adjustment: stock insufficient error is explained', async ({ page }) => {

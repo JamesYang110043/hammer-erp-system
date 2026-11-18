@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(DISTINCT o.id) AS \"n!\"\n        FROM purchase_order_lines l\n        JOIN purchase_orders o ON o.id = l.purchase_order_id\n        WHERE l.product_id = $1\n          AND l.deleted_at IS NULL\n          AND o.deleted_at IS NULL\n          AND o.status IN ('confirmed', 'partially_received')\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2eb6ff9b13dea295e2cfce9dd3f54cfe75cb76b4389261aecc6beeb3f6d9f336"
+}
