@@ -13,6 +13,8 @@
 //! - 進貨單（採購單轉進貨單、過帳、作廢）：[`find_order_for_receipt`]、[`lock_order_for_receipt`]、
 //!   [`list_order_lines`]、[`list_receipt_lines_for_update`]、[`update_receipt_line_posting`]、
 //!   [`add_received_qty`]、[`set_order_status`]、[`posted_returns_of_receipt`]
+//! - 進貨退回（退回數量上限、過帳）：[`lock_receipt_for_return`]、[`returned_qty_of_lines`]、
+//!   [`list_return_lines_for_update`]、[`update_return_line_posting`]
 
 use rust_decimal::Decimal;
 use sqlx::PgExecutor;
@@ -31,6 +33,7 @@ pub struct ReceiptForReturn {
     /// 草稿可能沒有匯率；已過帳的一定有（`goods_receipts_posted_rate_check`）。
     pub exchange_rate: Option<Decimal>,
     pub tax_type: String,
+    pub receipt_date: time::Date,
 }
 
 /// 未刪除的進貨單 `id`，以 `FOR SHARE` 鎖定（存檔期間不會被過帳、作廢或刪除）。不存在或已刪除時為
@@ -42,10 +45,30 @@ pub async fn find_receipt_for_return<'e>(
     let row = sqlx::query_as!(
         ReceiptForReturn,
         r#"
-        SELECT id, status, supplier_id, currency_code, exchange_rate, tax_type
+        SELECT id, status, supplier_id, currency_code, exchange_rate, tax_type, receipt_date
         FROM goods_receipts
         WHERE id = $1 AND deleted_at IS NULL
         FOR SHARE
+        "#,
+        id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 同 [`find_receipt_for_return`]，以 `FOR UPDATE` 鎖定（進貨退回過帳時；同一張進貨單的退回依序過帳）。
+pub async fn lock_receipt_for_return<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<ReceiptForReturn>, DbError> {
+    let row = sqlx::query_as!(
+        ReceiptForReturn,
+        r#"
+        SELECT id, status, supplier_id, currency_code, exchange_rate, tax_type, receipt_date
+        FROM goods_receipts
+        WHERE id = $1 AND deleted_at IS NULL
+        FOR UPDATE
         "#,
         id,
     )
@@ -62,6 +85,9 @@ pub struct ReceiptLineForReturn {
     pub lot_no: Option<String>,
     pub unit_price: Decimal,
     pub lot_id: Option<Uuid>,
+    pub qty: Decimal,
+    /// 過帳時寫入的台幣單位成本。
+    pub unit_cost_twd: Option<Decimal>,
 }
 
 /// 進貨單 `goods_receipt_id` 中 id 在 `ids` 內的未刪除明細（依 id 排序）。不屬於該進貨單的 id 不會出現。
@@ -73,7 +99,7 @@ pub async fn list_receipt_lines_for_return<'e>(
     let rows = sqlx::query_as!(
         ReceiptLineForReturn,
         r#"
-        SELECT id, product_id, lot_no, unit_price, lot_id
+        SELECT id, product_id, lot_no, unit_price, lot_id, qty, unit_cost_twd
         FROM goods_receipt_lines
         WHERE goods_receipt_id = $1 AND id = ANY($2) AND deleted_at IS NULL
         ORDER BY id
@@ -410,4 +436,82 @@ pub async fn posted_returns_of_receipt<'e>(
     .fetch_all(executor)
     .await?;
     Ok(rows.into_iter().map(|r| (r.id, r.record_no)).collect())
+}
+
+/// 進貨明細 `ids` 在**已過帳**、未刪除的進貨退回中的退回數量合計 `(進貨明細 id, 合計)`；沒有退回的不列出。
+pub async fn returned_qty_of_lines<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+) -> Result<Vec<(Uuid, Decimal)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT l.goods_receipt_line_id AS "id!", sum(l.qty) AS "qty!"
+        FROM purchase_return_lines l
+        JOIN purchase_returns r ON r.id = l.purchase_return_id
+        WHERE l.goods_receipt_line_id = ANY($1)
+          AND l.deleted_at IS NULL AND r.deleted_at IS NULL AND r.status = 'posted'
+        GROUP BY l.goods_receipt_line_id
+        "#,
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.qty)).collect())
+}
+
+/// 一列進貨退回明細。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnLineRow {
+    pub id: Uuid,
+    pub sort_order: i32,
+    pub goods_receipt_line_id: Uuid,
+    pub product_id: Uuid,
+    pub qty: Decimal,
+    pub unit_cost_twd: Option<Decimal>,
+    pub lot_id: Option<Uuid>,
+}
+
+/// 進貨退回 `purchase_return_id` 的未刪除明細，依 `sort_order, id` 排序並鎖定（`FOR UPDATE`）。
+pub async fn list_return_lines_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    purchase_return_id: Uuid,
+) -> Result<Vec<ReturnLineRow>, DbError> {
+    let rows = sqlx::query_as!(
+        ReturnLineRow,
+        r#"
+        SELECT id, sort_order, goods_receipt_line_id, product_id, qty, unit_cost_twd, lot_id
+        FROM purchase_return_lines
+        WHERE purchase_return_id = $1 AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        FOR UPDATE
+        "#,
+        purchase_return_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 寫入進貨退回明細過帳的結果：`unit_cost_twd`、`lot_id`，`version` + 1。回傳是否有更新。
+pub async fn update_return_line_posting<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    unit_cost_twd: Decimal,
+    lot_id: Option<Uuid>,
+    updated_by: Uuid,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE purchase_return_lines
+        SET unit_cost_twd = $2, lot_id = $3, updated_by = $4, version = version + 1
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        unit_cost_twd,
+        lot_id,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }

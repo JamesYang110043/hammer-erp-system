@@ -2098,7 +2098,7 @@ async fn apply_amounts(
     data: &mut Map<String, Value>,
     lines: &mut [DetailWrite<'_>],
 ) -> Result<(), CoreError> {
-    let Some(doc) = purchasing::save::priced(entity_key) else {
+    let Some(doc) = purchasing::save::with_amounts(entity_key) else {
         return Ok(());
     };
     let rows: Vec<&mut Map<String, Value>> = lines

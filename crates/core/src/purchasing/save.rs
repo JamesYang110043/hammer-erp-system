@@ -28,7 +28,7 @@ use serde_json::{Map, Value};
 use time::Date;
 
 use super::amounts::{self, AMOUNT_SCALE, RATE_SCALE, TWD_SCALE};
-use super::{GOODS_RECEIPT, PURCHASE_ORDER};
+use super::{GOODS_RECEIPT, PURCHASE_ORDER, PURCHASE_RETURN, PURCHASE_RETURN_LINE};
 use crate::CoreError;
 use crate::inventory::normalize_lot_no;
 use crate::record_data::FieldError;
@@ -65,6 +65,8 @@ pub struct PricedDocument {
     pub line_key: &'static str,
     /// 匯率的適用日期欄位（單據日期）。
     pub date_field: &'static str,
+    /// 是否由 [`prefill`]、[`derive_currency`] 處理幣別、匯率、稅別（進貨退回沿用進貨單的值，不處理）。
+    pub derives_currency: bool,
 }
 
 /// 進貨明細的明細子表代碼。
@@ -75,22 +77,35 @@ const PRICED: &[PricedDocument] = &[
         entity_key: PURCHASE_ORDER,
         line_key: PURCHASE_ORDER_LINE,
         date_field: "order_date",
+        derives_currency: true,
     },
     PricedDocument {
         entity_key: GOODS_RECEIPT,
         line_key: GOODS_RECEIPT_LINE,
         date_field: "receipt_date",
+        derives_currency: true,
+    },
+    PricedDocument {
+        entity_key: PURCHASE_RETURN,
+        line_key: PURCHASE_RETURN_LINE,
+        date_field: "return_date",
+        derives_currency: false,
     },
 ];
 
-/// `entity_key` 是否為有幣別、匯率與金額計算的單據。
+/// `entity_key` 是否為由伺服器帶入幣別、匯率與稅別的單據（採購單、進貨單）。
 pub fn priced(entity_key: &str) -> Option<&'static PricedDocument> {
+    with_amounts(entity_key).filter(|d| d.derives_currency)
+}
+
+/// `entity_key` 是否為有金額計算的單據（採購單、進貨單、進貨退回）。
+pub fn with_amounts(entity_key: &str) -> Option<&'static PricedDocument> {
     PRICED.iter().find(|d| d.entity_key == entity_key)
 }
 
 /// 修改時是否要帶入所有明細（重新計算明細金額）。
 pub fn recalculates_lines(entity_key: &str) -> bool {
-    priced(entity_key).is_some()
+    with_amounts(entity_key).is_some()
 }
 
 /// 明細子表 `detail_key` 是否為有金額計算的單據明細。
@@ -307,7 +322,7 @@ pub(crate) async fn apply_amounts(
     data: &mut Map<String, Value>,
     lines: Vec<&mut Map<String, Value>>,
 ) -> Result<(), CoreError> {
-    if priced(entity_key).is_none() {
+    if with_amounts(entity_key).is_none() {
         return Ok(());
     }
     let code = data
@@ -442,7 +457,10 @@ mod tests {
         assert!(recalculates_lines(PURCHASE_ORDER));
         assert!(recalculates_lines(GOODS_RECEIPT));
         assert!(!recalculates_lines("stock_adjustment"));
-        assert!(!recalculates_lines("purchase_return"));
+        // 進貨退回有金額計算，但幣別、匯率沿用進貨單
+        assert!(recalculates_lines(PURCHASE_RETURN));
+        assert!(priced(PURCHASE_RETURN).is_none());
+        assert!(priced_line(PURCHASE_RETURN_LINE));
         assert!(priced_line(PURCHASE_ORDER_LINE));
         assert!(priced_line(GOODS_RECEIPT_LINE));
     }

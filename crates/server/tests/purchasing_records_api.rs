@@ -343,7 +343,9 @@ async fn purchase_return_copies_receipt(pool: PgPool) {
     assert_eq!(pr.data["currency_code"], "USD");
     assert_eq!(pr.data["exchange_rate"], "32.150000");
     assert_eq!(pr.data["tax_type"], "zero_rated");
-    assert_eq!(pr.data["total_twd"], "0.00");
+    // 金額依進貨單的單價、幣別、匯率計算（#141）：(2 × 12.345 + 1 × 30) × 32.15
+    assert_eq!(pr.data["total"], "54.6900");
+    assert_eq!(pr.data["total_twd"], "1758.28");
     let pr_lines = lines(&pr, "purchase_return_line");
     assert_eq!(pr_lines[0].data["product_id"], json!(goods));
     assert_eq!(pr_lines[0].data["lot_no"], "L-01");
