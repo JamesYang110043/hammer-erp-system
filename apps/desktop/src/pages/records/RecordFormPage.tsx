@@ -1,10 +1,35 @@
-import { ArrowLeftOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Empty, Form, Input, Modal, Space, Tag } from 'antd';
+import {
+  ArrowLeftOutlined,
+  CheckCircleOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+  StopOutlined,
+} from '@ant-design/icons';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
 import { apiErrorCode, errorMessage } from '../../api/client';
-import { useCreateRecord, useFormulaPreview, useRecord, useUpdateRecord } from '../../api/records';
+import {
+  useCreateRecord,
+  useDocumentAction,
+  useFormulaPreview,
+  useRecord,
+  useUpdateRecord,
+} from '../../api/records';
 import { useEntities, useEntity, useEntityDetails } from '../../api/schema';
 import { usePermission } from '../../auth/permission';
 import { PERMISSIONS } from '../../bindings';
@@ -15,6 +40,15 @@ import type {
   Record as DataRecord,
 } from '../../bindings';
 import { recordListPath, recordPath } from '../../modules';
+import {
+  DOCUMENT_ACTION_LABELS,
+  availableAction,
+  documentActionError,
+  documentStatus,
+  isEditableDocument,
+  isSystemDocument,
+} from '../../records/documents';
+import type { DocumentAction, DocumentActionError } from '../../records/documents';
 import {
   baselineData,
   buildCreateData,
@@ -43,6 +77,8 @@ import {
 } from '../../records/lines';
 import type { DetailTable, LineFormValues } from '../../records/lines';
 import { entityIcon } from '../schema/entityIcons';
+import { formatTaipei } from '../../utils/time';
+import { DocumentStatusTag } from './DocumentStatusTag';
 import { FormulaValue } from './FieldValue';
 import { LinesTable } from './LinesTable';
 import type { LineRefs } from './LinesTable';
@@ -53,6 +89,15 @@ export const RECORD_CONFLICT_MESSAGE = '資料已被其他人修改';
 
 /** 新增資料時單號欄位的提示（單號由伺服器在存檔時產生）。 */
 export const RECORD_NO_PENDING = '存檔後產生';
+
+/** 確認對話框的說明（docs/architecture.md §8.2）。 */
+const ACTION_CONFIRM: Record<DocumentAction, string> = {
+  post: '過帳後會依明細異動庫存，單據不能再修改或刪除。',
+  void: '作廢會反向處理這張單據的庫存異動，作廢後不能再恢復。',
+};
+
+/** 表單有未存檔的修改時，過帳、作廢按鈕的提示。 */
+export const SAVE_BEFORE_ACTION = '請先儲存目前的修改';
 
 type FormValues = RecordFormValues & { [LINES_FORM_KEY]?: Record<string, LineFormValues[]> };
 
@@ -104,9 +149,18 @@ function RecordForm({
 }) {
   const entityKey = entity.key;
   const navigate = useNavigate();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [form] = Form.useForm<FormValues>();
   const canWrite = usePermission(PERMISSIONS.RECORD_WRITE);
+  const canPost = usePermission(PERMISSIONS.RECORD_POST);
+  // 系統單據：只有草稿可以修改；過帳、作廢依狀態顯示（伺服器同樣檢查）
+  const isDocument = isSystemDocument(entity);
+  const status = isDocument ? documentStatus(record) : undefined;
+  const editable = canWrite && isEditableDocument(entity, record);
+  const action = record && canPost ? availableAction(status) : undefined;
+  const postRecord = useDocumentAction(entityKey, 'post');
+  const voidRecord = useDocumentAction(entityKey, 'void');
+  const [actionError, setActionError] = useState<DocumentActionError>();
   const createRecord = useCreateRecord(entityKey);
   const updateRecord = useUpdateRecord(entityKey);
   const saving = createRecord.isPending || updateRecord.isPending;
@@ -226,6 +280,33 @@ function RecordForm({
     message.error(errorMessage(err));
   };
 
+  const runAction = (target: DocumentAction) => {
+    if (!record) {
+      return;
+    }
+    const mutation = target === 'post' ? postRecord : voidRecord;
+    const label = DOCUMENT_ACTION_LABELS[target];
+    modal.confirm({
+      title: `確定要${label}這張${entity.label}？`,
+      content: ACTION_CONFIRM[target],
+      okText: label,
+      okButtonProps: target === 'void' ? { danger: true } : undefined,
+      cancelText: '取消',
+      onOk: () =>
+        mutation.mutateAsync(record).then(
+          () => void message.success(`已${label}`),
+          (err: unknown) => {
+            // 版本衝突沿用存檔衝突的提示（重新載入）；其他錯誤以易懂的訊息列在表單上方
+            if (apiErrorCode(err) === 'CONFLICT') {
+              setConflict(true);
+            } else {
+              setActionError(documentActionError(err, target));
+            }
+          },
+        ),
+    });
+  };
+
   const onFinish = () => {
     // 包含 Form.List 內的明細列（onFinish 的參數只有註冊過的欄位，明細的 __id 不在其中）
     const values = form.getFieldsValue(true) as FormValues;
@@ -271,15 +352,65 @@ function RecordForm({
         <Space>
           {entityIcon(entity.icon)}
           {title}
+          {status && <DocumentStatusTag status={status} />}
           {dirty && <Tag color="orange">未存檔</Tag>}
         </Space>
       }
       extra={
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(recordListPath(entityKey))}>
-          返回列表
-        </Button>
+        <Space>
+          {action && (
+            <Tooltip title={dirty ? SAVE_BEFORE_ACTION : undefined}>
+              <Button
+                type={action === 'post' ? 'primary' : 'default'}
+                danger={action === 'void'}
+                icon={action === 'post' ? <CheckCircleOutlined /> : <StopOutlined />}
+                disabled={dirty}
+                loading={postRecord.isPending || voidRecord.isPending}
+                onClick={() => runAction(action)}
+              >
+                {DOCUMENT_ACTION_LABELS[action]}
+              </Button>
+            </Tooltip>
+          )}
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(recordListPath(entityKey))}>
+            返回列表
+          </Button>
+        </Space>
       }
     >
+      {actionError && (
+        <Alert
+          showIcon
+          closable
+          type="error"
+          style={{ marginBottom: 16 }}
+          message={actionError.title}
+          description={
+            actionError.items.length > 0 ? (
+              <ul style={{ margin: 0, paddingInlineStart: 20 }}>
+                {actionError.items.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : undefined
+          }
+          action={
+            actionError.reload ? (
+              <Button icon={<ReloadOutlined />} onClick={onReload}>
+                重新載入
+              </Button>
+            ) : undefined
+          }
+          onClose={() => setActionError(undefined)}
+        />
+      )}
+      {isDocument && record && status !== 'draft' && (
+        <Typography.Paragraph type="secondary">
+          {status === 'void' ? '此單據已作廢，' : '此單據已過帳，'}不能修改。
+          {record.document?.posted_at && `過帳時間：${formatTaipei(record.document.posted_at)}`}
+          {record.document?.voided_at && `；作廢時間：${formatTaipei(record.document.voided_at)}`}
+        </Typography.Paragraph>
+      )}
       {conflict && (
         <Alert
           showIcon
@@ -301,7 +432,7 @@ function RecordForm({
           form={form}
           layout="vertical"
           initialValues={initialValues}
-          disabled={!canWrite}
+          disabled={!editable}
           onValuesChange={onValuesChange}
           onFinish={onFinish}
         >
@@ -370,7 +501,7 @@ function RecordForm({
             <LinesTable
               key={table.entity.key}
               table={table}
-              canWrite={canWrite}
+              canWrite={editable}
               refs={refs}
               onRowsChange={onValuesChange}
               showPending={dirty || !record}
@@ -383,7 +514,7 @@ function RecordForm({
               }}
             />
           ))}
-          {canWrite && (
+          {editable && (
             <Form.Item>
               <Button
                 type="primary"

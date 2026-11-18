@@ -83,6 +83,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::create_record,
             commands::update_record,
             commands::delete_record,
+            commands::post_record,
+            commands::void_record,
             commands::list_layouts,
             commands::get_default_layout,
             commands::create_layout,
@@ -150,6 +152,12 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::record::RelationRef>()
         .typ::<hammer_shared::record::LookupQuery>()
         .typ::<hammer_shared::record::LookupItem>()
+        // 系統單據（狀態、過帳與作廢的錯誤 details）
+        .typ::<hammer_shared::document::DocumentStatus>()
+        .typ::<hammer_shared::document::DocumentInfo>()
+        .typ::<hammer_shared::document::InvalidStatusDetails>()
+        .typ::<hammer_shared::document::StockInsufficientDetails>()
+        .typ::<hammer_shared::document::LotInUseDetails>()
         // 附件
         .typ::<hammer_shared::attachment::Attachment>()
         .typ::<crate::state::UploadProgress>()

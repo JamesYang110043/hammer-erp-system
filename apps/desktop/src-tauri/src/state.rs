@@ -10,6 +10,7 @@ use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest, Logi
 use hammer_shared::currency::{
     CreateCurrencyRequest, Currency, CurrencyListQuery, UpdateCurrencyRequest,
 };
+use hammer_shared::document::{DocumentAction, DocumentActionRequest};
 use hammer_shared::exchange_rate::{
     CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
     UpdateExchangeRateRequest,
@@ -456,6 +457,22 @@ impl AppState {
     ) -> Result<(), ClientError> {
         self.with_token(async |client, url, token| {
             client.delete_record(url, token, key, id, query).await
+        })
+        .await
+    }
+
+    /// 系統單據的過帳、作廢。
+    pub async fn document_action(
+        &self,
+        key: &str,
+        id: Id,
+        action: DocumentAction,
+        req: &DocumentActionRequest,
+    ) -> Result<Record, ClientError> {
+        self.with_token(async |client, url, token| {
+            client
+                .document_action(url, token, key, id, action, req)
+                .await
         })
         .await
     }

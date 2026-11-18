@@ -150,6 +150,20 @@ export function useUpdateRecord(entityKey: string) {
   );
 }
 
+/**
+ * 系統單據的過帳、作廢（需要 `record.post`，伺服器檢查）。成功後更新單筆快取，
+ * 並重新取得列表與操作紀錄。
+ */
+export function useDocumentAction(entityKey: string, action: 'post' | 'void') {
+  return useRecordMutation(entityKey, (record: Pick<DataRecord, 'id' | 'version'>) =>
+    unwrap(
+      action === 'post'
+        ? commands.postRecord(entityKey, record.id, record.version)
+        : commands.voidRecord(entityKey, record.id, record.version),
+    ),
+  );
+}
+
 /** 刪除資料，成功後重新取得列表與操作紀錄。 */
 export function useDeleteRecord(entityKey: string) {
   const queryClient = useQueryClient();

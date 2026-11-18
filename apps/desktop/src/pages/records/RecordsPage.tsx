@@ -29,10 +29,19 @@ import type {
   EntityDefinition,
   FieldDefinition,
   Record as DataRecord,
+  RecordFilter,
 } from '../../bindings';
 import { generatedConfig, resolveColumns } from '../../records/columns';
 import type { LayoutColumn, LayoutConfig } from '../../records/columns';
 import { isNumericType, valueField } from '../../records/display';
+import {
+  DOCUMENT_STATUSES,
+  DOCUMENT_STATUS_LABELS,
+  STATUS_FIELD,
+  documentStatus,
+  isEditableDocument,
+  isSystemDocument,
+} from '../../records/documents';
 import { RECORD_NO, showsRecordNo } from '../../records/lines';
 import { GENERATED_LAYOUT_ID, canEditLayout, sameConfig } from '../../records/layouts';
 import type { ViewLayout } from '../../records/layouts';
@@ -47,9 +56,18 @@ import { entityIcon } from '../schema/entityIcons';
 import { ColumnSettingsModal } from './ColumnSettingsModal';
 import { FieldValue } from './FieldValue';
 import { FilterPanel } from './FilterPanel';
+import { DocumentStatusTag } from './DocumentStatusTag';
 import { SaveLayoutModal } from './SaveLayoutModal';
 
 const DEFAULT_PAGE_SIZE = 50;
+
+/** 狀態快速篩選的「全部」。 */
+const ALL_STATUSES = '';
+
+/** 篩選條件中的狀態（`status` 等於某值）。 */
+function isStatusFilter(f: RecordFilter): boolean {
+  return f.field_key === STATUS_FIELD && f.op === 'eq';
+}
 
 function layoutLabel(layout: ViewLayout): string {
   return layout.user_id === null ? `${layout.name}（全域）` : layout.name;
@@ -71,6 +89,7 @@ function RecordList({
   const user = useCurrentUser();
   const canWrite = usePermission(PERMISSIONS.RECORD_WRITE);
   const canManageSchema = usePermission(PERMISSIONS.SCHEMA_MANAGE);
+  const isDocument = isSystemDocument(entity);
 
   const [layoutId, setLayoutId] = useState(initial.layout?.id ?? GENERATED_LAYOUT_ID);
   const [config, setConfig] = useState<LayoutConfig>(initial.config);
@@ -147,9 +166,15 @@ function RecordList({
       ellipsis: valueField(field).data_type === 'long_text',
       sorter: isSortable(field),
       sortOrder: columnSortOrder(config.sort, field.field_key),
-      render: (value: unknown, record) => (
-        <FieldValue field={field} value={value} record={record} />
-      ),
+      render: (value: unknown, record) => {
+        // 系統單據的狀態以固定的顏色標籤顯示
+        const status = isDocument && field.field_key === STATUS_FIELD && documentStatus(record);
+        return status ? (
+          <DocumentStatusTag status={status} />
+        ) : (
+          <FieldValue field={field} value={value} record={record} />
+        );
+      },
     }),
   );
   // 單號不是欄位，不在版面的顯示欄位中；有單號規則時固定顯示在第一欄，可以排序
@@ -171,26 +196,39 @@ function RecordList({
       fixed: 'right',
       // 點列會開啟資料；操作欄（含確認視窗）的點擊不要傳到列
       onCell: () => ({ onClick: (e) => e.stopPropagation() }),
-      render: (_, record) => (
-        <Popconfirm
-          title="確定要刪除這筆資料？"
-          okText="刪除"
-          okButtonProps={{ danger: true }}
-          cancelText="取消"
-          onConfirm={() =>
-            deleteRecord.mutateAsync(record).then(
-              () => void message.success('已刪除'),
-              (err: unknown) => void message.error(mutationErrorMessage(err)),
-            )
-          }
-        >
-          <Button type="link" size="small" danger>
-            刪除
-          </Button>
-        </Popconfirm>
-      ),
+      // 系統單據只有草稿可以刪除
+      render: (_, record) =>
+        isEditableDocument(entity, record) && (
+          <Popconfirm
+            title="確定要刪除這筆資料？"
+            okText="刪除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            onConfirm={() =>
+              deleteRecord.mutateAsync(record).then(
+                () => void message.success('已刪除'),
+                (err: unknown) => void message.error(mutationErrorMessage(err)),
+              )
+            }
+          >
+            <Button type="link" size="small" danger>
+              刪除
+            </Button>
+          </Popconfirm>
+        ),
     });
   }
+
+  const statusFilter = config.filters.find(isStatusFilter)?.value ?? ALL_STATUSES;
+  const changeStatusFilter = (status: string) =>
+    changeConfig({
+      filters: [
+        ...config.filters.filter((f) => !isStatusFilter(f)),
+        ...(status === ALL_STATUSES
+          ? []
+          : [{ field_key: STATUS_FIELD, op: 'eq' as const, value: status }]),
+      ],
+    });
 
   const onTableChange: TableProps<DataRecord>['onChange'] = (
     _pagination,
@@ -235,6 +273,18 @@ function RecordList({
       }
     >
       <Space wrap style={{ marginBottom: 16 }}>
+        {isDocument && (
+          <Select
+            aria-label="狀態篩選"
+            style={{ width: 140 }}
+            value={statusFilter}
+            onChange={changeStatusFilter}
+            options={[
+              { value: ALL_STATUSES, label: '全部狀態' },
+              ...DOCUMENT_STATUSES.map((st) => ({ value: st, label: DOCUMENT_STATUS_LABELS[st] })),
+            ]}
+          />
+        )}
         <Select
           aria-label="版面"
           style={{ width: 220 }}

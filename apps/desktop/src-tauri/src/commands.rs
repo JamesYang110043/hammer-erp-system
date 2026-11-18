@@ -12,6 +12,7 @@ use hammer_shared::auth::{ChangePasswordRequest, CurrentUser, LoginRequest};
 use hammer_shared::currency::{
     CreateCurrencyRequest, Currency, CurrencyListQuery, UpdateCurrencyRequest,
 };
+use hammer_shared::document::{DocumentAction, DocumentActionRequest};
 use hammer_shared::exchange_rate::{
     CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
     UpdateExchangeRateRequest,
@@ -521,6 +522,50 @@ pub async fn delete_record(
 ) -> Result<(), ClientError> {
     state
         .delete_record(&key, id, &DeleteRecordQuery { version })
+        .await
+}
+
+/// 系統單據過帳（需要 `record.post`）：`draft` → `posted`，回傳過帳後的單據（`version` + 1）。
+///
+/// `version` 不符時回傳 `409 CONFLICT`；不是草稿時回傳 `422 INVALID_STATUS`；
+/// 庫存不足時回傳 `422 STOCK_INSUFFICIENT`（`details` 見 [`hammer_shared::document`]）。
+#[tauri::command]
+#[specta::specta]
+pub async fn post_record(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+    version: i32,
+) -> Result<Record, ClientError> {
+    state
+        .document_action(
+            &key,
+            id,
+            DocumentAction::Post,
+            &DocumentActionRequest { version },
+        )
+        .await
+}
+
+/// 系統單據作廢（需要 `record.post`）：`posted` → `void`，回傳作廢後的單據（`version` + 1）。
+///
+/// `version` 不符時回傳 `409 CONFLICT`；不是已過帳時回傳 `422 INVALID_STATUS`；
+/// 反向處理失敗時回傳 `422 STOCK_INSUFFICIENT` 或 `LOT_IN_USE`。
+#[tauri::command]
+#[specta::specta]
+pub async fn void_record(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+    version: i32,
+) -> Result<Record, ClientError> {
+    state
+        .document_action(
+            &key,
+            id,
+            DocumentAction::Void,
+            &DocumentActionRequest { version },
+        )
         .await
 }
 

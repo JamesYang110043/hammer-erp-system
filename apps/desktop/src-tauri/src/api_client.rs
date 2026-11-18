@@ -16,6 +16,7 @@ use hammer_shared::constants::{API_PREFIX, CLIENT_VERSION_HEADER};
 use hammer_shared::currency::{
     CreateCurrencyRequest, Currency, CurrencyListQuery, UpdateCurrencyRequest,
 };
+use hammer_shared::document::{DocumentAction, DocumentActionRequest};
 use hammer_shared::exchange_rate::{
     CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
     UpdateExchangeRateRequest,
@@ -694,6 +695,29 @@ impl ApiClient {
             .bearer_auth(token)
             .query(query);
         authed(read_empty(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/entities/{key}/records/{id}/post`、`…/void`（系統單據的過帳、作廢）。
+    pub async fn document_action(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        id: Id,
+        action: DocumentAction,
+        req: &DocumentActionRequest,
+    ) -> Result<Record, ClientError> {
+        let builder = self
+            .http
+            .post(entity_endpoint(
+                server_url,
+                key,
+                None,
+                &format!("/records/{id}/{}", action.as_str()),
+            )?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
     }
 
     /// `GET /api/v1/entities/{key}/layouts`。
@@ -1948,6 +1972,74 @@ mod tests {
             "updated_by": null,
             "version": version,
         })
+    }
+
+    #[tokio::test]
+    async fn document_action_endpoints() {
+        use axum::extract::Path;
+
+        let record_id: Id = "0196f5a0-0000-7000-8000-000000000201".parse().unwrap();
+        let url = serve(
+            Router::new()
+                .route(
+                    "/entities/{key}/records/{id}/post",
+                    post(
+                        |Path((key, id)): Path<(String, String)>,
+                         axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            assert_eq!(key, "stock_adjustment");
+                            assert_eq!(id, "0196f5a0-0000-7000-8000-000000000201");
+                            // request 只有 version
+                            assert_eq!(body, json!({ "version": 2 }));
+                            axum::Json(record_json(3))
+                        },
+                    ),
+                )
+                .route(
+                    "/entities/{key}/records/{id}/void",
+                    post(|| async {
+                        (
+                            AxumStatus::UNPROCESSABLE_ENTITY,
+                            axum::Json(json!({
+                                "code": "STOCK_INSUFFICIENT",
+                                "message": "庫存不足",
+                                "details": { "items": [] },
+                            })),
+                        )
+                    }),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+
+        let posted = client
+            .document_action(
+                &url,
+                "tok",
+                "stock_adjustment",
+                record_id,
+                DocumentAction::Post,
+                &DocumentActionRequest { version: 2 },
+            )
+            .await
+            .unwrap();
+        assert_eq!(posted.version, 3);
+
+        let err = client
+            .document_action(
+                &url,
+                "tok",
+                "stock_adjustment",
+                record_id,
+                DocumentAction::Void,
+                &DocumentActionRequest { version: 3 },
+            )
+            .await
+            .unwrap_err();
+        let ClientError::Api(api) = err else {
+            panic!("應該是 ApiError：{err:?}");
+        };
+        assert_eq!(api.code, ErrorCode::StockInsufficient);
+        assert_eq!(api.details, Some(json!({ "items": [] })));
     }
 
     #[tokio::test]
