@@ -81,8 +81,16 @@ export function findLot<T extends Pick<InventoryLot, 'lot_no'>>(
   return lots?.find((l) => l.lot_no.toLowerCase() === key);
 }
 
+/** 新增時預設今天的單據日期欄位（盤點調整單 §8.10、進貨單據 §8.8）。 */
+const TODAY_DEFAULT_FIELDS: Record<string, string> = {
+  [STOCK_ADJUSTMENT]: 'adjustment_date',
+  purchase_order: 'order_date',
+  goods_receipt: 'receipt_date',
+  purchase_return: 'return_date',
+};
+
 /**
- * 新增資料時表單的預設值：盤點調整單的調整日期預設今天（台北時間，§8.10）。
+ * 新增資料時表單的預設值：系統單據的單據日期預設今天（台北時間；欄位定義沒有設定預設值時）。
  * 其他資料類別原樣回傳。
  */
 export function withFormDefaults(
@@ -90,13 +98,12 @@ export function withFormDefaults(
   fields: FieldDefinition[],
   today: string,
 ): FieldDefinition[] {
-  if (entityKey !== STOCK_ADJUSTMENT) {
+  const dateField = TODAY_DEFAULT_FIELDS[entityKey];
+  if (!dateField) {
     return fields;
   }
   return fields.map((f) =>
-    f.field_key === 'adjustment_date' && f.default_value === null
-      ? { ...f, default_value: today }
-      : f,
+    f.field_key === dateField && f.default_value === null ? { ...f, default_value: today } : f,
   );
 }
 

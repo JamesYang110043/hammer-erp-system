@@ -1,6 +1,7 @@
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
+  FileDoneOutlined,
   ReloadOutlined,
   SaveOutlined,
   StopOutlined,
@@ -20,6 +21,7 @@ import {
   Typography,
 } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
 import { apiErrorCode, errorMessage } from '../../api/client';
@@ -42,9 +44,11 @@ import type {
 import { recordListPath, recordPath } from '../../modules';
 import {
   DOCUMENT_ACTION_LABELS,
-  availableAction,
+  actionConfirmText,
+  availableActions,
   documentActionError,
   documentStatus,
+  documentStatusNote,
   isEditableDocument,
   isSystemDocument,
 } from '../../records/documents';
@@ -77,12 +81,15 @@ import {
   showsRecordNo,
 } from '../../records/lines';
 import type { DetailTable, LineFormValues } from '../../records/lines';
+import { PURCHASING_FIELDS, lineFormFields, pricedDocument } from '../../records/purchasing';
 import { entityIcon } from '../schema/entityIcons';
 import { formatTaipei, taipeiToday } from '../../utils/time';
 import { DocumentStatusTag } from './DocumentStatusTag';
 import { FormulaValue } from './FieldValue';
 import { LinesTable } from './LinesTable';
 import type { LineRefs } from './LinesTable';
+import { ExchangeRateInput, PurchasingAutofill } from './PurchasingInputs';
+import { useAmountPreview } from './useAmountPreview';
 import { RecordFieldInput } from './RecordFieldInput';
 
 /** 樂觀鎖定衝突（409）的提示（docs/architecture.md §9.4）。 */
@@ -91,10 +98,12 @@ export const RECORD_CONFLICT_MESSAGE = '資料已被其他人修改';
 /** 新增資料時單號欄位的提示（單號由伺服器在存檔時產生）。 */
 export const RECORD_NO_PENDING = '存檔後產生';
 
-/** 確認對話框的說明（docs/architecture.md §8.2）。 */
-const ACTION_CONFIRM: Record<DocumentAction, string> = {
-  post: '過帳後會依明細異動庫存，單據不能再修改或刪除。',
-  void: '作廢會反向處理這張單據的庫存異動，作廢後不能再恢復。',
+/** 單據動作按鈕的圖示。 */
+const ACTION_ICONS: Record<DocumentAction, ReactNode> = {
+  post: <CheckCircleOutlined />,
+  confirm: <CheckCircleOutlined />,
+  close: <FileDoneOutlined />,
+  void: <StopOutlined />,
 };
 
 /** 表單有未存檔的修改時，過帳、作廢按鈕的提示。 */
@@ -158,9 +167,16 @@ function RecordForm({
   const isDocument = isSystemDocument(entity);
   const status = isDocument ? documentStatus(record) : undefined;
   const editable = canWrite && isEditableDocument(entity, record);
-  const action = record && canPost ? availableAction(status) : undefined;
-  const postRecord = useDocumentAction(entityKey, 'post');
-  const voidRecord = useDocumentAction(entityKey, 'void');
+  const actions = record && canPost ? availableActions(entityKey, status) : [];
+  const mutations: Record<DocumentAction, ReturnType<typeof useDocumentAction>> = {
+    post: useDocumentAction(entityKey, 'post'),
+    void: useDocumentAction(entityKey, 'void'),
+    confirm: useDocumentAction(entityKey, 'confirm'),
+    close: useDocumentAction(entityKey, 'close'),
+  };
+  const actionPending = Object.values(mutations).some((m) => m.isPending);
+  // 採購單、進貨單：幣別、匯率帶入與金額預覽（§8.8）
+  const priced = pricedDocument(entityKey) !== undefined;
   const [actionError, setActionError] = useState<DocumentActionError>();
   const createRecord = useCreateRecord(entityKey);
   const updateRecord = useUpdateRecord(entityKey);
@@ -210,6 +226,7 @@ function RecordForm({
     [previewTables, current, record],
   );
   const preview = useFormulaPreview(previewRequest).data;
+  useAmountPreview(form, entityKey, current, editable && priced);
 
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -285,11 +302,11 @@ function RecordForm({
     if (!record) {
       return;
     }
-    const mutation = target === 'post' ? postRecord : voidRecord;
+    const mutation = mutations[target];
     const label = DOCUMENT_ACTION_LABELS[target];
     modal.confirm({
       title: `確定要${label}這張${entity.label}？`,
-      content: ACTION_CONFIRM[target],
+      content: actionConfirmText(entityKey, target),
       okText: label,
       okButtonProps: target === 'void' ? { danger: true } : undefined,
       cancelText: '取消',
@@ -301,7 +318,15 @@ function RecordForm({
             if (apiErrorCode(err) === 'CONFLICT') {
               setConflict(true);
             } else {
-              setActionError(documentActionError(err, target));
+              const labels = Object.fromEntries(fields.map((f) => [f.field_key, f.label]));
+              setActionError(documentActionError(err, target, labels));
+              // 欄位錯誤（例如確認時沒有匯率）同時標示在欄位上
+              const fieldErrors = (recordFieldErrors(err) ?? []).filter((e) =>
+                visible.some((f) => f.field_key === e.field_key),
+              );
+              form.setFields(
+                fieldErrors.map((e) => ({ name: [e.field_key], errors: [e.message] })),
+              );
             }
           },
         ),
@@ -359,20 +384,20 @@ function RecordForm({
       }
       extra={
         <Space>
-          {action && (
-            <Tooltip title={dirty ? SAVE_BEFORE_ACTION : undefined}>
+          {actions.map((action) => (
+            <Tooltip key={action} title={dirty ? SAVE_BEFORE_ACTION : undefined}>
               <Button
-                type={action === 'post' ? 'primary' : 'default'}
+                type={action === 'post' || action === 'confirm' ? 'primary' : 'default'}
                 danger={action === 'void'}
-                icon={action === 'post' ? <CheckCircleOutlined /> : <StopOutlined />}
+                icon={ACTION_ICONS[action]}
                 disabled={dirty}
-                loading={postRecord.isPending || voidRecord.isPending}
-                onClick={() => runAction(action)}
+                loading={mutations[action].isPending}
+                onClick={() => !actionPending && runAction(action)}
               >
                 {DOCUMENT_ACTION_LABELS[action]}
               </Button>
             </Tooltip>
-          )}
+          ))}
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(recordListPath(entityKey))}>
             返回列表
           </Button>
@@ -405,11 +430,9 @@ function RecordForm({
           onClose={() => setActionError(undefined)}
         />
       )}
-      {isDocument && record && status !== 'draft' && (
+      {isDocument && record && status && status !== 'draft' && (
         <Typography.Paragraph type="secondary">
-          {status === 'void' ? '此單據已作廢，' : '此單據已過帳，'}不能修改。
-          {record.document?.posted_at && `過帳時間：${formatTaipei(record.document.posted_at)}`}
-          {record.document?.voided_at && `；作廢時間：${formatTaipei(record.document.voided_at)}`}
+          {documentStatusNote(entityKey, status, record.document, formatTaipei)}
         </Typography.Paragraph>
       )}
       {conflict && (
@@ -437,6 +460,15 @@ function RecordForm({
           onValuesChange={onValuesChange}
           onFinish={onFinish}
         >
+          {editable && priced && (
+            <PurchasingAutofill
+              entityKey={entityKey}
+              isNew={!record}
+              fields={fields}
+              details={details}
+              onChange={onValuesChange}
+            />
+          )}
           <div style={{ maxWidth: 720 }}>
             {showsRecordNo(entity, record) && (
               <Form.Item label="單號">
@@ -488,12 +520,20 @@ function RecordForm({
                   ]}
                 >
                   {/* 傳 false 會蓋過 Form 的 disabled（唯讀者），只在唯讀欄位時指定 */}
-                  <RecordFieldInput
-                    field={field}
-                    disabled={field.is_readonly || undefined}
-                    relation={record?.relations?.[field.field_key]}
-                    attachment={record?.attachments?.[field.field_key]}
-                  />
+                  {priced && field.field_key === PURCHASING_FIELDS.rate ? (
+                    <ExchangeRateInput
+                      entityKey={entityKey}
+                      field={field}
+                      disabled={!editable || field.is_readonly || undefined}
+                    />
+                  ) : (
+                    <RecordFieldInput
+                      field={field}
+                      disabled={field.is_readonly || undefined}
+                      relation={record?.relations?.[field.field_key]}
+                      attachment={record?.attachments?.[field.field_key]}
+                    />
+                  )}
                 </Form.Item>
               );
             })}
@@ -573,7 +613,7 @@ export function RecordFormPage() {
     () =>
       detailDefs.data?.map((d) => ({
         entity: d.entity,
-        fields: formFields(d.fields),
+        fields: lineFormFields(d.entity.key, d.fields),
         formulas: formulaFields(d.fields),
       })),
     [detailDefs.data],

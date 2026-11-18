@@ -64,6 +64,13 @@ export const commands = {
 	updateCurrency: (code: string, req: UpdateCurrencyRequest_Deserialize) => typedError<Currency_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_currency", { code, req })),
 	/**  匯率列表（需要 `record.read`），依日期新到舊分頁。 */
 	listExchangeRates: (query: ExchangeRateQuery_Deserialize) => typedError<Page<ExchangeRate_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_exchange_rates", { query })),
+	/**
+	 *  幣別在單據日期的適用匯率（需要 `record.read`）：`rate_date` ≤ `date` 中最近的一筆；
+	 *  找不到時 `rate`、`rate_date` 為 `null`，本位幣固定 `1.000000`。
+	 */
+	effectiveExchangeRate: (query: EffectiveRateQuery_Deserialize) => typedError<EffectiveRate_Serialize, ClientError_Serialize>(__TAURI_INVOKE("effective_exchange_rate", { query })),
+	/**  全部稅別（需要登入），依稅率由高到低。 */
+	listTaxRates: () => typedError<TaxRate_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_tax_rates")),
 	/**  新增匯率（需要 `record.write`）。匯率以字串傳入，不經過浮點數。 */
 	createExchangeRate: (req: CreateExchangeRateRequest_Deserialize) => typedError<ExchangeRate_Serialize, ClientError_Serialize>(__TAURI_INVOKE("create_exchange_rate", { req })),
 	/**  修改匯率值（需要 `record.write`）。`req.version` 不符時回傳 `409 CONFLICT`。 */
@@ -152,6 +159,19 @@ export const commands = {
 	 *  反向處理失敗時回傳 `422 STOCK_INSUFFICIENT` 或 `LOT_IN_USE`。
 	 */
 	voidRecord: (key: string, id: string, version: number) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("void_record", { key, id, version })),
+	/**
+	 *  採購單確認（需要 `record.post`）：`draft` → `confirmed`，回傳確認後的單據（`version` + 1）。
+	 * 
+	 *  `version` 不符時回傳 `409 CONFLICT`；不是草稿時回傳 `422 INVALID_STATUS`；
+	 *  沒有匯率、沒有明細時回傳 `422 VALIDATION`。
+	 */
+	confirmRecord: (key: string, id: string, version: number) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("confirm_record", { key, id, version })),
+	/**
+	 *  採購單手動結案（需要 `record.post`）：`confirmed` / `partially_received` → `closed`。
+	 * 
+	 *  `version` 不符時回傳 `409 CONFLICT`；狀態不符時回傳 `422 INVALID_STATUS`。
+	 */
+	closeRecord: (key: string, id: string, version: number) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("close_record", { key, id, version })),
 	/**  商品庫存（需要 `record.read`）：未刪除的 `goods` 商品，依料號排序。 */
 	listStockBalances: (query: StockBalanceQuery_Deserialize) => typedError<Page<StockBalance_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_stock_balances", { query })),
 	/**  商品的批號（需要 `record.read`），依先進先出順序。商品不存在時回傳 `404 NOT_FOUND`。 */
@@ -1059,6 +1079,65 @@ export type DocumentStatus =
 "closed" | 
 /**  已作廢：不可再做任何操作。 */
 "void";
+
+/**
+ *  適用的匯率：`rate_date` 小於或等於 `date`、未刪除的匯率中日期最近的一筆。
+ * 
+ *  - 找不到時 `rate`、`rate_date` 為 `null`（不是錯誤，單據的匯率欄位留空讓使用者輸入）
+ *  - 本位幣固定 `rate = "1.000000"`、`rate_date = null`
+ */
+export type EffectiveRate = EffectiveRate_Serialize | EffectiveRate_Deserialize;
+
+/**  `GET /api/v1/exchange-rates/effective` 的 query string。 */
+export type EffectiveRateQuery = EffectiveRateQuery_Serialize | EffectiveRateQuery_Deserialize;
+
+/**  `GET /api/v1/exchange-rates/effective` 的 query string。 */
+export type EffectiveRateQuery_Deserialize = {
+	/**  幣別代碼（不分大小寫）。已停用的幣別仍可查詢。 */
+	currency_code: string,
+	/**  單據日期（`YYYY-MM-DD`）。 */
+	date: string,
+};
+
+/**  `GET /api/v1/exchange-rates/effective` 的 query string。 */
+export type EffectiveRateQuery_Serialize = {
+	/**  幣別代碼（不分大小寫）。已停用的幣別仍可查詢。 */
+	currency_code: string,
+	/**  單據日期（`YYYY-MM-DD`）。 */
+	date: string,
+};
+
+/**
+ *  適用的匯率：`rate_date` 小於或等於 `date`、未刪除的匯率中日期最近的一筆。
+ * 
+ *  - 找不到時 `rate`、`rate_date` 為 `null`（不是錯誤，單據的匯率欄位留空讓使用者輸入）
+ *  - 本位幣固定 `rate = "1.000000"`、`rate_date = null`
+ */
+export type EffectiveRate_Deserialize = {
+	/**  幣別代碼（大寫）。 */
+	currency_code: string,
+	/**  查詢的單據日期。 */
+	date: string,
+	rate?: string | null,
+	/**  採用的匯率的日期。 */
+	rate_date?: string | null,
+};
+
+/**
+ *  適用的匯率：`rate_date` 小於或等於 `date`、未刪除的匯率中日期最近的一筆。
+ * 
+ *  - 找不到時 `rate`、`rate_date` 為 `null`（不是錯誤，單據的匯率欄位留空讓使用者輸入）
+ *  - 本位幣固定 `rate = "1.000000"`、`rate_date = null`
+ */
+export type EffectiveRate_Serialize = {
+	/**  幣別代碼（大寫）。 */
+	currency_code: string,
+	/**  查詢的單據日期。 */
+	date: string,
+	rate: string | null,
+	/**  採用的匯率的日期。 */
+	rate_date: string | null,
+};
 
 /**
  *  資料類別定義（API 回應）。
@@ -2245,6 +2324,29 @@ export type TargetSnapshot_Serialize = {
 	entity_id: string,
 	fields: FieldDefinition_Serialize[],
 	records: TargetRecord[],
+};
+
+/**  稅別。 */
+export type TaxRate = TaxRate_Serialize | TaxRate_Deserialize;
+
+/**  稅別。 */
+export type TaxRate_Deserialize = {
+	/**  `taxable` / `zero_rated` / `exempt`。 */
+	code: string,
+	/**  應稅 / 零稅率 / 免稅。 */
+	name: string,
+	/**  稅率，例如 `"0.0500"`。 */
+	rate: string,
+};
+
+/**  稅別。 */
+export type TaxRate_Serialize = {
+	/**  `taxable` / `zero_rated` / `exempt`。 */
+	code: string,
+	/**  應稅 / 零稅率 / 免稅。 */
+	name: string,
+	/**  稅率，例如 `"0.0500"`。 */
+	rate: string,
 };
 
 /**  `GET /api/v1/inventory/transactions` 的 query string。 */

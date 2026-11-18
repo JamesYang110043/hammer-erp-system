@@ -30,6 +30,7 @@ import {
 import { INVENTORY_MODULES } from '../inventoryModules';
 import { entityIcon } from '../pages/schema/entityIcons';
 import { INVENTORY_GROUP_LABEL, inventoryEntities } from '../records/inventory';
+import { PURCHASING_GROUP_LABEL, purchasingEntities } from '../records/purchasing';
 import { MASTER_DATA_LABEL } from '../schema/entities';
 
 const { Header, Sider, Content, Footer } = Layout;
@@ -86,6 +87,23 @@ export function AppLayout() {
         ]
       : [];
 
+  // 進貨：採購單、進貨單（docs/architecture.md §8.8）
+  const purchasing = (canReadRecords ? purchasingEntities(entities.data ?? []) : []).map(
+    entityItem,
+  );
+  const purchasingItems: MenuItem[] =
+    purchasing.length > 0
+      ? [
+          {
+            type: 'group',
+            key: 'purchasing-group',
+            label: PURCHASING_GROUP_LABEL,
+            children: purchasing,
+          },
+          { type: 'divider', key: 'purchasing-group-divider' },
+        ]
+      : [];
+
   // 庫存：盤點調整單與庫存查詢（docs/architecture.md §8.10）
   const inventory: MenuItem[] = [
     ...(canReadRecords ? inventoryEntities(entities.data ?? []) : []).map(entityItem),
@@ -111,6 +129,7 @@ export function AppLayout() {
   // 選單依權限顯示；頁面本身也有檢查（router.tsx 的 RequirePermission）
   const menuItems: MenuItem[] = [
     ...masterDataItems,
+    ...purchasingItems,
     ...inventoryItems,
     ...MODULES.filter((m) => !m.permission || can(m.permission)).flatMap((m) => {
       const item: MenuItem = { key: m.path, icon: m.icon, label: m.label };

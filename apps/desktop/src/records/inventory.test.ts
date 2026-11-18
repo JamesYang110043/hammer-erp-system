@@ -7,7 +7,7 @@ import {
   STOCK_ADJUSTMENT_LINE,
   lot,
 } from '../test/documentFixtures';
-import { REPAIR } from '../test/schemaFixtures';
+import { REPAIR, fieldDef } from '../test/schemaFixtures';
 import {
   documentKeyOfLine,
   findLot,
@@ -56,6 +56,13 @@ describe('inventory', () => {
     expect(withFormDefaults('repair', STOCK_ADJUSTMENT_FIELDS, '2026-11-18')).toBe(
       STOCK_ADJUSTMENT_FIELDS,
     );
+    // 進貨單據的單據日期（§8.8）
+    const order = withFormDefaults(
+      'purchase_order',
+      [fieldDef({ field_key: 'order_date', data_type: 'date' })],
+      '2026-11-18',
+    );
+    expect(order[0]?.default_value).toBe('2026-11-18');
   });
 
   it('formats_numbers', () => {

@@ -63,12 +63,14 @@ export function documentStatuses(entityKey: string): readonly DocumentStatus[] {
     : ['draft', 'posted', 'void'];
 }
 
-/** 單據動作。 */
-export type DocumentAction = 'post' | 'void';
+/** 單據動作（`hammer_shared::document::DocumentAction`）。 */
+export type DocumentAction = 'post' | 'void' | 'confirm' | 'close';
 
 export const DOCUMENT_ACTION_LABELS: Record<DocumentAction, string> = {
   post: '過帳',
   void: '作廢',
+  confirm: '確認',
+  close: '結案',
 };
 
 /** 是否為有過帳、作廢的系統單據（`kind = document` 的系統資料類別）。 */
@@ -97,16 +99,86 @@ export function isEditableDocument(entity: EntityDefinition, record?: DataRecord
   return documentStatus(record) === 'draft';
 }
 
-/** 依目前狀態可以執行的動作：草稿 → 過帳，已過帳 → 作廢，已作廢 → 無。 */
-export function availableAction(status: DocumentStatus | undefined): DocumentAction | undefined {
+/**
+ * 依目前狀態可以執行的動作（伺服器同樣檢查）：
+ *
+ * - 採購單（§8.8「採購單的狀態」）：草稿 → 確認；已確認 → 結案、作廢；部分進貨 → 結案
+ * - 其他單據：草稿 → 過帳；已過帳 → 作廢
+ */
+export function availableActions(
+  entityKey: string,
+  status: DocumentStatus | undefined,
+): DocumentAction[] {
+  if (entityKey === PURCHASE_ORDER) {
+    switch (status) {
+      case 'draft':
+        return ['confirm'];
+      case 'confirmed':
+        return ['close', 'void'];
+      case 'partially_received':
+        return ['close'];
+      default:
+        return [];
+    }
+  }
   switch (status) {
     case 'draft':
-      return 'post';
+      return ['post'];
     case 'posted':
-      return 'void';
+      return ['void'];
     default:
-      return undefined;
+      return [];
   }
+}
+
+/** 執行動作前確認對話框的說明（docs/architecture.md §8.2、§8.8）。 */
+export function actionConfirmText(entityKey: string, action: DocumentAction): string {
+  if (entityKey === PURCHASE_ORDER) {
+    switch (action) {
+      case 'confirm':
+        return '確認後匯率與金額即鎖定，採購單不能再修改或刪除，之後可以據以進貨。';
+      case 'close':
+        return '結案後不能再依這張採購單進貨，尚未進貨的數量視為取消。';
+      case 'void':
+        return '作廢後這張採購單不能再使用，作廢後不能再恢復。';
+      default:
+        break;
+    }
+  }
+  switch (action) {
+    case 'post':
+      return '過帳後會依明細異動庫存，單據不能再修改或刪除。';
+    case 'void':
+      return '作廢會反向處理這張單據的庫存異動，作廢後不能再恢復。';
+    default:
+      return '';
+  }
+}
+
+/**
+ * 非草稿單據的說明文字：目前狀態與確認（過帳）、結案、作廢的時間。
+ * 採購單的 `posted_at` 是確認時間（§8.8）。
+ */
+export function documentStatusNote(
+  entityKey: string,
+  status: DocumentStatus,
+  document: DataRecord['document'] | undefined,
+  format: (iso: string) => string,
+): string {
+  const parts = [`此單據${DOCUMENT_STATUS_LABELS[status]}，不能修改。`];
+  const times: string[] = [];
+  if (document?.posted_at) {
+    times.push(
+      `${entityKey === PURCHASE_ORDER ? '確認' : '過帳'}時間：${format(document.posted_at)}`,
+    );
+  }
+  if (document?.closed_at) {
+    times.push(`結案時間：${format(document.closed_at)}`);
+  }
+  if (document?.voided_at) {
+    times.push(`作廢時間：${format(document.voided_at)}`);
+  }
+  return parts.join('') + times.join('；');
 }
 
 /** 數量顯示：去掉小數尾端的 0，加上千分位（`"1200.5000"` → `"1,200.5"`）。 */
@@ -143,9 +215,14 @@ export interface DocumentActionError {
  * - `422 STOCK_INSUFFICIENT` → 逐項列出不足的商品（批號）與數量
  * - `422 LOT_IN_USE` → 逐項列出被其他單據使用的批號與單號
  * - `422 INVALID_STATUS` → 說明單據目前的狀態，提示重新載入
- * - 其他 → 伺服器的訊息（`422 VALIDATION` 的明細錯誤由表單另外處理）
+ * - `422 VALIDATION` → 伺服器的訊息，`details.fields` 逐項列出（`labels` 為欄位代碼 → 顯示名稱）
+ * - 其他 → 伺服器的訊息
  */
-export function documentActionError(err: unknown, action: DocumentAction): DocumentActionError {
+export function documentActionError(
+  err: unknown,
+  action: DocumentAction,
+  labels: Record<string, string> = {},
+): DocumentActionError {
   const label = DOCUMENT_ACTION_LABELS[action];
   const code = apiErrorCode(err);
   const d = details(err);
@@ -188,6 +265,14 @@ export function documentActionError(err: unknown, action: DocumentAction): Docum
         : `單據狀態已變更，無法${label}，請重新載入`,
       items: [],
     };
+  }
+  if (code === 'VALIDATION' && isObject(d) && Array.isArray(d.fields)) {
+    const items = d.fields.flatMap((f: unknown) =>
+      isObject(f) && typeof f.field_key === 'string' && typeof f.message === 'string'
+        ? [`${labels[f.field_key] ?? f.field_key}：${f.message}`]
+        : [],
+    );
+    return { reload: false, title: `${label}失敗：${errorMessage(err)}`, items };
   }
   return { reload: false, title: `${label}失敗：${errorMessage(err)}`, items: [] };
 }

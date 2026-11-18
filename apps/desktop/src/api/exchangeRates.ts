@@ -52,3 +52,27 @@ export function useDeleteExchangeRate() {
     unwrap(commands.deleteExchangeRate(rate.id, rate.version)),
   );
 }
+
+/** 適用匯率的查詢鍵（放在 {@link exchangeRatesKey} 底下：修改匯率後一起重新取得）。 */
+export const effectiveRateKey = (currencyCode: string, date: string) =>
+  [...exchangeRatesKey, 'effective', currencyCode, date] as const;
+
+/** 適用匯率的查詢設定（`useQuery` 與 `queryClient.fetchQuery` 共用）。 */
+export function effectiveRateQuery(currencyCode: string, date: string) {
+  return {
+    queryKey: effectiveRateKey(currencyCode, date),
+    queryFn: () => unwrap(commands.effectiveExchangeRate({ currency_code: currencyCode, date })),
+    staleTime: 60_000,
+  };
+}
+
+/**
+ * 幣別在單據日期（`YYYY-MM-DD`）的適用匯率（docs/architecture.md §8.8「幣別與匯率」）。
+ * 幣別或日期沒有值時不查詢。
+ */
+export function useEffectiveRate(currencyCode: string | undefined, date: string | undefined) {
+  return useQuery({
+    ...effectiveRateQuery(currencyCode ?? '', date ?? ''),
+    enabled: Boolean(currencyCode && date),
+  });
+}

@@ -18,8 +18,8 @@ use hammer_shared::currency::{
 };
 use hammer_shared::document::{DocumentAction, DocumentActionRequest};
 use hammer_shared::exchange_rate::{
-    CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
-    UpdateExchangeRateRequest,
+    CreateExchangeRateRequest, DeleteExchangeRateQuery, EffectiveRate, EffectiveRateQuery,
+    ExchangeRate, ExchangeRateQuery, UpdateExchangeRateRequest,
 };
 use hammer_shared::health::HealthResponse;
 use hammer_shared::inventory::{
@@ -41,6 +41,7 @@ use hammer_shared::schema::{
     UpdateFieldRequest, validate_key,
 };
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
+use hammer_shared::tax_rate::TaxRate;
 use hammer_shared::user::{
     CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
 };
@@ -418,6 +419,34 @@ impl ApiClient {
             .get(endpoint(server_url, "/exchange-rates"))
             .bearer_auth(token)
             .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/exchange-rates/effective`：幣別在單據日期的適用匯率（找不到時 `rate` 為 `null`）。
+    pub async fn effective_exchange_rate(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &EffectiveRateQuery,
+    ) -> Result<EffectiveRate, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/exchange-rates/effective"))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/tax-rates`（全部稅別）。
+    pub async fn list_tax_rates(
+        &self,
+        server_url: &str,
+        token: &str,
+    ) -> Result<Vec<TaxRate>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/tax-rates"))
+            .bearer_auth(token);
         authed(read_json(send(builder).await?).await)
     }
 
@@ -2764,6 +2793,89 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ClientError::InvalidInput { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn effective_rate_and_tax_rate_endpoints() {
+        use axum::extract::RawQuery;
+
+        let url = serve(
+            Router::new()
+                .route(
+                    "/exchange-rates/effective",
+                    get(|RawQuery(query): RawQuery| async move {
+                        assert_eq!(query.as_deref(), Some("currency_code=USD&date=2026-11-18"));
+                        axum::Json(json!({
+                            "currency_code": "USD", "date": "2026-11-18",
+                            "rate": "32.150000", "rate_date": "2026-11-15",
+                        }))
+                    }),
+                )
+                .route(
+                    "/tax-rates",
+                    get(|| async {
+                        axum::Json(json!([
+                            { "code": "taxable", "name": "應稅", "rate": "0.0500" },
+                            { "code": "zero_rated", "name": "零稅率", "rate": "0.0000" },
+                        ]))
+                    }),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+
+        let rate = client
+            .effective_exchange_rate(
+                &url,
+                "tok",
+                &EffectiveRateQuery {
+                    currency_code: "USD".into(),
+                    date: time::macros::date!(2026 - 11 - 18),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(rate.rate.unwrap().to_string(), "32.150000");
+        assert_eq!(rate.rate_date, Some(time::macros::date!(2026 - 11 - 15)));
+
+        let taxes = client.list_tax_rates(&url, "tok").await.unwrap();
+        assert_eq!(taxes.len(), 2);
+        assert_eq!(taxes[0].code, "taxable");
+    }
+
+    #[tokio::test]
+    async fn confirm_and_close_endpoints() {
+        use axum::extract::Path;
+
+        let record_id: Id = "0196f5a0-0000-7000-8000-000000000201".parse().unwrap();
+        let url = serve(Router::new().route(
+            "/entities/{key}/records/{id}/{action}",
+            post(
+                |Path((key, _id, action)): Path<(String, String, String)>,
+                 axum::Json(body): axum::Json<serde_json::Value>| async move {
+                    assert_eq!(key, "purchase_order");
+                    assert!(action == "confirm" || action == "close", "{action}");
+                    let version = body["version"].as_i64().unwrap() as i32;
+                    axum::Json(record_json(version + 1))
+                },
+            ),
+        ))
+        .await;
+        let client = ApiClient::new().unwrap();
+        for (action, version) in [(DocumentAction::Confirm, 1), (DocumentAction::Close, 2)] {
+            let record = client
+                .document_action(
+                    &url,
+                    "tok",
+                    "purchase_order",
+                    record_id,
+                    action,
+                    &DocumentActionRequest { version },
+                )
+                .await
+                .unwrap();
+            assert_eq!(record.version, version + 1);
+        }
     }
 
     #[tokio::test]

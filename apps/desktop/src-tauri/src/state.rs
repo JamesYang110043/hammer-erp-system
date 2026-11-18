@@ -12,8 +12,8 @@ use hammer_shared::currency::{
 };
 use hammer_shared::document::{DocumentAction, DocumentActionRequest};
 use hammer_shared::exchange_rate::{
-    CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
-    UpdateExchangeRateRequest,
+    CreateExchangeRateRequest, DeleteExchangeRateQuery, EffectiveRate, EffectiveRateQuery,
+    ExchangeRate, ExchangeRateQuery, UpdateExchangeRateRequest,
 };
 use hammer_shared::inventory::{
     InventoryLot, InventoryTransaction, LotQuery, StockBalance, StockBalanceQuery, TransactionQuery,
@@ -34,6 +34,7 @@ use hammer_shared::schema::{
     UpdateFieldRequest,
 };
 use hammer_shared::setup::{CreateAdminRequest, SetupStatus};
+use hammer_shared::tax_rate::TaxRate;
 use hammer_shared::user::{
     CreateUserRequest, DeleteUserQuery, ResetPasswordRequest, Role, UpdateUserRequest, User,
 };
@@ -256,6 +257,23 @@ impl AppState {
             client.list_exchange_rates(url, token, query).await
         })
         .await
+    }
+
+    /// 幣別在單據日期的適用匯率。
+    pub async fn effective_exchange_rate(
+        &self,
+        query: &EffectiveRateQuery,
+    ) -> Result<EffectiveRate, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.effective_exchange_rate(url, token, query).await
+        })
+        .await
+    }
+
+    /// 全部稅別。
+    pub async fn list_tax_rates(&self) -> Result<Vec<TaxRate>, ClientError> {
+        self.with_token(async |client, url, token| client.list_tax_rates(url, token).await)
+            .await
     }
 
     /// 新增匯率。

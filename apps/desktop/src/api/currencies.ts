@@ -17,12 +17,15 @@ export function useActiveCurrencies() {
   });
 }
 
-/** 所有幣別，含已停用的（幣別管理、匯率列表用）。 */
-export function useAllCurrencies() {
-  return useQuery({
-    queryKey: [...currenciesKey, 'all'],
-    queryFn: () => unwrap(commands.listCurrencies(true)),
-  });
+/** 所有幣別的查詢設定（`useQuery` 與 `queryClient.fetchQuery` 共用）。 */
+export const allCurrenciesQuery = {
+  queryKey: [...currenciesKey, 'all'],
+  queryFn: () => unwrap(commands.listCurrencies(true)),
+};
+
+/** 所有幣別，含已停用的（幣別管理、匯率列表、單據的金額小數位數用）。 */
+export function useAllCurrencies(enabled = true) {
+  return useQuery({ ...allCurrenciesQuery, enabled });
 }
 
 /** 修改幣別後重新取得所有幣別列表（含選單）與操作紀錄。 */
@@ -48,4 +51,14 @@ export function useUpdateCurrency() {
   return useCurrencyMutation(({ code, req }: { code: string; req: UpdateCurrencyRequest }) =>
     unwrap(commands.updateCurrency(code, req)),
   );
+}
+
+/** 稅別（需要登入）：由 migration 寫入，不提供修改。 */
+export function useTaxRates(enabled = true) {
+  return useQuery({
+    queryKey: ['taxRates'],
+    queryFn: () => unwrap(commands.listTaxRates()),
+    staleTime: Infinity,
+    enabled,
+  });
 }
