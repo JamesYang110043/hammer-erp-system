@@ -5,6 +5,7 @@
 //!
 //! - [`find_states`]：讀取一批單據的狀態與過帳、作廢資訊（回應的 `document`）
 //! - [`mark_posted`]、[`mark_voided`]：過帳、作廢時更新狀態並遞增 `version`
+//! - [`find_record_no`]：依資料表名稱與 id 讀取單號（含已刪除），供錯誤訊息指出是哪張單據
 //!
 //! 資料表名稱來自 [`SystemTable`]（已檢查過名稱），一律加上引號拼接；值以 bind 參數傳入。
 
@@ -14,6 +15,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::DbError;
+use crate::dynamic_index::is_safe_identifier;
 use crate::system_record::SystemTable;
 
 /// 一張單據的狀態與過帳、作廢資訊。
@@ -117,6 +119,30 @@ fn status_query(
     qb
 }
 
+/// 系統單據主表 `table_name` 中 `id` 的單號（含已刪除）；找不到時為 `None`。
+///
+/// `table_name` 不符合 [`is_safe_identifier`] → [`DbError::UnsafeIdentifier`]。
+pub async fn find_record_no<'e>(
+    executor: impl PgExecutor<'e>,
+    table_name: &str,
+    id: Uuid,
+) -> Result<Option<String>, DbError> {
+    let mut qb = record_no_query(table_name, id)?;
+    Ok(qb
+        .build_query_scalar::<String>()
+        .fetch_optional(executor)
+        .await?)
+}
+
+fn record_no_query(table_name: &str, id: Uuid) -> Result<QueryBuilder<Postgres>, DbError> {
+    if !is_safe_identifier(table_name) {
+        return Err(DbError::UnsafeIdentifier(table_name.to_owned()));
+    }
+    let mut qb = QueryBuilder::new("SELECT record_no FROM \"");
+    qb.push(table_name).push("\" WHERE id = ").push_bind(id);
+    Ok(qb)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +160,19 @@ mod tests {
             at: OffsetDateTime::UNIX_EPOCH,
             by: Uuid::nil(),
         }
+    }
+
+    #[test]
+    fn record_no_query_checks_table_name() {
+        let qb = record_no_query("stock_adjustments", Uuid::nil()).unwrap();
+        assert_eq!(
+            qb.sql().as_str(),
+            "SELECT record_no FROM \"stock_adjustments\" WHERE id = $1"
+        );
+        assert!(matches!(
+            record_no_query("x\"; DROP TABLE users; --", Uuid::nil()),
+            Err(DbError::UnsafeIdentifier(_))
+        ));
     }
 
     #[test]

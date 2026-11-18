@@ -23,7 +23,7 @@
 //! }
 //! ```
 
-pub use rust_decimal::Decimal;
+pub use rust_decimal::{Decimal, RoundingStrategy};
 
 /// `Decimal` ⇄ JSON 字串。搭配 `#[serde(with = "hammer_shared::decimal::serde_str")]`。
 pub mod serde_str {

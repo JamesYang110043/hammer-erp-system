@@ -8,6 +8,7 @@
 //! - [`documents`]：系統單據的過帳、作廢（共通檢查、依資料類別分派處理函式、操作紀錄）
 //! - [`exchange_rates`]：匯率的查詢、新增、修改、刪除，以及單據日期適用的匯率
 //! - [`formulas`]：存檔時計算公式欄位
+//! - [`inventory`]：庫存引擎（鎖定、入庫建批號、先進先出與指定批號扣庫存、反向處理、異動流水帳）
 //! - [`layouts`]：列表版面（`view_layouts`）
 //! - [`master_data`]：基本資料（單位、商品分類、商品、客戶、廠商）的業務規則
 //! - [`numbering`]：單號規則的解析與產生
@@ -35,6 +36,7 @@ pub mod documents;
 mod error;
 pub mod exchange_rates;
 pub mod formulas;
+pub mod inventory;
 pub mod layouts;
 pub mod master_data;
 pub mod numbering;

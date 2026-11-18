@@ -14,6 +14,7 @@ pub mod error;
 pub mod exchange_rate;
 pub mod health;
 pub mod id;
+pub mod inventory;
 pub mod layout;
 pub mod pagination;
 pub mod permission;
