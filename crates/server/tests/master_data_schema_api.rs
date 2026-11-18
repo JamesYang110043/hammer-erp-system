@@ -146,7 +146,7 @@ async fn patch_field(
     .await
 }
 
-/// 登入後（含唯讀者）列表回傳 7 個系統資料類別；明細子表有主表，桌面程式的選單依 `kind` 排除。
+/// 登入後（含唯讀者）列表回傳 M3 的 7 個系統資料類別（與 M4a 的盤點調整單）；明細子表有主表，桌面程式的選單依 `kind` 排除。
 #[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
 async fn list_returns_system_entities(pool: PgPool) {
     let token = token_for(&pool, "viewer", role::VIEWER).await;
@@ -155,17 +155,19 @@ async fn list_returns_system_entities(pool: PgPool) {
     let list: Vec<EntityDefinition> = serde_json::from_value(body).unwrap();
 
     let keys: Vec<&str> = list.iter().map(|e| e.key.as_str()).collect();
-    // 依 sort_order、id 排序：明細子表（0）在前
+    // 依 sort_order、id 排序：明細子表（0）在前；盤點調整單（M4a，#128）在 M3 之後
     assert_eq!(
         keys,
         [
             "customer_contact",
             "supplier_contact",
+            "stock_adjustment_line",
             "product",
             "product_category",
             "unit",
             "customer",
             "supplier",
+            "stock_adjustment",
         ]
     );
     for (key, kind, parent, _) in SYSTEM_ENTITIES {
@@ -188,7 +190,8 @@ async fn list_returns_system_entities(pool: PgPool) {
             "product_category",
             "unit",
             "customer",
-            "supplier"
+            "supplier",
+            "stock_adjustment",
         ]
     );
 }

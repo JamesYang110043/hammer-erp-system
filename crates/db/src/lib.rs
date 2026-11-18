@@ -8,6 +8,7 @@
 //! - [`currency`]：幣別（`currencies`）的查詢、新增、修改
 //! - [`dynamic_index`]：自訂欄位的動態索引（可搜尋、不可重複；`custom_records` 與系統資料表）
 //! - [`exchange_rate`]：匯率（`exchange_rates`）的查詢、新增、修改、軟刪除與適用匯率查詢
+//! - [`inventory`]：庫存（批號、批號扣除、異動流水帳、商品庫存）的基本讀寫
 //! - [`lock`]：advisory lock
 //! - [`master_data`]：基本資料業務規則的查詢（幣別有效、分類上層、使用中的商品數）
 //! - [`number_sequence`]：單號流水號（`number_sequences`）的取號
@@ -30,6 +31,7 @@ pub mod currency;
 pub mod dynamic_index;
 mod error;
 pub mod exchange_rate;
+pub mod inventory;
 pub mod lock;
 pub mod master_data;
 mod migrate;

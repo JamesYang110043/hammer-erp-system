@@ -26,6 +26,11 @@ const SYSTEM_TABLES: &[(&str, &str, Option<&str>)] = &[
     ("supplier_contact", "supplier_contacts", Some("supplier_id")),
 ];
 
+/// M3 的系統資料表名稱（之後的 migration 另外登記的系統資料類別不在此檔檢查）。
+fn m3_tables() -> Vec<&'static str> {
+    SYSTEM_TABLES.iter().map(|(_, table, _)| *table).collect()
+}
+
 /// 每張系統資料表都有、但不是欄位的實體欄位（§8.6「系統資料表的共同規則」）。
 const NON_FIELD_COLUMNS: &[&str] = &[
     "id",
@@ -351,11 +356,16 @@ async fn applies_on_existing_database(pool: PgPool) {
     // 重複執行不會出錯
     hammer_db::run_migrations(&pool).await.unwrap();
 
-    let keys: Vec<String> =
-        sqlx::query_scalar("SELECT key FROM entity_definitions ORDER BY is_system, key")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    // 之後的 migration（例如 0011 的盤點調整單）另外登記的系統資料類別不在此檢查
+    let keys: Vec<String> = sqlx::query_scalar(
+        "SELECT key FROM entity_definitions
+         WHERE NOT is_system OR table_name = ANY($1)
+         ORDER BY is_system, key",
+    )
+    .bind(m3_tables())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         keys,
         [
@@ -463,7 +473,7 @@ async fn default_tax_rates(pool: PgPool) {
 // 系統資料類別與系統欄位
 // ---------------------------------------------------------------------------
 
-/// 7 個系統資料類別與 §8.6「M3 的系統資料類別」一致。
+/// M3 的 7 個系統資料類別與 §8.6「M3 的系統資料類別」一致。
 #[sqlx::test(migrator = "hammer_db::MIGRATOR")]
 async fn system_entities_are_registered(pool: PgPool) {
     #[allow(clippy::type_complexity)]
@@ -485,8 +495,10 @@ async fn system_entities_are_registered(pool: PgPool) {
                 e.title_template, e.icon, e.numbering_pattern, e.sort_order, e.is_active
          FROM entity_definitions e
          LEFT JOIN entity_definitions p ON p.id = e.parent_entity_id
+         WHERE e.table_name = ANY($1)
          ORDER BY e.id",
     )
+    .bind(m3_tables())
     .fetch_all(&pool)
     .await
     .unwrap();
