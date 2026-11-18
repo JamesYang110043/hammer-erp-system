@@ -101,6 +101,15 @@ git switch -c <type>/N-<英文簡述>
 - 工具或專案結構還不存在（例如 M0 前沒有 Cargo workspace），記下「未執行」和原因，不能當作通過
 - 逐條檢查驗收條件是否都已滿足
 
+**畫面驗證**（`area:desktop`，或改到 `apps/desktop/src/` 時；規則見 `docs/issue-workflow.md` §6「畫面驗證」）：
+
+1. 把驗收條件中和畫面有關的操作寫成 `apps/desktop/e2e/` 的 Playwright 測試（Tauri command 用 `e2e/tauri-mock.ts` 的 `mockTauri`）
+2. 在 `apps/desktop` 執行 `E2E_SCREENSHOT=1 pnpm test:e2e`，必須通過
+3. 用 Read 工具逐張打開 `apps/desktop/test-results/` 的截圖，檢查版面、繁體中文文字、數字與日期格式、錯誤訊息；發現問題就修正後重跑
+4. 記下檢查過的畫面、結果和截圖路徑；mock 無法涵蓋的項目（真實後端資料、Tauri 原生功能）列為「需要人工確認」
+
+不適用（純 db、core、server、文件、CI）時，在 PR 的「驗證方式」寫「畫面驗證：不適用（沒有畫面改動）」。
+
 ### 9. Commit
 
 依 `docs/issue-workflow.md` §4 格式，描述用中文：
@@ -119,8 +128,9 @@ feat(server): 新增登入 API (#12)
 2. 變更檔案摘要（`git diff --stat main...HEAD`）
 3. 驗收條件逐條狀態
 4. 驗證指令與實際結果（包含未執行的項目和原因）
-5. 準備使用的 PR 標題與內文全文
-6. 最後一句：「確認沒問題請回覆 ok，我就推送並開 PR。」
+5. 畫面驗證結果：檢查過的畫面、截圖的完整路徑（方便使用者自己打開，或拖進 PR）、需要人工確認的項目；不適用時說明原因
+6. 準備使用的 PR 標題與內文全文
+7. 最後一句：「確認沒問題請回覆 ok，我就推送並開 PR。」
 
 使用者要求修改時，修改 → 重新驗證 → commit → 再回到本步驟。
 
