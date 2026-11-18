@@ -1139,7 +1139,7 @@ M4b 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 | amount | NUMERIC(18,4) NOT NULL DEFAULT 0 | `money` | 金額 | 系統維護、小數 4 |
 | unit_cost_twd | NUMERIC(18,4) CHECK (unit_cost_twd >= 0) | `money` | 台幣單位成本 | 系統維護、小數 4；過帳時寫入批號的成本（`service` 為進貨明細的 `unit_cost_twd`） |
 | notes | TEXT | `long_text` | 備註 | |
-| lot_id | UUID FK → inventory_lots | （不是欄位） | | 存檔時寫入進貨明細的 `lot_id`（`service` 為 `NULL`） |
+| lot_id | UUID FK → inventory_lots | （不是欄位） | | 過帳時寫入進貨明細的 `lot_id`（`service` 為 `NULL`；不是欄位，存檔時不寫入） |
 
 另外有索引 `(goods_receipt_line_id)`、`(lot_id)`。
 
@@ -1311,7 +1311,7 @@ draft ──確認──▶ confirmed ──進貨過帳──▶ partially_rece
 退回**已過帳**進貨單的部分或全部明細。建立方式與「採購單轉進貨單」相同由桌面程式帶入：選擇進貨單後，列出每一列進貨明細的**可退數量**，使用者選擇要退的列與數量。
 
 - 只能退已過帳的進貨單：存檔與過帳時檢查進貨單 `status = posted`（`goods_receipt_id`「進貨單尚未過帳」「進貨單已作廢」）。
-- 表頭的 `supplier_id`、`currency_code`、`exchange_rate`、`tax_type`，明細的 `product_id`、`lot_no`、`unit_price`、`lot_id` 由伺服器在存檔時從進貨單、進貨明細帶入（系統維護）。金額依「金額與稅額」計算，`total_twd` 使用進貨單的匯率。
+- 表頭的 `supplier_id`、`currency_code`、`exchange_rate`、`tax_type`，明細的 `product_id`、`lot_no`、`unit_price` 由伺服器在存檔時從進貨單、進貨明細帶入（系統維護；`lot_id` 在過帳時寫入）。金額依「金額與稅額」計算，`total_twd` 使用進貨單的匯率。
 - 明細的 `goods_receipt_line_id` 必須是表頭進貨單未刪除的明細（「不是此進貨單的明細」）。同一張退回單中，同一列進貨明細只能出現一次（第二列的 `goods_receipt_line_id`「進貨明細重複」）。
 
 **退回數量上限**（存檔時與過帳時都檢查；過帳時在鎖定進貨單後檢查）：

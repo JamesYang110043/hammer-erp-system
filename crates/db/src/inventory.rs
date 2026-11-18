@@ -482,7 +482,7 @@ pub async fn find_products<'e>(
 // 庫存查詢（§8.10「庫存查詢 API」）
 // ---------------------------------------------------------------------------
 //
-// 來源單據的單號：依來源類型 LEFT JOIN 單據主表（盤點調整單、進貨單）；進貨退回、M4c 的單據之後加上。
+// 來源單據的單號：依來源類型 LEFT JOIN 單據主表（盤點調整單、進貨單、進貨退回）；M4c 的單據之後加上。
 
 /// 商品庫存列表的條件。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -721,7 +721,7 @@ pub async fn list_transactions<'e>(
                p.code AS product_code, p.name AS product_name,
                t.lot_id, l.lot_no, t.qty_change, t.unit_cost_twd,
                t.ref_doc_type, t.ref_doc_id,
-               COALESCE(sa.record_no, gr.record_no, '') AS "ref_record_no!",
+               COALESCE(sa.record_no, gr.record_no, pr.record_no, '') AS "ref_record_no!",
                t.ref_line_id, t.created_by, u.display_name AS "created_by_name?"
         FROM inventory_transactions t
         JOIN products p ON p.id = t.product_id
@@ -730,6 +730,8 @@ pub async fn list_transactions<'e>(
                ON t.ref_doc_type = 'stock_adjustment' AND sa.id = t.ref_doc_id
         LEFT JOIN goods_receipts gr
                ON t.ref_doc_type = 'goods_receipt' AND gr.id = t.ref_doc_id
+        LEFT JOIN purchase_returns pr
+               ON t.ref_doc_type = 'purchase_return' AND pr.id = t.ref_doc_id
         LEFT JOIN users u ON u.id = t.created_by
         WHERE ($1::uuid IS NULL OR t.product_id = $1)
           AND ($2::uuid IS NULL OR t.lot_id = $2)

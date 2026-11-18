@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, product_id, lot_no, unit_price, lot_id\n        FROM goods_receipt_lines\n        WHERE goods_receipt_id = $1 AND id = ANY($2) AND deleted_at IS NULL\n        ORDER BY id\n        ",
+  "query": "\n        SELECT id, product_id, lot_no, unit_price, lot_id, qty, unit_cost_twd\n        FROM goods_receipt_lines\n        WHERE goods_receipt_id = $1 AND id = ANY($2) AND deleted_at IS NULL\n        ORDER BY id\n        ",
   "describe": {
     "columns": [
       {
@@ -57,6 +57,28 @@
             "name": "lot_id"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "qty",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "qty"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "unit_cost_twd",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "unit_cost_twd"
+          }
+        }
       }
     ],
     "parameters": {
@@ -70,8 +92,10 @@
       false,
       true,
       false,
+      true,
+      false,
       true
     ]
   },
-  "hash": "0127afd71d3885bbc98b29ebc05a5f0fea9b084b5a7f42adbc8d2815048d3840"
+  "hash": "b6887c8c569ab769e00562ff1ca4f33e724b57079bbc28a500cbbee2d51b0893"
 }
