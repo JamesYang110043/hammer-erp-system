@@ -167,3 +167,4 @@ Closes #12
 - 沿用 issue 的標籤與里程碑
 - 一個 PR 只處理一個 issue
 - 由專案負責人 review 與 merge；開發者（含 Claude）不自行 merge
+  - 例外：專案負責人以 `/do-multi-issue` 批次執行時，視為事先同意由 Claude 在 CI 全部通過後自行 merge（repo 沒有 branch protection，CI 結果由 skill 自行確認）
