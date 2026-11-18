@@ -138,6 +138,20 @@ export const commands = {
 	updateRecord: (key: string, id: string, req: UpdateRecordRequest_Deserialize) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_record", { key, id, req })),
 	/**  刪除資料（需要 `record.write`）。`version` 不符時回傳 `409 CONFLICT`。 */
 	deleteRecord: (key: string, id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_record", { key, id, version })),
+	/**
+	 *  系統單據過帳（需要 `record.post`）：`draft` → `posted`，回傳過帳後的單據（`version` + 1）。
+	 * 
+	 *  `version` 不符時回傳 `409 CONFLICT`；不是草稿時回傳 `422 INVALID_STATUS`；
+	 *  庫存不足時回傳 `422 STOCK_INSUFFICIENT`（`details` 見 [`hammer_shared::document`]）。
+	 */
+	postRecord: (key: string, id: string, version: number) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("post_record", { key, id, version })),
+	/**
+	 *  系統單據作廢（需要 `record.post`）：`posted` → `void`，回傳作廢後的單據（`version` + 1）。
+	 * 
+	 *  `version` 不符時回傳 `409 CONFLICT`；不是已過帳時回傳 `422 INVALID_STATUS`；
+	 *  反向處理失敗時回傳 `422 STOCK_INSUFFICIENT` 或 `LOT_IN_USE`。
+	 */
+	voidRecord: (key: string, id: string, version: number) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("void_record", { key, id, version })),
 	/**  列表版面：全域版面與自己的個人版面（需要 `record.read`）。 */
 	listLayouts: (key: string) => typedError<ViewLayout_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_layouts", { key })),
 	/**  要套用的預設版面：自己的預設 → 全域預設 → 依欄位定義產生。 */
@@ -1004,6 +1018,23 @@ export type DocumentInfo_Serialize = {
 	voided_by: string | null,
 };
 
+/**  指向一張單據。 */
+export type DocumentRef = {
+	/**  單據的資料類別代碼。 */
+	entity_key: string,
+	record_id: string,
+	record_no: string,
+};
+
+/**  單據的狀態（§8.2）。JSON 中為 `draft` / `posted` / `void`。 */
+export type DocumentStatus = 
+/**  草稿：可以修改、刪除、過帳。 */
+"draft" | 
+/**  已過帳：不可修改、刪除；可以作廢。 */
+"posted" | 
+/**  已作廢：不可再做任何操作。 */
+"void";
+
 /**
  *  資料類別定義（API 回應）。
  * 
@@ -1486,6 +1517,11 @@ export type HealthResponse = {
 /**  健康狀態。JSON 中為小寫字串（`"ok"`、`"error"`）。 */
 export type HealthStatus = "ok" | "error";
 
+/**  `INVALID_STATUS` 的 `details`：單據目前的狀態。 */
+export type InvalidStatusDetails = {
+	status: DocumentStatus,
+};
+
 /**  列表的一個顯示欄位。 */
 export type LayoutColumn = LayoutColumn_Serialize | LayoutColumn_Deserialize;
 
@@ -1563,6 +1599,14 @@ export type LineInput_Serialize = {
 	data: { [key in string]: unknown },
 };
 
+/**  明細的位置（錯誤 `details` 中指出是哪一列）。 */
+export type LineRef = {
+	/**  明細子表代碼。 */
+	detail_key: string,
+	/**  該列依 `sort_order` 的位置，從 0 開始。 */
+	index: number,
+};
+
 /**  `POST /api/v1/auth/login` 的輸入。 */
 export type LoginRequest = {
 	username: string,
@@ -1622,6 +1666,21 @@ export type LookupQuery_Deserialize = {
 export type LookupQuery_Serialize = {
 	q: string | null,
 	limit: number | null,
+};
+
+/**  一個被其他有效單據使用的批號。 */
+export type LotInUse = {
+	lot_id: string,
+	lot_no: string,
+	product_id: string,
+	product_code: string,
+	/**  使用此批號、且尚未作廢的其他單據。 */
+	documents: DocumentRef[],
+};
+
+/**  `LOT_IN_USE` 的 `details`：被其他有效單據使用的批號。 */
+export type LotInUseDetails = {
+	lots: LotInUse[],
 };
 
 /**  分頁的列表回應。 */
@@ -1898,6 +1957,65 @@ export type SelectOption_Serialize = {
 export type SetupStatus = {
 	/**  資料庫還沒有任何帳號，需要先建立管理者。 */
 	needs_setup: boolean,
+};
+
+/**  `STOCK_INSUFFICIENT` 的 `details`：所有不足的項目。 */
+export type StockInsufficientDetails = StockInsufficientDetails_Serialize | StockInsufficientDetails_Deserialize;
+
+/**  `STOCK_INSUFFICIENT` 的 `details`：所有不足的項目。 */
+export type StockInsufficientDetails_Deserialize = {
+	items: StockShortage_Deserialize[],
+};
+
+/**  `STOCK_INSUFFICIENT` 的 `details`：所有不足的項目。 */
+export type StockInsufficientDetails_Serialize = {
+	items: StockShortage_Serialize[],
+};
+
+/**
+ *  一個不足的批號（指定批號）或商品（先進先出，`lot_id`、`lot_no` 為 `null`）。
+ *  同一個批號（商品）出現在多列明細時合併成一項，`required` 為合計。數量為補齊 4 位小數的字串。
+ */
+export type StockShortage = StockShortage_Serialize | StockShortage_Deserialize;
+
+/**
+ *  一個不足的批號（指定批號）或商品（先進先出，`lot_id`、`lot_no` 為 `null`）。
+ *  同一個批號（商品）出現在多列明細時合併成一項，`required` 為合計。數量為補齊 4 位小數的字串。
+ */
+export type StockShortage_Deserialize = {
+	product_id: string,
+	product_code: string,
+	product_name: string,
+	lot_id?: string | null,
+	lot_no?: string | null,
+	/**  需要的數量（合計）。 */
+	required: string,
+	/**  目前可用的數量。 */
+	available: string,
+	/**  尚缺的數量（`required − available`）。 */
+	shortage: string,
+	/**  用到此批號（商品）的明細。 */
+	lines: LineRef[],
+};
+
+/**
+ *  一個不足的批號（指定批號）或商品（先進先出，`lot_id`、`lot_no` 為 `null`）。
+ *  同一個批號（商品）出現在多列明細時合併成一項，`required` 為合計。數量為補齊 4 位小數的字串。
+ */
+export type StockShortage_Serialize = {
+	product_id: string,
+	product_code: string,
+	product_name: string,
+	lot_id: string | null,
+	lot_no: string | null,
+	/**  需要的數量（合計）。 */
+	required: string,
+	/**  目前可用的數量。 */
+	available: string,
+	/**  尚缺的數量（`required − available`）。 */
+	shortage: string,
+	/**  用到此批號（商品）的明細。 */
+	lines: LineRef[],
 };
 
 /**  關聯目標的一筆資料。 */
