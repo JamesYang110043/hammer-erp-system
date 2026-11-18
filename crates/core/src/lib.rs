@@ -20,6 +20,7 @@
 //! - [`relations`]：關聯欄位的檢查與回應中的關聯資訊
 //! - [`schema`]：資料類別與欄位定義的管理
 //! - [`setup`]：初次啟動建立第一個管理者
+//! - [`stock_adjustments`]：盤點調整單的存檔檢查與過帳、作廢（期初庫存、盤盈、盤虧）
 //! - [`tax_rates`]：稅別列表
 //! - [`title`]：資料標題（`title_template`）的解析與產生
 //! - [`users`]：帳號管理與最後一個管理者保護
@@ -48,6 +49,7 @@ pub mod records;
 pub mod relations;
 pub mod schema;
 pub mod setup;
+pub mod stock_adjustments;
 pub mod tax_rates;
 #[cfg(feature = "test-util")]
 pub mod test_util;

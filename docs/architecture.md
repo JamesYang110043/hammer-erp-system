@@ -1293,6 +1293,7 @@ M4a 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 | `adjustment_type = opening` 時只能使用 `gain_new` | `line_type`「期初庫存只能新增批號」 |
 
 - 存檔時**不檢查**庫存是否足夠（過帳時檢查），所以草稿可以先輸入盤虧。
+- 修改時沒有帶到明細，只在 `adjustment_type` 有變動時以既有的明細檢查（例如改為期初庫存）；其他修改不重新檢查明細（過帳時一律重新檢查）。
 - 系統維護的欄位、`lot_id` 由伺服器寫入；明細 request 帶到 `lot_id` 時與其他未定義的欄位相同（`422`）。
 
 **過帳**（`POST /api/v1/entities/stock_adjustment/records/{id}/post`，§10「單據動作」）：

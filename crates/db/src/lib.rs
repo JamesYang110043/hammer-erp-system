@@ -18,6 +18,7 @@
 //! - [`schema`]：資料類別、欄位定義與定義變更紀錄
 //! - [`session`]：`sessions` 的新增、查詢、更新與撤銷
 //! - [`settings`]：讀取 `settings`
+//! - [`stock_adjustment`]：盤點調整明細在過帳、作廢時的讀寫（`lot_id`、系統寫入的批號與成本）
 //! - [`system_record`]：系統資料類別的資料（`storage = table`，系統欄位是實體欄位、自訂欄位在 `custom_data`）
 //! - [`tax_rate`]：稅別（`tax_rates`）列表
 //! - [`user`]：認證用的使用者查詢，以及帳號的建立、修改、停用、刪除
@@ -45,6 +46,7 @@ pub mod role;
 pub mod schema;
 pub mod session;
 pub mod settings;
+pub mod stock_adjustment;
 pub mod system_record;
 pub mod tax_rate;
 pub mod user;

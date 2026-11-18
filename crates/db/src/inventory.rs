@@ -9,7 +9,7 @@
 //! - 批號扣除：[`insert_allocation`]、[`list_allocations_by_line`]
 //! - 異動：[`insert_transaction`]、[`lot_used_by_other_documents`]、[`documents_using_lot`]
 //! - 庫存：[`stock_balance`]
-//! - 商品：[`lock_products`]（過帳時以 `FOR SHARE` 鎖定，§8.10「鎖定順序」第 2 步）
+//! - 商品：[`lock_products`]（過帳時以 `FOR SHARE` 鎖定，§8.10「鎖定順序」第 2 步）、[`find_products`]（不鎖定）
 //!
 //! `lot_allocations`、`inventory_transactions` 只能新增，資料庫以 trigger 拒絕修改與刪除
 //! （SQLSTATE [`APPEND_ONLY_SQLSTATE`]）。
@@ -448,6 +448,27 @@ pub async fn lock_products<'e>(
         WHERE id = ANY($1)
         ORDER BY id
         FOR SHARE
+        "#,
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 商品資訊（含已刪除，由呼叫端判斷），不鎖定。供存檔時的檢查使用（過帳時改用 [`lock_products`]）。
+/// 不存在的 id 不會出現在結果中。
+pub async fn find_products<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+) -> Result<Vec<ProductStockRow>, DbError> {
+    let rows = sqlx::query_as!(
+        ProductStockRow,
+        r#"
+        SELECT id, code, name, product_type, deleted_at IS NOT NULL AS "deleted!"
+        FROM products
+        WHERE id = ANY($1)
+        ORDER BY id
         "#,
         ids,
     )
