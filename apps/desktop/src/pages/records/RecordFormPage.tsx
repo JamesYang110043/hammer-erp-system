@@ -48,6 +48,7 @@ import {
   isEditableDocument,
   isSystemDocument,
 } from '../../records/documents';
+import { withFormDefaults } from '../../records/inventory';
 import type { DocumentAction, DocumentActionError } from '../../records/documents';
 import {
   baselineData,
@@ -77,7 +78,7 @@ import {
 } from '../../records/lines';
 import type { DetailTable, LineFormValues } from '../../records/lines';
 import { entityIcon } from '../schema/entityIcons';
-import { formatTaipei } from '../../utils/time';
+import { formatTaipei, taipeiToday } from '../../utils/time';
 import { DocumentStatusTag } from './DocumentStatusTag';
 import { FormulaValue } from './FieldValue';
 import { LinesTable } from './LinesTable';
@@ -563,6 +564,11 @@ export function RecordFormPage() {
     [entity.data, entities.data],
   );
   const detailDefs = useEntityDetails(detailEntities);
+  // 新增時的預設值（盤點調整單的調整日期預設今天）
+  const fields = useMemo(
+    () => (entity.data ? withFormDefaults(key, entity.data.fields, taipeiToday()) : undefined),
+    [key, entity.data],
+  );
   const details = useMemo<DetailTable[] | undefined>(
     () =>
       detailDefs.data?.map((d) => ({
@@ -597,7 +603,7 @@ export function RecordFormPage() {
       // 資料重新載入或存檔後，以新的資料重設表單
       key={`${key}:${id ?? 'new'}:${record.dataUpdatedAt}`}
       entity={detail.entity}
-      fields={detail.fields}
+      fields={fields ?? detail.fields}
       details={details}
       detailDefs={detailDefs.data}
       record={record.data}

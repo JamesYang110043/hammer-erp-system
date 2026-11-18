@@ -91,8 +91,8 @@ test('stock adjustment: create, post and void', async ({ page }) => {
 
   await page.goto('/#/entities/stock_adjustment/new');
   await expect(page.getByLabel('單號')).toHaveAttribute('placeholder', '存檔後產生');
-  await page.getByLabel('調整日期').click();
-  await page.getByTitle('2026-11-18').click();
+  // 調整日期預設今天（台北時間）
+  await expect(page.getByLabel('調整日期')).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
   await page.locator('.ant-select', { has: page.getByRole('combobox', { name: '類型' }) }).click();
   await page.getByTitle('期初庫存').click();
   await page.getByLabel('備註').fill('期初庫存');

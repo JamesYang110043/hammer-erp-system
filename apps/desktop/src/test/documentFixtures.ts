@@ -98,3 +98,104 @@ export function adjustment(
     ...patch,
   };
 }
+
+/** 商品（系統主檔，盤點調整明細的 `product_id` 指向它）。 */
+export const PRODUCT: EntityDefinition = {
+  ...STOCK_ADJUSTMENT,
+  id: '01a1e516-3401-7432-acb3-9cc3ac6a7db9',
+  key: 'product',
+  label: '商品',
+  kind: 'master',
+  numbering_pattern: null,
+  title_template: '{code} {name}',
+  sort_order: 10,
+};
+
+/** 盤點調整明細（明細子表）。 */
+export const STOCK_ADJUSTMENT_LINE: EntityDefinition = {
+  ...STOCK_ADJUSTMENT,
+  id: '01a1ea12-f322-7001-a093-e320da8dffef',
+  key: 'stock_adjustment_line',
+  label: '盤點調整明細',
+  kind: 'detail',
+  parent_entity_id: STOCK_ADJUSTMENT.id,
+  numbering_pattern: null,
+  title_template: '{product_id.code} {product_id.name} {lot_no}',
+  sort_order: 0,
+};
+
+const lineField = {
+  entity_id: STOCK_ADJUSTMENT_LINE.id,
+  is_system: true,
+  storage: 'column',
+} as const;
+
+export const STOCK_ADJUSTMENT_LINE_FIELDS = [
+  fieldDef({
+    ...lineField,
+    field_key: 'product_id',
+    label: '商品',
+    data_type: 'relation',
+    is_required: true,
+    relation_entity_id: PRODUCT.id,
+    sort_order: 10,
+  }),
+  fieldDef({
+    ...lineField,
+    field_key: 'line_type',
+    label: '調整方式',
+    data_type: 'select',
+    is_required: true,
+    default_value: 'gain_new',
+    options: [
+      { value: 'gain_new', label: '盤盈：新批號', color: null },
+      { value: 'gain_existing', label: '盤盈：加回既有批號', color: null },
+      { value: 'loss', label: '盤虧：扣指定批號', color: null },
+    ],
+    sort_order: 20,
+  }),
+  fieldDef({
+    ...lineField,
+    field_key: 'lot_no',
+    label: '批號',
+    validation: { min: null, max: null, max_length: 50, pattern: null },
+    sort_order: 30,
+  }),
+  fieldDef({
+    ...lineField,
+    field_key: 'qty',
+    label: '數量',
+    data_type: 'decimal',
+    is_required: true,
+    decimal_places: 4,
+    sort_order: 40,
+  }),
+  fieldDef({
+    ...lineField,
+    field_key: 'unit_cost_twd',
+    label: '單位成本',
+    data_type: 'money',
+    decimal_places: 4,
+    sort_order: 50,
+  }),
+  fieldDef({ ...lineField, field_key: 'reason', label: '原因', sort_order: 60 }),
+];
+
+export const PRODUCT_ID = '0196f5a0-0000-7000-8000-000000000601';
+export const LOT_ID = '0196f5a0-0000-7000-8000-000000000701';
+
+/** 一個批號（`list_product_lots` 的項目）。 */
+export function lot(patch: Record<string, unknown> = {}) {
+  return {
+    id: LOT_ID,
+    lot_no: 'L-20261101',
+    received_date: '2026-11-01',
+    source_type: 'stock_adjustment_line',
+    source_doc_id: ADJUSTMENT_ID,
+    source_record_no: 'ADJ202611-0001',
+    qty_in: '100.0000',
+    qty_remaining: '35.5000',
+    unit_cost_twd: '12.5000',
+    ...patch,
+  };
+}

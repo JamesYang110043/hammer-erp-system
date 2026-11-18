@@ -85,6 +85,9 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::delete_record,
             commands::post_record,
             commands::void_record,
+            commands::list_stock_balances,
+            commands::list_product_lots,
+            commands::list_inventory_transactions,
             commands::list_layouts,
             commands::get_default_layout,
             commands::create_layout,
@@ -158,6 +161,14 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::document::InvalidStatusDetails>()
         .typ::<hammer_shared::document::StockInsufficientDetails>()
         .typ::<hammer_shared::document::LotInUseDetails>()
+        // 庫存查詢
+        .typ::<hammer_shared::inventory::TxnType>()
+        .typ::<hammer_shared::inventory::StockBalanceQuery>()
+        .typ::<hammer_shared::inventory::StockBalance>()
+        .typ::<hammer_shared::inventory::LotQuery>()
+        .typ::<hammer_shared::inventory::InventoryLot>()
+        .typ::<hammer_shared::inventory::TransactionQuery>()
+        .typ::<hammer_shared::inventory::InventoryTransaction>()
         // 附件
         .typ::<hammer_shared::attachment::Attachment>()
         .typ::<crate::state::UploadProgress>()
