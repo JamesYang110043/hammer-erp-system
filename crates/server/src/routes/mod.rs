@@ -176,6 +176,11 @@ fn protected_routes() -> Router<AppState> {
         .route("/entities/{key}/records/{id}/post", post(records::post))
         .route("/entities/{key}/records/{id}/void", post(records::void))
         .route(
+            "/entities/{key}/records/{id}/confirm",
+            post(records::confirm),
+        )
+        .route("/entities/{key}/records/{id}/close", post(records::close))
+        .route(
             "/entities/{key}/layouts",
             get(layouts::list).post(layouts::create),
         )

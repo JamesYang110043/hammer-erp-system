@@ -101,9 +101,9 @@ describe('操作紀錄頁', () => {
     // 使用者
     await user.click(screen.getByLabelText('使用者'));
     await user.click(await screen.findByTitle('陳編輯（editor1）'));
-    // 動作
+    // 動作（下拉選單只會畫出前面幾個選項，選採購單的「結案」）
     await user.click(screen.getByLabelText('動作'));
-    await user.click(await screen.findByTitle('變更密碼'));
+    await user.click(await screen.findByTitle('結案'));
 
     await user.click(screen.getByRole('button', { name: /查\s*詢/ }));
 
@@ -113,7 +113,7 @@ describe('操作紀錄頁', () => {
         from: '2026-11-01T00:00:00+08:00',
         to: '2026-11-04T00:00:00+08:00',
         user_id: EDITOR.id,
-        action: 'password_change',
+        action: 'close',
       }),
     );
   });

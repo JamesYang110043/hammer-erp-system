@@ -35,10 +35,10 @@ import { generatedConfig, resolveColumns } from '../../records/columns';
 import type { LayoutColumn, LayoutConfig } from '../../records/columns';
 import { isNumericType, valueField } from '../../records/display';
 import {
-  DOCUMENT_STATUSES,
   DOCUMENT_STATUS_LABELS,
   STATUS_FIELD,
   documentStatus,
+  documentStatuses,
   isEditableDocument,
   isSystemDocument,
 } from '../../records/documents';
@@ -281,7 +281,10 @@ function RecordList({
             onChange={changeStatusFilter}
             options={[
               { value: ALL_STATUSES, label: '全部狀態' },
-              ...DOCUMENT_STATUSES.map((st) => ({ value: st, label: DOCUMENT_STATUS_LABELS[st] })),
+              ...documentStatuses(entityKey).map((st) => ({
+                value: st,
+                label: DOCUMENT_STATUS_LABELS[st],
+              })),
             ]}
           />
         )}

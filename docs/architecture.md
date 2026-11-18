@@ -1239,7 +1239,7 @@ draft ──確認──▶ confirmed ──進貨過帳──▶ partially_rece
 
 | 動作 | 端點（§10「單據動作」） | 前一個狀態 → 之後 | 條件 | 寫入 |
 |---|---|---|---|---|
-| 確認 | `POST /api/v1/entities/purchase_order/records/{id}/confirm` | `draft` → `confirmed` | 重新執行存檔時的檢查；至少一列明細（「至少要有一筆明細」）；`exchange_rate` 有值；廠商、明細的商品未刪除（「廠商已刪除」「商品已刪除」） | `posted_at`、`posted_by`；操作紀錄 `confirm` |
+| 確認 | `POST /api/v1/entities/purchase_order/records/{id}/confirm` | `draft` → `confirmed` | 重新執行存檔時的檢查（幣別是否啟用與存檔時相同，只在值有變動時檢查，確認時不重新檢查）；至少一列明細（「至少要有一筆明細」）；`exchange_rate` 有值；廠商、明細的商品未刪除（「廠商已刪除」「商品已刪除」） | `posted_at`、`posted_by`；操作紀錄 `confirm` |
 | 手動結案 | `POST …/{id}/close` | `confirmed`、`partially_received` → `closed` | 無（不再進貨的部分視為取消） | `closed_at`、`closed_by`；操作紀錄 `close` |
 | 作廢 | `POST …/{id}/void` | `confirmed` → `void` | 只有 `confirmed`（沒有任何有效的進貨）可以作廢；有進貨時請手動結案 | `voided_at`、`voided_by`；操作紀錄 `void` |
 | 進貨過帳、進貨作廢 | （進貨單的動作） | 依下方「狀態的重新計算」 | | `received_qty` |

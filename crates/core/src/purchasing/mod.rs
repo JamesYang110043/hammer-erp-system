@@ -1,9 +1,19 @@
-//! 進貨模組（採購單、進貨單、進貨退回，docs/architecture.md §8.8）存檔時的規則。
+//! 進貨模組（採購單、進貨單、進貨退回，docs/architecture.md §8.8）。
 //!
-//! 目前只有進貨退回從進貨單帶入系統維護的欄位（[`derive_return`]）：表頭的 `supplier_id`、
-//! `currency_code`、`exchange_rate`、`tax_type`，明細的 `product_id`、`lot_no`、`unit_price`。
-//! 這些欄位是唯讀的系統欄位（request 帶了一律忽略，§7.1），資料表上為 `NOT NULL`，所以存檔時一定要帶入。
-//! 金額計算、退回數量上限、過帳與作廢在之後的 issue 加入。
+//! - [`amounts`]：金額與稅額的計算（純邏輯）
+//! - [`save`]：採購單存檔時的幣別、匯率、稅別預設值與金額計算
+//! - [`orders`]：採購單的確認、手動結案、作廢（[`PurchaseOrderHandler`]）
+//! - 進貨退回從進貨單帶入系統維護的欄位（[`derive_return`]）：表頭的 `supplier_id`、
+//!   `currency_code`、`exchange_rate`、`tax_type`，明細的 `product_id`、`lot_no`、`unit_price`。
+//!   這些欄位是唯讀的系統欄位（request 帶了一律忽略，§7.1），資料表上為 `NOT NULL`，所以存檔時一定要帶入。
+//!
+//! 進貨單的金額計算與過帳、進貨退回的數量上限與過帳在之後的 issue 加入。
+
+pub mod amounts;
+pub mod orders;
+pub mod save;
+
+pub use orders::PurchaseOrderHandler;
 
 use std::collections::HashMap;
 

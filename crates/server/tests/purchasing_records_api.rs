@@ -119,7 +119,7 @@ fn lines<'a>(record: &'a Record, detail: &str) -> &'a [Record] {
     &record.lines.as_ref().unwrap()[detail]
 }
 
-/// 採購單：新增草稿（含明細）產生單號；金額與已進貨數量為 0；系統維護的欄位帶了忽略。
+/// 採購單：新增草稿（含明細）產生單號；金額由伺服器計算、已進貨數量為 0；系統維護的欄位帶了忽略。
 #[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
 async fn purchase_order_draft(pool: PgPool) {
     let (_, token) = editor(&pool).await;
@@ -155,15 +155,16 @@ async fn purchase_order_draft(pool: PgPool) {
     );
     assert_eq!(po.data["status"], "draft");
     assert_eq!(po.data["exchange_rate"], "32.150000");
-    for key in ["subtotal", "tax_amount", "total"] {
-        assert_eq!(po.data[key], "0.0000", "{key}");
-    }
-    assert!(!po.data.contains_key("total_twd"));
+    // 美元（小數 2 位）、零稅率：123.45 + 30.00
+    assert_eq!(po.data["subtotal"], "153.4500");
+    assert_eq!(po.data["tax_amount"], "0.0000");
+    assert_eq!(po.data["total"], "153.4500");
+    assert_eq!(po.data["total_twd"], "4933.42");
     let po_lines = lines(&po, "purchase_order_line");
     assert_eq!(po_lines.len(), 2);
     assert_eq!(po_lines[0].data["qty"], "10.0000");
     assert_eq!(po_lines[0].data["unit_price"], "12.3450");
-    assert_eq!(po_lines[0].data["amount"], "0.0000");
+    assert_eq!(po_lines[0].data["amount"], "123.4500");
     assert_eq!(po_lines[0].data["received_qty"], "0.0000");
     assert_eq!(po_lines[0].title, "A001 商品 A001");
     let document = po.document.unwrap();

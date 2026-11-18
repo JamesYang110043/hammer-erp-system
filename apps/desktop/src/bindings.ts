@@ -187,7 +187,7 @@ export const commands = {
 };
 
 /* Constants */
-export const AUDIT_ACTIONS = ["create","update","delete","post","void","login","login_failed","logout","password_change","export","recalculate"] as const;
+export const AUDIT_ACTIONS = ["create","update","delete","post","void","confirm","close","login","login_failed","logout","password_change","export","recalculate"] as const;
 
 export const CLIENT_VERSION = "0.1.0" as const;
 
@@ -990,13 +990,13 @@ export type DetailSchema_Serialize = {
 
 /**
  *  單據主表的過帳、作廢資訊（[`Record::document`](crate::record::Record::document)）。
- *  這些值不是欄位，不出現在 `data`。
+ *  這些值不是欄位，不出現在 `data`。採購單的 `posted_at`、`posted_by` 是確認的時間與人員。
  */
 export type DocumentInfo = DocumentInfo_Serialize | DocumentInfo_Deserialize;
 
 /**
  *  單據主表的過帳、作廢資訊（[`Record::document`](crate::record::Record::document)）。
- *  這些值不是欄位，不出現在 `data`。
+ *  這些值不是欄位，不出現在 `data`。採購單的 `posted_at`、`posted_by` 是確認的時間與人員。
  */
 export type DocumentInfo_Deserialize = {
 	/**  過帳時間（RFC 3339）；草稿為 `null`。 */
@@ -1007,11 +1007,15 @@ export type DocumentInfo_Deserialize = {
 	voided_at?: string | null,
 	/**  作廢人員。 */
 	voided_by?: string | null,
+	/**  手動結案時間（RFC 3339）；只有採購單的手動結案會寫入，其他為 `null`（自動結案也是 `null`）。 */
+	closed_at?: string | null,
+	/**  手動結案人員。 */
+	closed_by?: string | null,
 };
 
 /**
  *  單據主表的過帳、作廢資訊（[`Record::document`](crate::record::Record::document)）。
- *  這些值不是欄位，不出現在 `data`。
+ *  這些值不是欄位，不出現在 `data`。採購單的 `posted_at`、`posted_by` 是確認的時間與人員。
  */
 export type DocumentInfo_Serialize = {
 	/**  過帳時間（RFC 3339）；草稿為 `null`。 */
@@ -1022,6 +1026,10 @@ export type DocumentInfo_Serialize = {
 	voided_at: string | null,
 	/**  作廢人員。 */
 	voided_by: string | null,
+	/**  手動結案時間（RFC 3339）；只有採購單的手動結案會寫入，其他為 `null`（自動結案也是 `null`）。 */
+	closed_at: string | null,
+	/**  手動結案人員。 */
+	closed_by: string | null,
 };
 
 /**  指向一張單據。 */
@@ -1032,12 +1040,23 @@ export type DocumentRef = {
 	record_no: string,
 };
 
-/**  單據的狀態（§8.2）。JSON 中為 `draft` / `posted` / `void`。 */
+/**
+ *  單據的狀態（§8.2）。
+ * 
+ *  影響庫存的單據（盤點調整單、進貨單、進貨退回）為 `draft` / `posted` / `void`；採購單為 `draft` /
+ *  `confirmed` / `partially_received` / `closed` / `void`（§8.8「採購單的狀態」）。
+ */
 export type DocumentStatus = 
-/**  草稿：可以修改、刪除、過帳。 */
+/**  草稿：可以修改、刪除、過帳（採購單：確認）。 */
 "draft" | 
 /**  已過帳：不可修改、刪除；可以作廢。 */
 "posted" | 
+/**  已確認（採購單）：不可修改、刪除；可以結案、作廢，等待進貨。 */
+"confirmed" | 
+/**  部分進貨（採購單）：已有進貨，可以結案。 */
+"partially_received" | 
+/**  已結案（採購單）：全部進貨或手動結案。 */
+"closed" | 
 /**  已作廢：不可再做任何操作。 */
 "void";
 

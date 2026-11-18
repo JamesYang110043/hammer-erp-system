@@ -24,6 +24,9 @@ export const STATUS_FIELD = 'status';
 export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
   draft: '草稿',
   posted: '已過帳',
+  confirmed: '已確認',
+  partially_received: '部分進貨',
+  closed: '已結案',
   void: '已作廢',
 };
 
@@ -31,10 +34,34 @@ export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
 export const DOCUMENT_STATUS_COLORS: Record<DocumentStatus, string> = {
   draft: 'default',
   posted: 'green',
+  confirmed: 'blue',
+  partially_received: 'gold',
+  closed: 'green',
   void: 'red',
 };
 
-export const DOCUMENT_STATUSES: readonly DocumentStatus[] = ['draft', 'posted', 'void'];
+/** 所有單據狀態。 */
+export const DOCUMENT_STATUSES: readonly DocumentStatus[] = [
+  'draft',
+  'posted',
+  'confirmed',
+  'partially_received',
+  'closed',
+  'void',
+];
+
+/** 採購單的資料類別代碼。 */
+export const PURCHASE_ORDER = 'purchase_order';
+
+/**
+ * 資料類別會出現的狀態（列表的狀態篩選）：採購單為草稿、已確認、部分進貨、已結案、已作廢
+ * （docs/architecture.md §8.8「採購單的狀態」），其他單據為草稿、已過帳、已作廢。
+ */
+export function documentStatuses(entityKey: string): readonly DocumentStatus[] {
+  return entityKey === PURCHASE_ORDER
+    ? ['draft', 'confirmed', 'partially_received', 'closed', 'void']
+    : ['draft', 'posted', 'void'];
+}
 
 /** 單據動作。 */
 export type DocumentAction = 'post' | 'void';

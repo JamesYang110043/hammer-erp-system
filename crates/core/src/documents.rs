@@ -1,9 +1,13 @@
 //! 系統單據的過帳與作廢（docs/architecture.md §7.1「系統單據」、§8.2、§9、§10「單據動作」）。
 //!
 //! - [`post_document`]：`draft` → `posted`
-//! - [`void_document`]：`posted` → `void`
+//! - [`void_document`]：`posted` → `void`（採購單：`confirmed` → `void`）
+//! - [`confirm_document`]（只有採購單）：`draft` → `confirmed`
+//! - [`close_document`]（只有採購單）：`confirmed` / `partially_received` → `closed`
 //!
-//! 兩者都需要 `record.post`，request 為 [`DocumentActionRequest`]（只有 `version`），回應與單筆查詢相同
+//! 各單據支援的動作與前後的狀態由處理函式決定（[`DocumentHandler::transition`]），不支援的動作 `404`。
+//!
+//! 都需要 `record.post`，request 為 [`DocumentActionRequest`]（只有 `version`），回應與單筆查詢相同
 //! （[`crate::records::get_record`]，含 `lines` 與 `document`）。
 //!
 //! # 分派
@@ -17,10 +21,10 @@
 //! 1. 權限 `record.post`（`403`）
 //! 2. 資料類別必須是有註冊處理函式的系統單據，資料存在且未刪除，並以 `FOR UPDATE` 鎖定單據（`404`）
 //! 3. `version`（`409 CONFLICT`）
-//! 4. 狀態：過帳必須是 `draft`、作廢必須是 `posted`（`422 INVALID_STATUS`）
+//! 4. 狀態：必須是動作允許的前一個狀態（`422 INVALID_STATUS`）
 //! 5. 處理函式（內容驗證、庫存，錯誤時整張 rollback）
-//! 6. 更新 `status`、`posted_at` / `voided_at`、`posted_by` / `voided_by`，`version` + 1
-//! 7. 操作紀錄：`action` 為 `post` / `void`，diff 為處理前後有變動的欄位（含 `status` 與處理函式寫入的
+//! 6. 更新 `status`、動作的時間與人員（`posted_*` / `voided_*` / `closed_*`），`version` + 1
+//! 7. 操作紀錄：`action` 為 `post` / `void` / `confirm` / `close`，diff 為處理前後有變動的欄位（含 `status` 與處理函式寫入的
 //!    值，明細的鍵為 `lines.<明細子表代碼>`）；`posted_at` 等不是欄位的值不記錄
 
 use std::collections::BTreeMap;
@@ -28,10 +32,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use hammer_db::document::{self as document_db, StatusChange};
+use hammer_db::document::{self as document_db, Stamp, StatusChange};
 use hammer_db::sqlx::{PgConnection, PgPool};
 use hammer_db::{DbError, ensure_version_matched};
-use hammer_shared::document::{DocumentAction, DocumentActionRequest};
+use hammer_shared::document::{DocumentAction, DocumentActionRequest, DocumentStatus};
 use hammer_shared::record::Record;
 use hammer_shared::schema::{EntityDefinition, EntityKind};
 use hammer_shared::{Id, permission};
@@ -41,6 +45,7 @@ use time::OffsetDateTime;
 use crate::CoreError;
 use crate::audit::AuditDiff;
 use crate::auth::AuthContext;
+use crate::purchasing::{PURCHASE_ORDER, PurchaseOrderHandler};
 use crate::record_lines::{audit_key, audit_value};
 use crate::records::{
     Detail, commit, detail_lines, document_status, fetch_record, invalid_status,
@@ -72,11 +77,44 @@ pub struct DocumentContext<'a> {
     pub now: OffsetDateTime,
 }
 
-/// 一種單據的過帳、作廢邏輯。在呼叫端的 transaction 內執行；回傳錯誤時整張單據 rollback。
+/// 一個動作的狀態轉換。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Transition {
+    /// 允許執行的狀態。
+    pub from: &'static [DocumentStatus],
+    /// 執行後的狀態。
+    pub to: DocumentStatus,
+    /// 寫入時間與人員的欄位。
+    pub stamp: Stamp,
+}
+
+/// 一般單據（影響庫存）的狀態轉換：過帳 `draft` → `posted`、作廢 `posted` → `void`；不支援確認、結案。
+pub fn standard_transition(action: DocumentAction) -> Option<Transition> {
+    match action {
+        DocumentAction::Post => Some(Transition {
+            from: &[DocumentStatus::Draft],
+            to: DocumentStatus::Posted,
+            stamp: Stamp::Posted,
+        }),
+        DocumentAction::Void => Some(Transition {
+            from: &[DocumentStatus::Posted],
+            to: DocumentStatus::Void,
+            stamp: Stamp::Voided,
+        }),
+        DocumentAction::Confirm | DocumentAction::Close => None,
+    }
+}
+
+/// 一種單據的過帳、作廢等邏輯。在呼叫端的 transaction 內執行；回傳錯誤時整張單據 rollback。
 ///
-/// 處理函式不更新主表的 `status`、`version`（由 [`post_document`]、[`void_document`] 更新）；可以修改
+/// 處理函式不更新主表的 `status`、`version`（由 [`post_document`] 等更新）；可以修改
 /// 明細與主表的其他欄位（例如過帳時寫入的成本），變動會記在操作紀錄的 diff。
 pub trait DocumentHandler: Send + Sync {
+    /// 動作的狀態轉換；`None` 為不支援（`404`）。預設為 [`standard_transition`]。
+    fn transition(&self, action: DocumentAction) -> Option<Transition> {
+        standard_transition(action)
+    }
+
     /// 過帳：驗證內容、寫入庫存異動等。
     fn post<'a>(
         &'a self,
@@ -90,6 +128,24 @@ pub trait DocumentHandler: Send + Sync {
         conn: &'a mut PgConnection,
         doc: &'a DocumentContext<'a>,
     ) -> HandlerFuture<'a>;
+
+    /// 確認（[`Self::transition`] 支援時才會呼叫）。預設不做任何處理。
+    fn confirm<'a>(
+        &'a self,
+        _conn: &'a mut PgConnection,
+        _doc: &'a DocumentContext<'a>,
+    ) -> HandlerFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// 結案（[`Self::transition`] 支援時才會呼叫）。預設不做任何處理。
+    fn close<'a>(
+        &'a self,
+        _conn: &'a mut PgConnection,
+        _doc: &'a DocumentContext<'a>,
+    ) -> HandlerFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// 不做任何處理的處理函式：只變更狀態與寫入操作紀錄。供測試使用。
@@ -128,7 +184,9 @@ impl DocumentHandlers {
 
     /// 系統內建的單據與其處理函式。
     pub fn standard() -> Self {
-        Self::empty().register(STOCK_ADJUSTMENT, StockAdjustmentHandler)
+        Self::empty()
+            .register(STOCK_ADJUSTMENT, StockAdjustmentHandler)
+            .register(PURCHASE_ORDER, PurchaseOrderHandler)
     }
 
     /// 註冊（或取代）資料類別 `entity_key` 的處理函式。
@@ -202,6 +260,59 @@ pub async fn void_document(
     .await
 }
 
+/// 確認（只有採購單）：`draft` → `confirmed`。需要 `record.post`。流程與錯誤見模組說明。
+#[allow(clippy::too_many_arguments)]
+pub async fn confirm_document(
+    pool: &PgPool,
+    handlers: &DocumentHandlers,
+    ctx: &AuthContext,
+    entity_key: &str,
+    id: Id,
+    req: &DocumentActionRequest,
+    client_info: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<Record, CoreError> {
+    run(
+        pool,
+        handlers,
+        ctx,
+        entity_key,
+        id,
+        DocumentAction::Confirm,
+        req,
+        client_info,
+        now,
+    )
+    .await
+}
+
+/// 手動結案（只有採購單）：`confirmed` / `partially_received` → `closed`。需要 `record.post`。
+/// 流程與錯誤見模組說明。
+#[allow(clippy::too_many_arguments)]
+pub async fn close_document(
+    pool: &PgPool,
+    handlers: &DocumentHandlers,
+    ctx: &AuthContext,
+    entity_key: &str,
+    id: Id,
+    req: &DocumentActionRequest,
+    client_info: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<Record, CoreError> {
+    run(
+        pool,
+        handlers,
+        ctx,
+        entity_key,
+        id,
+        DocumentAction::Close,
+        req,
+        client_info,
+        now,
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run(
     pool: &PgPool,
@@ -222,6 +333,9 @@ async fn run(
         .get(&entity.key)
         .filter(|_| entity.kind == EntityKind::Document && store.document_table().is_some())
         .ok_or_else(|| CoreError::NotFound(ENTITY_NOT_FOUND.into()))?;
+    let transition = handler
+        .transition(action)
+        .ok_or_else(|| CoreError::NotFound(ENTITY_NOT_FOUND.into()))?;
     let table = store
         .document_table()
         .ok_or_else(|| CoreError::NotFound(ENTITY_NOT_FOUND.into()))?;
@@ -230,7 +344,7 @@ async fn run(
     ensure_version(current.version, req.version)?;
     let status = document_status(&store, &current)?
         .ok_or_else(|| CoreError::Internal(format!("{} 不是系統單據", entity.key)))?;
-    if status != action.from_status() {
+    if !transition.from.contains(&status) {
         return Err(invalid_status(status, action.label()));
     }
     let record_no = current
@@ -257,6 +371,8 @@ async fn run(
     match action {
         DocumentAction::Post => handler.post(&mut tx, &doc).await?,
         DocumentAction::Void => handler.void(&mut tx, &doc).await?,
+        DocumentAction::Confirm => handler.confirm(&mut tx, &doc).await?,
+        DocumentAction::Close => handler.close(&mut tx, &doc).await?,
     }
 
     let change = StatusChange {
@@ -265,10 +381,16 @@ async fn run(
         at: now,
         by: ctx.user_id,
     };
-    let result = match action {
-        DocumentAction::Post => document_db::mark_posted(&mut *tx, table, &change).await?,
-        DocumentAction::Void => document_db::mark_voided(&mut *tx, table, &change).await?,
-    };
+    let from: Vec<&str> = transition.from.iter().map(|s| s.as_str()).collect();
+    let result = document_db::mark_status(
+        &mut *tx,
+        table,
+        &change,
+        &from,
+        transition.to.as_str(),
+        transition.stamp,
+    )
+    .await?;
     ensure_version_matched(result)?;
 
     let updated = store
@@ -327,11 +449,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn standard_handlers_cover_stock_adjustment() {
+    fn standard_handlers_cover_system_documents() {
         let handlers = DocumentHandlers::standard();
         assert!(handlers.get(STOCK_ADJUSTMENT).is_some());
+        assert!(handlers.get(PURCHASE_ORDER).is_some());
         assert!(handlers.get("customer").is_none());
         assert!(DocumentHandlers::empty().get(STOCK_ADJUSTMENT).is_none());
-        assert_eq!(format!("{handlers:?}"), "{\"stock_adjustment\"}");
+        assert_eq!(
+            format!("{handlers:?}"),
+            "{\"purchase_order\", \"stock_adjustment\"}"
+        );
+    }
+
+    #[test]
+    fn standard_documents_post_and_void_only() {
+        let post = standard_transition(DocumentAction::Post).unwrap();
+        assert_eq!(post.from, [DocumentStatus::Draft]);
+        assert_eq!(post.to, DocumentStatus::Posted);
+        assert_eq!(post.stamp, Stamp::Posted);
+        let void = standard_transition(DocumentAction::Void).unwrap();
+        assert_eq!(void.from, [DocumentStatus::Posted]);
+        assert_eq!(void.to, DocumentStatus::Void);
+        assert_eq!(void.stamp, Stamp::Voided);
+        assert!(standard_transition(DocumentAction::Confirm).is_none());
+        assert!(standard_transition(DocumentAction::Close).is_none());
+        let handler = StockAdjustmentHandler;
+        assert_eq!(handler.transition(DocumentAction::Post), Some(post));
+        assert!(handler.transition(DocumentAction::Close).is_none());
     }
 }
