@@ -223,6 +223,38 @@ async fn shipment_draft_refers_to_sales_order(pool: PgPool) {
     )
     .await;
     let so_line = lines(&so, "sales_order_line")[0].id;
+    // 出貨單存檔時檢查訂單已確認、批號存在（#148）
+    let (status, body) = call(
+        &pool,
+        Method::POST,
+        &format!("{}/{}/confirm", records_uri("sales_order"), so.id),
+        &token,
+        Some(json!({ "version": 1 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let adj = create(
+        &pool,
+        &token,
+        "stock_adjustment",
+        json!({
+            "data": { "adjustment_date": "2026-11-01", "adjustment_type": "opening" },
+            "lines": { "stock_adjustment_line": [
+                { "data": { "line_type": "gain_new", "product_id": goods, "lot_no": "L-01",
+                            "qty": "10", "unit_cost_twd": "80" } },
+            ] },
+        }),
+    )
+    .await;
+    let (status, body) = call(
+        &pool,
+        Method::POST,
+        &format!("{}/{}/post", records_uri("stock_adjustment"), adj.id),
+        &token,
+        Some(json!({ "version": 1 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     let sh = create(
         &pool,

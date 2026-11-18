@@ -307,6 +307,8 @@ pub async fn create_record(
     line_errors.extend(return_errors);
     let (master, receipt_errors) = receipt_rules(&mut tx, &entity.key, master, &lines).await?;
     line_errors.extend(receipt_errors);
+    let (master, shipment_errors) = shipment_rules(&mut tx, &entity.key, master, &lines).await?;
+    line_errors.extend(shipment_errors);
     let mut data = validation_error(master, line_errors)?;
     apply_amounts(&mut tx, &entity.key, &mut data, &mut lines).await?;
     check_relations(&mut tx, &fields, &data, None).await?;
@@ -463,6 +465,8 @@ pub async fn update_record(
     line_errors.extend(return_errors);
     let (master, receipt_errors) = receipt_rules(&mut tx, &entity.key, master, &lines).await?;
     line_errors.extend(receipt_errors);
+    let (master, shipment_errors) = shipment_rules(&mut tx, &entity.key, master, &lines).await?;
+    line_errors.extend(shipment_errors);
     let mut data = validation_error(master, line_errors)?;
     apply_amounts(&mut tx, &entity.key, &mut data, &mut lines).await?;
     let formula_errors = compute_formulas(&mut tx, &formulas, &mut data, &mut lines, now).await?;
@@ -1977,7 +1981,7 @@ async fn prepare_line(
             &detail.entity.key,
             &mut data,
         ));
-        errors.extend(sales::save::check_line_data(&detail.entity.key, &data));
+        errors.extend(sales::save::check_line_data(&detail.entity.key, &mut data));
         if !errors.is_empty() {
             return Ok(Err(errors));
         }
@@ -2116,6 +2120,23 @@ async fn receipt_rules(
         .filter_map(|l| Some((l.index, l.data.as_object()?)))
         .collect();
     purchasing::receipts::check_save(tx, entity_key, master, &rows).await
+}
+
+/// 出貨單存檔時的檢查（[`sales::shipments::check_save`]）。只檢查通過欄位驗證的明細；修改時所有明細都
+/// 已列入 `lines`（[`sales::save::recalculates_lines`]）。
+async fn shipment_rules(
+    tx: &mut PgTransaction<'_>,
+    entity_key: &str,
+    master: Result<Map<String, Value>, Vec<FieldError>>,
+    lines: &[DetailWrite<'_>],
+) -> Result<(Result<Map<String, Value>, Vec<FieldError>>, Vec<LineError>), CoreError> {
+    let rows: Vec<(usize, &Map<String, Value>)> = lines
+        .iter()
+        .filter(|d| d.detail.entity.key == sales::SHIPMENT_LINE)
+        .flat_map(|d| d.lines.iter())
+        .filter_map(|l| Some((l.index, l.data.as_object()?)))
+        .collect();
+    sales::shipments::check_save(tx, entity_key, master, &rows).await
 }
 
 /// 有金額計算的單據（[`purchasing::save::apply_amounts`]、[`sales::save::apply_amounts`]）：依所有明細

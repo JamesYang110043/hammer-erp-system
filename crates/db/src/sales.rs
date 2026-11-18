@@ -8,6 +8,9 @@
 //! - [`product_tax_types`]：新增時稅別的預設值（明細商品的稅別）
 //! - [`lock_customer`]、[`list_order_lines_for_update`]：確認訂單時鎖定客戶、讀取明細
 //! - [`count_customer_documents`]、[`count_open_orders_by_product`]：客戶、商品被銷貨單據引用時的限制
+//! - 出貨單（訂單轉出貨單、過帳、作廢）：[`find_order_for_shipment`]、[`lock_order_for_shipment`]、
+//!   [`list_order_lines`]、[`list_shipment_lines_for_update`]、[`update_shipment_line_posting`]、
+//!   [`set_shipment_cost_total`]、[`add_shipped_qty`]、[`set_order_status`]、[`posted_returns_of_shipment`]
 
 use rust_decimal::Decimal;
 use sqlx::PgExecutor;
@@ -191,4 +194,222 @@ pub async fn count_open_orders_by_product<'e>(
     .fetch_one(executor)
     .await?;
     Ok(n)
+}
+
+/// 出貨單引用的訂單。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderForShipment {
+    pub id: Uuid,
+    pub record_no: String,
+    /// `draft` / `confirmed` / `partially_shipped` / `closed` / `void`。
+    pub status: String,
+    pub customer_id: Uuid,
+    pub tax_type: String,
+    /// 是否為手動結案（`closed_at` 有值）。
+    pub closed_manually: bool,
+}
+
+/// 未刪除的訂單（不鎖定；存檔時的檢查與帶入）。不存在或已刪除時為 `None`。
+pub async fn find_order_for_shipment<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<OrderForShipment>, DbError> {
+    let row = sqlx::query_as!(
+        OrderForShipment,
+        r#"
+        SELECT id, record_no, status, customer_id, tax_type,
+               closed_at IS NOT NULL AS "closed_manually!"
+        FROM sales_orders
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 同 [`find_order_for_shipment`]，並鎖定訂單（`FOR UPDATE`；出貨單過帳、作廢時）。
+pub async fn lock_order_for_shipment<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<OrderForShipment>, DbError> {
+    let row = sqlx::query_as!(
+        OrderForShipment,
+        r#"
+        SELECT id, record_no, status, customer_id, tax_type,
+               closed_at IS NOT NULL AS "closed_manually!"
+        FROM sales_orders
+        WHERE id = $1 AND deleted_at IS NULL
+        FOR UPDATE
+        "#,
+        id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 訂單的未刪除明細，依 `sort_order, id` 排序（不鎖定；存檔時的檢查）。
+pub async fn list_order_lines<'e>(
+    executor: impl PgExecutor<'e>,
+    sales_order_id: Uuid,
+) -> Result<Vec<OrderLineRow>, DbError> {
+    let rows = sqlx::query_as!(
+        OrderLineRow,
+        r#"
+        SELECT id, sort_order, product_id, qty, unit_price, discount_rate, shipped_qty
+        FROM sales_order_lines
+        WHERE sales_order_id = $1 AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        "#,
+        sales_order_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 一列出貨明細。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShipmentLineRow {
+    pub id: Uuid,
+    pub sort_order: i32,
+    pub sales_order_line_id: Option<Uuid>,
+    pub product_id: Uuid,
+    pub qty: Decimal,
+    pub unit_price: Decimal,
+    pub discount_rate: Decimal,
+    pub lot_no: Option<String>,
+    pub lot_id: Option<Uuid>,
+}
+
+/// 出貨單 `shipment_id` 的未刪除明細，依 `sort_order, id` 排序並鎖定（`FOR UPDATE`）。
+/// 呼叫端必須已先鎖定出貨單。
+pub async fn list_shipment_lines_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    shipment_id: Uuid,
+) -> Result<Vec<ShipmentLineRow>, DbError> {
+    let rows = sqlx::query_as!(
+        ShipmentLineRow,
+        r#"
+        SELECT id, sort_order, sales_order_line_id, product_id, qty, unit_price, discount_rate,
+               lot_no, lot_id
+        FROM shipment_lines
+        WHERE shipment_id = $1 AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        FOR UPDATE
+        "#,
+        shipment_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 寫入出貨明細過帳的結果：`lot_id`、`cost_amount_twd`，`version` + 1。回傳是否有更新。
+pub async fn update_shipment_line_posting<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    lot_id: Option<Uuid>,
+    cost_amount_twd: Option<Decimal>,
+    updated_by: Uuid,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE shipment_lines
+        SET lot_id = $2, cost_amount_twd = $3, updated_by = $4, version = version + 1
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        lot_id,
+        cost_amount_twd,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 寫入出貨單的 `cost_total_twd`（過帳時）。`version` 由單據框架變更狀態時遞增，這裡不變。
+pub async fn set_shipment_cost_total<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    cost_total_twd: Decimal,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE shipments
+        SET cost_total_twd = $2
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        cost_total_twd,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 訂單明細的 `shipped_qty += delta`（作廢時為負數），`version` + 1。回傳是否有更新。
+pub async fn add_shipped_qty<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    delta: Decimal,
+    updated_by: Uuid,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE sales_order_lines
+        SET shipped_qty = shipped_qty + $2, updated_by = $3, version = version + 1
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        delta,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 訂單的狀態改為 `status`（出貨過帳、作廢後重新計算的結果），`version` + 1。
+pub async fn set_order_status<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    status: &str,
+    updated_by: Uuid,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE sales_orders
+        SET status = $2, updated_by = $3, version = version + 1
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        status,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 指向出貨單、已過帳且未刪除的銷貨退回 `(id, record_no)`，依單號排序。
+pub async fn posted_returns_of_shipment<'e>(
+    executor: impl PgExecutor<'e>,
+    shipment_id: Uuid,
+) -> Result<Vec<(Uuid, String)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id, record_no
+        FROM sales_returns
+        WHERE shipment_id = $1 AND status = 'posted' AND deleted_at IS NULL
+        ORDER BY record_no
+        "#,
+        shipment_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.record_no)).collect())
 }
