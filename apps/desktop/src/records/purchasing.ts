@@ -20,9 +20,15 @@ export { PURCHASE_ORDER };
 export const PURCHASE_ORDER_LINE = 'purchase_order_line';
 export const GOODS_RECEIPT = 'goods_receipt';
 export const GOODS_RECEIPT_LINE = 'goods_receipt_line';
+export const PURCHASE_RETURN = 'purchase_return';
+export const PURCHASE_RETURN_LINE = 'purchase_return_line';
 
 /** 「進貨」選單分組列出的系統單據，依此順序。 */
-export const PURCHASING_ENTITY_KEYS: readonly string[] = [PURCHASE_ORDER, GOODS_RECEIPT];
+export const PURCHASING_ENTITY_KEYS: readonly string[] = [
+  PURCHASE_ORDER,
+  GOODS_RECEIPT,
+  PURCHASE_RETURN,
+];
 
 /** 選單「進貨」分組的標題。 */
 export const PURCHASING_GROUP_LABEL = '進貨';
@@ -54,6 +60,8 @@ export const PURCHASING_FIELDS = {
   lotNo: 'lot_no',
   unitCostTwd: 'unit_cost_twd',
   purchaseOrderLine: 'purchase_order_line_id',
+  goodsReceipt: 'goods_receipt_id',
+  goodsReceiptLine: 'goods_receipt_line_id',
 } as const;
 
 /** 有幣別、匯率與金額計算的單據（採購單、進貨單）。 */
@@ -75,11 +83,20 @@ export function pricedDocument(entityKey: string): PricedDocument | undefined {
 }
 
 /**
+ * 有金額預覽的單據的明細子表代碼：採購單、進貨單，以及進貨退回（幣別、匯率、稅別沿用進貨單，
+ * 由伺服器帶入，畫面只預覽金額）。其他單據回傳 `undefined`。
+ */
+export function amountLineKey(entityKey: string): string | undefined {
+  return entityKey === PURCHASE_RETURN ? PURCHASE_RETURN_LINE : PRICED[entityKey]?.lineKey;
+}
+
+/**
  * 明細中不顯示（`is_visible = false`）、但由桌面程式帶入並送出的欄位：
- * 進貨明細的採購明細（採購單轉進貨單時帶入）。
+ * 進貨明細的採購明細（採購單轉進貨單時帶入）、進貨退回明細的進貨明細（選擇進貨單時帶入）。
  */
 const CARRIED_LINE_FIELDS: Record<string, readonly string[]> = {
   [GOODS_RECEIPT_LINE]: [PURCHASING_FIELDS.purchaseOrderLine],
+  [PURCHASE_RETURN_LINE]: [PURCHASING_FIELDS.goodsReceiptLine],
 };
 
 /**
@@ -337,6 +354,82 @@ export function receiptLinesFromOrder(order: Pick<DataRecord, 'lines'>): RecordD
         [PURCHASING_FIELDS.qty]: qty,
         [PURCHASING_FIELDS.unitPrice]: line.data[PURCHASING_FIELDS.unitPrice] ?? null,
         [PURCHASING_FIELDS.lotNo]: null,
+      },
+    ];
+  });
+}
+
+// ---- 進貨退回 ----
+
+/** 進貨單不能退回的原因（§8.8「進貨退回」）；可以退回時回傳 `undefined`。 */
+export function receiptNotReturnable(status: DocumentStatus | undefined): string | undefined {
+  switch (status) {
+    case 'posted':
+      return undefined;
+    case 'void':
+      return '進貨單已作廢';
+    default:
+      return '進貨單尚未過帳';
+  }
+}
+
+/**
+ * 每一列進貨明細的可退數量（4 位小數），鍵為進貨明細 id：
+ * `進貨明細的 qty − 該進貨明細在其他「已過帳」進貨退回中的 qty 合計`。
+ *
+ * `postedReturns` 為指向此進貨單、已過帳的進貨退回（含明細）；`excludeId` 的退回不計入。
+ */
+export function returnableQty(
+  receipt: Pick<DataRecord, 'lines'>,
+  postedReturns: readonly Pick<DataRecord, 'id' | 'lines'>[],
+  excludeId?: string,
+): Map<string, string> {
+  const returned = new Map<string, Dec>();
+  for (const r of postedReturns) {
+    if (r.id === excludeId) {
+      continue;
+    }
+    for (const line of r.lines?.[PURCHASE_RETURN_LINE] ?? []) {
+      const id = line.data[PURCHASING_FIELDS.goodsReceiptLine];
+      const qty = parse(line.data[PURCHASING_FIELDS.qty]);
+      if (typeof id === 'string' && qty) {
+        returned.set(id, add(returned.get(id) ?? { units: 0n, scale: 0 }, qty));
+      }
+    }
+  }
+  const result = new Map<string, string>();
+  for (const line of receipt.lines?.[GOODS_RECEIPT_LINE] ?? []) {
+    const qty = parse(line.data[PURCHASING_FIELDS.qty]);
+    if (qty) {
+      result.set(
+        line.id,
+        format(sub(qty, returned.get(line.id) ?? { units: 0n, scale: 0 }), AMOUNT_SCALE),
+      );
+    }
+  }
+  return result;
+}
+
+/**
+ * 進貨單帶入進貨退回的明細（JSON 存值）：可退數量大於 0 的每一列，帶入進貨明細、商品、批號、單價
+ * （商品、批號、單價為系統維護，只用於顯示與金額預覽，存檔時由伺服器帶入），數量為可退數量。
+ */
+export function returnLinesFromReceipt(
+  receipt: Pick<DataRecord, 'lines'>,
+  returnable: ReadonlyMap<string, string>,
+): RecordData[] {
+  return (receipt.lines?.[GOODS_RECEIPT_LINE] ?? []).flatMap((line) => {
+    const qty = returnable.get(line.id);
+    if (!qty || !(parse(qty)!.units > 0n)) {
+      return [];
+    }
+    return [
+      {
+        [PURCHASING_FIELDS.goodsReceiptLine]: line.id,
+        [PURCHASING_FIELDS.product]: line.data[PURCHASING_FIELDS.product] ?? null,
+        [PURCHASING_FIELDS.lotNo]: line.data[PURCHASING_FIELDS.lotNo] ?? null,
+        [PURCHASING_FIELDS.unitPrice]: line.data[PURCHASING_FIELDS.unitPrice] ?? null,
+        [PURCHASING_FIELDS.qty]: qty,
       },
     ];
   });

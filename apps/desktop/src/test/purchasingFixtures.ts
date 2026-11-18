@@ -62,6 +62,26 @@ export const GOODS_RECEIPT_LINE: EntityDefinition = documentEntity({
   sort_order: 0,
 });
 
+export const PURCHASE_RETURN: EntityDefinition = documentEntity({
+  id: '01a1f4c0-5e10-7004-9f63-b2ea144e4b01',
+  key: 'purchase_return',
+  label: '進貨退回',
+  numbering_pattern: 'PR{yyyyMM}-{0000}',
+  title_template: '{record_no} {supplier_id.name}',
+  sort_order: 130,
+});
+
+export const PURCHASE_RETURN_LINE: EntityDefinition = documentEntity({
+  id: '01a1f4c0-5e10-7005-bd93-d9d2e7f08025',
+  key: 'purchase_return_line',
+  label: '進貨退回明細',
+  kind: 'detail',
+  parent_entity_id: PURCHASE_RETURN.id,
+  numbering_pattern: null,
+  title_template: '{product_id.code} {product_id.name} {lot_no}',
+  sort_order: 0,
+});
+
 const TAX_OPTIONS = [
   { value: 'taxable', label: '應稅', color: null },
   { value: 'zero_rated', label: '零稅率', color: null },
@@ -265,6 +285,123 @@ export const GOODS_RECEIPT_LINE_FIELDS = [
   }),
 ];
 
+/** 進貨退回：幣別、匯率、稅別等由伺服器從進貨單帶入（唯讀）。 */
+export const PURCHASE_RETURN_FIELDS = [
+  sys(PURCHASE_RETURN, {
+    field_key: 'goods_receipt_id',
+    label: '進貨單',
+    data_type: 'relation',
+    is_required: true,
+    relation_entity_id: GOODS_RECEIPT.id,
+    sort_order: 10,
+  }),
+  sys(PURCHASE_RETURN, {
+    field_key: 'supplier_id',
+    label: '廠商',
+    data_type: 'relation',
+    is_readonly: true,
+    relation_entity_id: SUPPLIER.id,
+    sort_order: 20,
+  }),
+  sys(PURCHASE_RETURN, {
+    field_key: 'return_date',
+    label: '退回日期',
+    data_type: 'date',
+    is_required: true,
+    sort_order: 30,
+  }),
+  sys(PURCHASE_RETURN, {
+    field_key: 'currency_code',
+    label: '幣別',
+    is_readonly: true,
+    ui_widget: 'currency',
+    sort_order: 40,
+  }),
+  sys(PURCHASE_RETURN, {
+    field_key: 'exchange_rate',
+    label: '匯率',
+    data_type: 'decimal',
+    is_readonly: true,
+    decimal_places: 6,
+    sort_order: 50,
+  }),
+  sys(PURCHASE_RETURN, {
+    field_key: 'tax_type',
+    label: '稅別',
+    data_type: 'select',
+    is_readonly: true,
+    options: TAX_OPTIONS,
+    sort_order: 60,
+  }),
+  sys(PURCHASE_RETURN, {
+    field_key: 'status',
+    label: '狀態',
+    data_type: 'select',
+    is_readonly: true,
+    options: [
+      { value: 'draft', label: '草稿', color: null },
+      { value: 'posted', label: '已過帳', color: null },
+      { value: 'void', label: '已作廢', color: null },
+    ],
+    sort_order: 70,
+  }),
+  money(PURCHASE_RETURN, 'subtotal', '未稅金額', 80),
+  money(PURCHASE_RETURN, 'tax_amount', '稅額', 90),
+  money(PURCHASE_RETURN, 'total', '總計', 100),
+  money(PURCHASE_RETURN, 'total_twd', '台幣總計', 110, 2),
+  sys(PURCHASE_RETURN, { field_key: 'reason', label: '退回原因', sort_order: 120 }),
+  sys(PURCHASE_RETURN, {
+    field_key: 'notes',
+    label: '備註',
+    data_type: 'long_text',
+    sort_order: 130,
+  }),
+];
+
+export const PURCHASE_RETURN_LINE_FIELDS = [
+  sys(PURCHASE_RETURN_LINE, {
+    field_key: 'goods_receipt_line_id',
+    label: '進貨明細',
+    data_type: 'relation',
+    is_required: true,
+    is_visible: false,
+    relation_entity_id: GOODS_RECEIPT_LINE.id,
+    sort_order: 10,
+  }),
+  sys(PURCHASE_RETURN_LINE, {
+    field_key: 'product_id',
+    label: '商品',
+    data_type: 'relation',
+    is_readonly: true,
+    relation_entity_id: PRODUCT.id,
+    sort_order: 20,
+  }),
+  sys(PURCHASE_RETURN_LINE, {
+    field_key: 'lot_no',
+    label: '批號',
+    is_readonly: true,
+    sort_order: 30,
+  }),
+  sys(PURCHASE_RETURN_LINE, {
+    field_key: 'qty',
+    label: '數量',
+    data_type: 'decimal',
+    is_required: true,
+    decimal_places: 4,
+    validation: MIN_ZERO,
+    sort_order: 40,
+  }),
+  money(PURCHASE_RETURN_LINE, 'unit_price', '單價', 50),
+  money(PURCHASE_RETURN_LINE, 'amount', '金額', 60),
+  money(PURCHASE_RETURN_LINE, 'unit_cost_twd', '台幣單位成本', 70),
+  sys(PURCHASE_RETURN_LINE, {
+    field_key: 'notes',
+    label: '備註',
+    data_type: 'long_text',
+    sort_order: 80,
+  }),
+];
+
 /** 所有進貨相關的資料類別（`list_entities`）。 */
 export const PURCHASING_ENTITIES = [
   PRODUCT,
@@ -273,6 +410,8 @@ export const PURCHASING_ENTITIES = [
   PURCHASE_ORDER_LINE,
   GOODS_RECEIPT,
   GOODS_RECEIPT_LINE,
+  PURCHASE_RETURN,
+  PURCHASE_RETURN_LINE,
 ];
 
 /** `get_entity` 的回應。 */
@@ -282,6 +421,8 @@ export function purchasingEntityDetail(key: string) {
     purchase_order_line: PURCHASE_ORDER_LINE_FIELDS,
     goods_receipt: GOODS_RECEIPT_FIELDS,
     goods_receipt_line: GOODS_RECEIPT_LINE_FIELDS,
+    purchase_return: PURCHASE_RETURN_FIELDS,
+    purchase_return_line: PURCHASE_RETURN_LINE_FIELDS,
     supplier: [],
     product: [],
   };
@@ -293,6 +434,7 @@ export const SUPPLIER_ID = '0196f5a0-0000-7000-8000-000000000a01';
 export const SUPPLIER_TITLE = 'S001 美商五金';
 export const ORDER_ID = '0196f5a0-0000-7000-8000-000000000a11';
 export const RECEIPT_ID = '0196f5a0-0000-7000-8000-000000000a21';
+export const RETURN_ID = '0196f5a0-0000-7000-8000-000000000a31';
 
 /** 幣別（`list_currencies`）。 */
 export const CURRENCIES = [

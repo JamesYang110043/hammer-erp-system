@@ -7,10 +7,11 @@ import { Link } from 'react-router';
 import { unwrap } from '../../api/client';
 import { allCurrenciesQuery, useAllCurrencies } from '../../api/currencies';
 import { effectiveRateQuery, useEffectiveRate } from '../../api/exchangeRates';
+import { returnableQuery, useReturnable } from '../../api/purchasing';
 import { recordKey } from '../../api/records';
 import { commands } from '../../bindings';
 import type { Currency, FieldDefinition } from '../../bindings';
-import { documentStatus } from '../../records/documents';
+import { documentStatus, formatQty } from '../../records/documents';
 import { initialFormValues } from '../../records/form';
 import { productStockPath } from '../../records/inventory';
 import { LINES_FORM_KEY } from '../../records/lines';
@@ -18,12 +19,15 @@ import type { DetailTable, LineFormValues } from '../../records/lines';
 import {
   GOODS_RECEIPT,
   PURCHASE_ORDER,
+  PURCHASE_RETURN_LINE,
   PURCHASING_FIELDS as F,
   defaultTaxType,
   orderNotReceivable,
   pricedDocument,
   rateNote,
   receiptLinesFromOrder,
+  receiptNotReturnable,
+  returnLinesFromReceipt,
   sameDecimal,
   trimRate,
 } from '../../records/purchasing';
@@ -37,6 +41,8 @@ import { RecordFieldInput } from './RecordFieldInput';
  *   進貨單選採購單帶入未進貨明細
  * - `useAmountPreview`（另一個檔案）：明細金額與合計的即時預覽
  * - {@link ReceiptLotNoInput}：進貨明細的批號（留空時過帳自動產生；過帳後連到庫存查詢）
+ * - {@link PurchaseReturnAutofill}、{@link ReturnableQty}：進貨退回選擇進貨單後帶入可退的明細、
+ *   顯示每一列的可退數量
  */
 
 /** 表單中日期欄位的值（Dayjs）→ `YYYY-MM-DD`。 */
@@ -371,5 +377,107 @@ export function ReceiptLotNoInput({
       style={{ minWidth: 180 }}
       onChange={(e) => onChange?.(e.target.value)}
     />
+  );
+}
+
+/**
+ * 進貨退回選了進貨單：帶入廠商、幣別、匯率、稅別（系統維護，顯示與金額預覽用）與可退數量大於 0 的明細
+ * （§8.8「進貨退回」）。已有明細時先詢問是否取代。只有新增中的草稿使用（存檔後不可更換進貨單）。
+ */
+export function PurchaseReturnAutofill({
+  details,
+  onChange,
+}: {
+  details: readonly DetailTable[];
+  onChange: () => void;
+}) {
+  const form = Form.useFormInstance();
+  const queryClient = useQueryClient();
+  const { message, modal } = App.useApp();
+  const receiptId = textOf(Form.useWatch(F.goodsReceipt, form));
+  const prev = useRef(textOf(form.getFieldValue(F.goodsReceipt)));
+
+  const apply = async (id: string) => {
+    const table = details.find((d) => d.entity.key === PURCHASE_RETURN_LINE);
+    if (!table) {
+      return;
+    }
+    const result = await queryClient
+      .fetchQuery({ ...returnableQuery(id), staleTime: 0 })
+      .catch(() => undefined);
+    if (!result) {
+      message.error('無法讀取進貨單');
+      return;
+    }
+    const { receipt, returnable } = result;
+    const reason = receiptNotReturnable(documentStatus(receipt));
+    if (reason) {
+      message.warning(`${reason}，無法退回`);
+      return;
+    }
+    const lines = returnLinesFromReceipt(receipt, returnable);
+    const name = receipt.record_no ?? '進貨單';
+    const fill = () => {
+      const rate = textOf(receipt.data[F.rate]);
+      form.setFieldsValue({
+        [F.supplier]: receipt.data[F.supplier] ?? undefined,
+        [F.currency]: receipt.data[F.currency] ?? undefined,
+        [F.rate]: rate ? trimRate(rate) : undefined,
+        [F.taxType]: receipt.data[F.taxType] ?? undefined,
+      });
+      form.setFieldValue(
+        [LINES_FORM_KEY, PURCHASE_RETURN_LINE],
+        lines.map((data) => initialFormValues(table.fields, data)),
+      );
+      onChange();
+      if (lines.length > 0) {
+        message.success(
+          `已帶入 ${name} 的 ${lines.length} 筆可退明細，請修改退回數量或刪除不退的列`,
+        );
+      } else {
+        message.warning(`${name} 已沒有可退的數量`);
+      }
+    };
+    const rows = (form.getFieldValue([LINES_FORM_KEY, PURCHASE_RETURN_LINE]) ?? []) as unknown[];
+    if (rows.length > 0) {
+      modal.confirm({
+        title: '要以進貨單的明細取代目前的明細嗎？',
+        content: `會帶入 ${name} 可退的明細，目前的 ${rows.length} 筆明細會被取代。`,
+        okText: '取代',
+        cancelText: '保留目前的明細',
+        onOk: fill,
+      });
+      return;
+    }
+    fill();
+  };
+
+  useEffect(() => {
+    // Form.useWatch 第一次繪製可能是 undefined（欄位還沒註冊）：與表單目前的值相同才比較
+    if (receiptId !== textOf(form.getFieldValue(F.goodsReceipt))) {
+      return;
+    }
+    const before = prev.current;
+    prev.current = receiptId;
+    if (receiptId && receiptId !== before) {
+      void apply(receiptId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [receiptId]);
+
+  return null;
+}
+
+/** 進貨退回明細的可退數量：進貨明細的數量減去其他已過帳退回的數量。 */
+export function ReturnableQty({ row }: { row: (string | number)[] }) {
+  const form = Form.useFormInstance();
+  const receiptId = textOf(Form.useWatch(F.goodsReceipt, form));
+  const lineId = textOf(Form.useWatch([...row, F.goodsReceiptLine], form));
+  const result = useReturnable(receiptId);
+  const qty = lineId ? result.data?.returnable.get(lineId) : undefined;
+  return qty ? (
+    <Typography.Text strong>{formatQty(qty)}</Typography.Text>
+  ) : (
+    <Typography.Text type="secondary">—</Typography.Text>
   );
 }

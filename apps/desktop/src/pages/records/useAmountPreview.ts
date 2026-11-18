@@ -8,7 +8,7 @@ import {
   PURCHASING_FIELDS as F,
   documentTotals,
   lineAmount,
-  pricedDocument,
+  amountLineKey,
 } from '../../records/purchasing';
 
 /**
@@ -23,25 +23,25 @@ export function useAmountPreview(
   values: Record<string, unknown>,
   enabled: boolean,
 ) {
-  const doc = pricedDocument(entityKey);
-  // 只有採購單、進貨單的草稿需要
-  const currencies = useAllCurrencies(enabled && doc !== undefined);
-  const taxRates = useTaxRates(enabled && doc !== undefined);
+  const lineKey = amountLineKey(entityKey);
+  // 只有採購單、進貨單、進貨退回的草稿需要
+  const currencies = useAllCurrencies(enabled && lineKey !== undefined);
+  const taxRates = useTaxRates(enabled && lineKey !== undefined);
   useEffect(() => {
-    if (!enabled || !doc) {
+    if (!enabled || !lineKey) {
       return;
     }
     const code = values[F.currency];
     const currency = currencies.data?.find((c) => c.code === code);
     const tax = taxRates.data?.find((t) => t.code === values[F.taxType]);
     const lines = ((values[LINES_FORM_KEY] as Record<string, LineFormValues[]> | undefined)?.[
-      doc.lineKey
+      lineKey
     ] ?? []) as LineFormValues[];
     const amounts = lines.map((line) =>
       currency ? lineAmount(line[F.qty], line[F.unitPrice], currency.decimal_places) : undefined,
     );
     amounts.forEach((amount, i) => {
-      form.setFieldValue([LINES_FORM_KEY, doc.lineKey, i, F.amount], amount);
+      form.setFieldValue([LINES_FORM_KEY, lineKey, i, F.amount], amount);
     });
     if (!currency || !tax) {
       form.setFieldsValue({
@@ -64,5 +64,5 @@ export function useAmountPreview(
       [F.total]: totals.total,
       [F.totalTwd]: totals.total_twd ?? undefined,
     });
-  }, [form, doc, enabled, values, currencies.data, taxRates.data]);
+  }, [form, lineKey, enabled, values, currencies.data, taxRates.data]);
 }

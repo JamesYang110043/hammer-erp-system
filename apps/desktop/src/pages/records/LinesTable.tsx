@@ -11,9 +11,13 @@ import { LINES_FORM_KEY, LINE_ID_KEY, lineFormValues } from '../../records/lines
 import { LINE_FIELDS, STOCK_ADJUSTMENT_LINE } from '../../records/inventory';
 import { isExclusiveLineField, rowsToClear } from '../../records/masterData';
 import type { DetailTable } from '../../records/lines';
-import { GOODS_RECEIPT_LINE, PURCHASING_FIELDS } from '../../records/purchasing';
+import {
+  GOODS_RECEIPT_LINE,
+  PURCHASE_RETURN_LINE,
+  PURCHASING_FIELDS,
+} from '../../records/purchasing';
 import { FormulaValue } from './FieldValue';
-import { ReceiptLotNoInput } from './PurchasingInputs';
+import { ReceiptLotNoInput, ReturnableQty } from './PurchasingInputs';
 import { RecordFieldInput } from './RecordFieldInput';
 import { CurrentQty, LotNoInput, UnitCostInput } from './StockAdjustmentLineInputs';
 
@@ -68,6 +72,8 @@ export function LinesTable({
   const isStockAdjustment = entity.key === STOCK_ADJUSTMENT_LINE;
   // 進貨明細：批號留空時過帳自動產生，過帳後連到庫存查詢
   const isGoodsReceipt = entity.key === GOODS_RECEIPT_LINE;
+  // 進貨退回明細：批號（唯讀）連到庫存查詢；草稿顯示可退數量
+  const isPurchaseReturn = entity.key === PURCHASE_RETURN_LINE;
 
   return (
     <Form.List name={listName}>
@@ -130,7 +136,8 @@ export function LinesTable({
                           },
                         ]}
                       >
-                        {isGoodsReceipt && field.field_key === PURCHASING_FIELDS.lotNo ? (
+                        {(isGoodsReceipt || isPurchaseReturn) &&
+                        field.field_key === PURCHASING_FIELDS.lotNo ? (
                           <ReceiptLotNoInput
                             row={rowPath}
                             label={field.label}
@@ -184,6 +191,15 @@ export function LinesTable({
             render: (_, row) => <CurrentQty row={[...listName, row.name]} />,
           });
         }
+        if (isPurchaseReturn && canWrite) {
+          const qtyIndex = columns.findIndex((c) => c.key === PURCHASING_FIELDS.qty);
+          columns.splice(qtyIndex < 0 ? columns.length : qtyIndex, 0, {
+            key: '__returnable_qty',
+            title: '可退數量',
+            align: 'right',
+            render: (_, row) => <ReturnableQty row={[...listName, row.name]} />,
+          });
+        }
         if (canWrite) {
           columns.push({
             title: '操作',
@@ -217,7 +233,8 @@ export function LinesTable({
               dataSource={rows.map((r) => ({ key: r.key, name: r.name }))}
               locale={{ emptyText: '沒有明細' }}
             />
-            {canWrite && (
+            {/* 進貨退回的明細只能從進貨單帶入 */}
+            {canWrite && !isPurchaseReturn && (
               <Button
                 type="dashed"
                 icon={<PlusOutlined />}

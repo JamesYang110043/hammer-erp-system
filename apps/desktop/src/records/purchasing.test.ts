@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { EntityDefinition, Record as DataRecord } from '../bindings';
 import { fieldDef } from '../test/schemaFixtures';
 import {
+  amountLineKey,
   defaultTaxType,
   documentTotals,
   lineAmount,
@@ -11,6 +12,9 @@ import {
   purchasingEntities,
   rateNote,
   receiptLinesFromOrder,
+  receiptNotReturnable,
+  returnLinesFromReceipt,
+  returnableQty,
   sameDecimal,
   trimRate,
   unitCostTwd,
@@ -191,6 +195,70 @@ describe('purchase order to goods receipt', () => {
         entity('purchase_return'),
         entity('x', false),
       ]).map((e) => e.key),
-    ).toEqual(['purchase_order', 'goods_receipt']);
+    ).toEqual(['purchase_order', 'goods_receipt', 'purchase_return']);
+  });
+});
+
+describe('purchase return', () => {
+  const rec = (id: string, data: Record<string, unknown>, lines?: Record<string, DataRecord[]>) =>
+    ({ id, data, lines }) as unknown as DataRecord;
+  const receipt = rec(
+    'gr',
+    {},
+    {
+      goods_receipt_line: [
+        rec('g1', { product_id: 'p1', qty: '6.0000', unit_price: '12.3450', lot_no: 'US-2611' }),
+        rec('g2', { product_id: 'p2', qty: '3.0000', unit_price: '7.5000', lot_no: 'GR-2' }),
+      ],
+    },
+  );
+  const posted = [
+    rec(
+      'r1',
+      {},
+      {
+        purchase_return_line: [rec('x', { goods_receipt_line_id: 'g1', qty: '2.0000' })],
+      },
+    ),
+    rec(
+      'r2',
+      {},
+      {
+        purchase_return_line: [
+          rec('y', { goods_receipt_line_id: 'g1', qty: '0.5' }),
+          rec('z', { goods_receipt_line_id: 'g2', qty: '3' }),
+        ],
+      },
+    ),
+  ];
+
+  it('computes_returnable_qty', () => {
+    // 可退數量 = 進貨數量 − 其他已過帳退回的數量（§8.8「進貨退回」）
+    const map = returnableQty(receipt, posted);
+    expect(map.get('g1')).toBe('3.5000');
+    expect(map.get('g2')).toBe('0.0000');
+    expect(returnableQty(receipt, posted, 'r2').get('g1')).toBe('4.0000');
+    expect(returnableQty(receipt, []).get('g2')).toBe('3.0000');
+  });
+
+  it('copies_returnable_lines', () => {
+    expect(returnLinesFromReceipt(receipt, returnableQty(receipt, posted))).toEqual([
+      {
+        goods_receipt_line_id: 'g1',
+        product_id: 'p1',
+        lot_no: 'US-2611',
+        unit_price: '12.3450',
+        qty: '3.5000',
+      },
+    ]);
+  });
+
+  it('checks_receipt_status_and_preview', () => {
+    expect(receiptNotReturnable('posted')).toBeUndefined();
+    expect(receiptNotReturnable('draft')).toBe('進貨單尚未過帳');
+    expect(receiptNotReturnable('void')).toBe('進貨單已作廢');
+    expect(amountLineKey('purchase_return')).toBe('purchase_return_line');
+    expect(amountLineKey('goods_receipt')).toBe('goods_receipt_line');
+    expect(amountLineKey('stock_adjustment')).toBeUndefined();
   });
 });
