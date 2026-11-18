@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(*) AS \"n!\"\n        FROM inventory_transactions t\n        WHERE ($1::uuid IS NULL OR t.product_id = $1)\n          AND ($2::uuid IS NULL OR t.lot_id = $2)\n          AND ($3::date IS NULL OR t.txn_date >= $3)\n          AND ($4::date IS NULL OR t.txn_date <= $4)\n          AND ($5::text IS NULL OR t.txn_type = $5)\n          AND ($6::text IS NULL OR t.ref_doc_type = $6)\n          AND ($7::uuid IS NULL OR t.ref_doc_id = $7)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Date",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "649a240f0533217b4ea4ad8148374d3f2bf10b947c504b480b8960c63b395cc3"
+}

@@ -1,0 +1,120 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.id AS product_id, p.code, p.name, p.spec, u.name AS unit_name, p.is_active,\n               COALESCE(b.qty_on_hand, 0) AS \"qty_on_hand!\",\n               COALESCE(b.stock_value_twd, 0) AS \"stock_value_twd!\",\n               p.safety_stock\n        FROM products p\n        JOIN units u ON u.id = p.unit_id\n        LEFT JOIN v_stock_balances b ON b.product_id = p.id\n        WHERE p.deleted_at IS NULL AND p.product_type = 'goods'\n          AND NOT EXISTS (\n              SELECT 1 FROM unnest($1::text[]) AS w(term)\n              WHERE strpos(lower(p.code), lower(w.term)) = 0\n                AND strpos(lower(p.name), lower(w.term)) = 0\n          )\n          AND ($2::uuid IS NULL OR p.category_id = $2)\n          AND ($3::bool IS NULL OR (COALESCE(b.qty_on_hand, 0) > 0) = $3)\n          AND (NOT $4::bool\n               OR (p.safety_stock IS NOT NULL AND COALESCE(b.qty_on_hand, 0) < p.safety_stock))\n          AND ($5::bool OR p.is_active)\n        ORDER BY lower(p.code), p.id\n        LIMIT $6 OFFSET $7\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "products",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "products",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "products",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "spec",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "products",
+            "name": "spec"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "unit_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "units",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "is_active",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "products",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "qty_on_hand!",
+        "type_info": "Numeric",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "stock_value_twd!",
+        "type_info": "Numeric",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "safety_stock",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "products",
+            "name": "safety_stock"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Uuid",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "8d50f39ac5348302ae6e55f5d32dc1fec786e6b475847764cad55bea7d6af830"
+}

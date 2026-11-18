@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(*) AS \"n!\"\n        FROM inventory_lots l\n        WHERE l.product_id = $1 AND l.deleted_at IS NULL\n          AND ($2::bool OR l.qty_remaining > 0)\n          AND ($3::text IS NULL OR strpos(lower(l.lot_no), lower($3)) > 0)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "76c97e82a6e60938d35621c8b67fd1a13ceff0f9e68993d4f0a9a88cf7f74594"
+}

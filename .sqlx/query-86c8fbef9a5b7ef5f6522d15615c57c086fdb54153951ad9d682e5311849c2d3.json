@@ -1,0 +1,123 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT l.id, l.lot_no, l.received_date, l.source_type, l.source_doc_id,\n               COALESCE(sa.record_no, '') AS \"source_record_no!\",\n               l.qty_in, l.qty_remaining, l.unit_cost_twd\n        FROM inventory_lots l\n        LEFT JOIN stock_adjustments sa\n               ON l.source_type = 'stock_adjustment_line' AND sa.id = l.source_doc_id\n        WHERE l.product_id = $1 AND l.deleted_at IS NULL\n          AND ($2::bool OR l.qty_remaining > 0)\n          AND ($3::text IS NULL OR strpos(lower(l.lot_no), lower($3)) > 0)\n        ORDER BY l.received_date, l.id\n        LIMIT $4 OFFSET $5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_lots",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "lot_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inventory_lots",
+            "name": "lot_no"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "received_date",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "inventory_lots",
+            "name": "received_date"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "source_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inventory_lots",
+            "name": "source_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "source_doc_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_lots",
+            "name": "source_doc_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "source_record_no!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "qty_in",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "inventory_lots",
+            "name": "qty_in"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "qty_remaining",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "inventory_lots",
+            "name": "qty_remaining"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "unit_cost_twd",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "inventory_lots",
+            "name": "unit_cost_twd"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "86c8fbef9a5b7ef5f6522d15615c57c086fdb54153951ad9d682e5311849c2d3"
+}
