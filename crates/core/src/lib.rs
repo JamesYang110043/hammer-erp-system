@@ -22,6 +22,7 @@
 //! - [`schema`]：資料類別與欄位定義的管理
 //! - [`setup`]：初次啟動建立第一個管理者
 //! - [`purchasing`]：進貨模組（採購單、進貨單、進貨退回）存檔時的規則（進貨退回從進貨單帶入）
+//! - [`sales`]：銷貨模組（訂單、出貨單、銷貨退回）存檔時的規則（銷貨退回從出貨單帶入）
 //! - [`stock_adjustments`]：盤點調整單的存檔檢查與過帳、作廢（期初庫存、盤盈、盤虧）
 //! - [`tax_rates`]：稅別列表
 //! - [`title`]：資料標題（`title_template`）的解析與產生
@@ -51,6 +52,7 @@ pub mod record_lines;
 mod record_titles;
 pub mod records;
 pub mod relations;
+pub mod sales;
 pub mod schema;
 pub mod setup;
 pub mod stock_adjustments;
