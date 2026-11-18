@@ -315,7 +315,7 @@ desktop(src-tauri) ──▶ shared, formula
 
 **關聯欄位（`relation`）**（檢查在 `hammer_core::schema::rules`、`hammer_core::relations`；API 格式見 `hammer_shared::record`）：
 
-- 建立欄位時必須指定 `relation_entity_id`，建立後不可修改。目標只能是有效、`kind` 為 `master` 或 `document` 的資料類別（可以是自己），自訂與系統資料類別都可以（M3 起，例如指向 `product`、`customer`）；不可指向明細子表（自訂或系統的都不可以，例如 `customer_contact`）。關聯欄位不可設定預設值；可以開啟可搜尋、不可重複（§7.5）。
+- 建立欄位時必須指定 `relation_entity_id`，建立後不可修改。目標只能是有效、`kind` 為 `master` 或 `document` 的資料類別（可以是自己），自訂與系統資料類別都可以（M3 起，例如指向 `product`、`customer`）；不可指向明細子表（自訂或系統的都不可以，例如 `customer_contact`）。唯一的例外是 migration 建立的系統欄位 `purchase_order_line_id`、`goods_receipt_line_id`（§8.8），指向系統明細子表 `purchase_order_line`、`goods_receipt_line`：存在檢查、鎖定、`relations` 的標題與其他關聯欄位相同；明細子表沒有選擇器，所以這兩個欄位預設隱藏，由桌面程式在帶入時寫入。關聯欄位不可設定預設值；可以開啟可搜尋、不可重複（§7.5）。
 - 寫入：值必須是目標資料類別中**未刪除**的資料 id，否則 `422 VALIDATION`（`details.fields` 指出欄位）。修改資料時只檢查有變動的關聯欄位，並以 `FOR SHARE` 鎖定目標資料到 transaction 結束，避免同時被刪除。目標是系統資料類別時查詢並鎖定它的專屬資料表；目標的 `is_active = false` 不影響寫入（§7.1）。
 - 系統資料表的外鍵（`unit_id`、`category_id`、`parent_id`）也是指向系統資料類別的 `relation` 系統欄位，寫入、回應、篩選的規則與此相同；另外有資料庫外鍵（`REFERENCES`）。
 - 目標資料之後被刪除：允許刪除，關聯欄位保留原值。
@@ -1093,7 +1093,7 @@ M4b 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 |---|---|---|---|---|
 | goods_receipt_id | UUID NOT NULL FK → goods_receipts | （不是欄位） | | 所屬單據 |
 | sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序 |
-| purchase_order_line_id | UUID FK → purchase_order_lines | `text` | 採購明細 | `is_visible = false`；值為採購明細的 id（uuid 字串）；關聯欄位不能指向明細子表（§7.3），所以用 `text`，格式與歸屬由 `hammer_core` 檢查 |
+| purchase_order_line_id | UUID FK → purchase_order_lines | `relation` | 採購明細 | → `purchase_order_line`（系統明細子表，§7.3 的例外）、`is_visible = false`；必須屬於表頭的採購單（`hammer_core` 檢查） |
 | product_id | UUID NOT NULL FK → products | `relation` | 商品 | 必填、→ `product`；`goods`、`service` 都可以 |
 | qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0 |
 | unit_price | NUMERIC(18,4) NOT NULL CHECK (unit_price >= 0) | `money` | 單價 | 必填、小數 4、`min 0`；單據幣別、未稅 |
@@ -1131,7 +1131,7 @@ M4b 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 |---|---|---|---|---|
 | purchase_return_id | UUID NOT NULL FK → purchase_returns | （不是欄位） | | 所屬單據 |
 | sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序 |
-| goods_receipt_line_id | UUID NOT NULL FK → goods_receipt_lines | `text` | 進貨明細 | 必填、`is_visible = false`；值為進貨明細的 id；必須屬於表頭的進貨單 |
+| goods_receipt_line_id | UUID NOT NULL FK → goods_receipt_lines | `relation` | 進貨明細 | 必填、→ `goods_receipt_line`（系統明細子表，§7.3 的例外）、`is_visible = false`；必須屬於表頭的進貨單 |
 | product_id | UUID NOT NULL FK → products | `relation` | 商品 | 系統維護、→ `product`；= 進貨明細的商品 |
 | lot_no | TEXT | `text` | 批號 | 系統維護；= 進貨明細的批號（`service` 為 `NULL`） |
 | qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0，上限見「進貨退回」 |
@@ -1271,7 +1271,7 @@ draft ──確認──▶ confirmed ──進貨過帳──▶ partially_rece
 |---|---|
 | 採購單的狀態是 `confirmed` 或 `partially_received` | `purchase_order_id`「採購單尚未確認」「採購單已結案」「採購單已作廢」 |
 | 進貨單的 `supplier_id`、`currency_code` 與採購單相同 | `supplier_id`「廠商與採購單不同」；`currency_code`「幣別與採購單不同」 |
-| `purchase_order_line_id` 是 uuid、是該採購單未刪除的明細 | `purchase_order_line_id`「不是此採購單的明細」 |
+| `purchase_order_line_id` 是該採購單未刪除的明細 | `purchase_order_line_id`「不是此採購單的明細」 |
 | 明細的 `product_id` 與採購明細相同 | `product_id`「商品與採購明細不同」 |
 | **不允許超收**：同一張進貨單中指向同一列採購明細的 `qty` 合計 ≤ `qty − received_qty` | 第一列的 `qty`「超過未進貨數量 3.0000」 |
 
