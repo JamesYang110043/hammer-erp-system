@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT t.ref_doc_type, t.ref_doc_id\n        FROM inventory_transactions t\n        WHERE t.lot_id = $1\n          AND NOT (t.ref_doc_type = $2 AND t.ref_doc_id = $3)\n          AND NOT EXISTS (\n              SELECT 1\n              FROM inventory_transactions v\n              WHERE v.lot_id = t.lot_id\n                AND v.ref_doc_type = t.ref_doc_type\n                AND v.ref_doc_id = t.ref_doc_id\n                AND v.txn_type = 'void_reversal'\n          )\n        GROUP BY t.ref_doc_type, t.ref_doc_id\n        ORDER BY min(t.txn_at), t.ref_doc_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ref_doc_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "ref_doc_type"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ref_doc_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "ref_doc_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "93feaff5d8b40a09c7e8d2299730652ff6c42f4e29392ba159350c83cd50fb84"
+}

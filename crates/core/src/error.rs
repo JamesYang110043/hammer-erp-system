@@ -9,7 +9,9 @@ use crate::schema::formula::{FormulaError, FormulaErrorLocation};
 use crate::schema::index::DuplicateValue;
 use crate::schema::type_change::ConversionFailure;
 use hammer_db::DbError;
-use hammer_shared::document::{DocumentStatus, InvalidStatusDetails};
+use hammer_shared::document::{
+    DocumentStatus, InvalidStatusDetails, LotInUseDetails, StockInsufficientDetails,
+};
 use hammer_shared::{ApiError, ErrorCode};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -116,6 +118,22 @@ pub enum CoreError {
         message: String,
     },
 
+    /// 過帳或作廢時批號或商品的數量不足（§10「單據動作」，[`crate::inventory`]）。
+    /// API 回應為 `STOCK_INSUFFICIENT`，`details` 為 [`StockInsufficientDetails`]（列出所有不足的項目）。
+    #[error("{message}")]
+    StockInsufficient {
+        message: String,
+        details: StockInsufficientDetails,
+    },
+
+    /// 作廢時要刪除的批號已被其他有效單據使用（§10「單據動作」，[`crate::inventory`]）。
+    /// API 回應為 `LOT_IN_USE`，`details` 為 [`LotInUseDetails`]。
+    #[error("{message}")]
+    LotInUse {
+        message: String,
+        details: LotInUseDetails,
+    },
+
     /// 操作後系統沒有任何有效（啟用、未刪除）的管理者（§6.2）。
     /// API 回應為 `VALIDATION`，`details.reason` 為 [`LAST_ADMIN_REASON`]。
     #[error("系統至少需要保留一個有效的管理者，無法停用、刪除最後一個管理者或變更其角色")]
@@ -182,6 +200,8 @@ impl CoreError {
             | Self::RecordInUse { .. }
             | Self::LastAdmin => ErrorCode::Validation,
             Self::InvalidStatus { .. } => ErrorCode::InvalidStatus,
+            Self::StockInsufficient { .. } => ErrorCode::StockInsufficient,
+            Self::LotInUse { .. } => ErrorCode::LotInUse,
             Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::PayloadTooLarge(_) => ErrorCode::PayloadTooLarge,
             Self::NotFound(_) => ErrorCode::NotFound,
@@ -337,6 +357,12 @@ impl From<CoreError> for ApiError {
             let details = InvalidStatusDetails { status: *status };
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::to_value(details).unwrap_or(serde_json::Value::Null))
+        } else if let CoreError::StockInsufficient { details, .. } = &err {
+            ApiError::new(code, err.to_string())
+                .with_details(serde_json::to_value(details).unwrap_or(serde_json::Value::Null))
+        } else if let CoreError::LotInUse { details, .. } = &err {
+            ApiError::new(code, err.to_string())
+                .with_details(serde_json::to_value(details).unwrap_or(serde_json::Value::Null))
         } else if let CoreError::LastAdmin = err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "reason": LAST_ADMIN_REASON }))
@@ -384,6 +410,26 @@ mod tests {
         let api: ApiError = err.into();
         assert_eq!(api.message, "已過帳的單據不可修改");
         assert_eq!(api.details, Some(serde_json::json!({ "status": "posted" })));
+    }
+
+    #[test]
+    fn stock_errors_serialize_details() {
+        let err = CoreError::StockInsufficient {
+            message: "商品 A001 庫存不足，尚缺 1".into(),
+            details: StockInsufficientDetails { items: vec![] },
+        };
+        assert_eq!(err.code(), ErrorCode::StockInsufficient);
+        let api: ApiError = err.into();
+        assert_eq!(api.message, "商品 A001 庫存不足，尚缺 1");
+        assert_eq!(api.details, Some(serde_json::json!({ "items": [] })));
+
+        let err = CoreError::LotInUse {
+            message: "批號 L-01 已被其他單據使用".into(),
+            details: LotInUseDetails { lots: vec![] },
+        };
+        assert_eq!(err.code(), ErrorCode::LotInUse);
+        let api: ApiError = err.into();
+        assert_eq!(api.details, Some(serde_json::json!({ "lots": [] })));
     }
 
     #[test]
