@@ -683,8 +683,9 @@ async fn inventory_checks(pool: PgPool) {
     for bad in [
         new_txn(&lot, "adjustment", "0", doc),
         new_txn(&lot, "transfer", "1", doc),
+        // 0013 起出貨單、銷貨退回都是合法的來源單據
         NewTransaction {
-            ref_doc_type: "shipment",
+            ref_doc_type: "invoice",
             ..new_txn(&lot, "adjustment", "1", doc)
         },
     ] {

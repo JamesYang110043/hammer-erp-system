@@ -19,6 +19,7 @@
 //! - [`session`]：`sessions` 的新增、查詢、更新與撤銷
 //! - [`settings`]：讀取 `settings`
 //! - [`purchasing`]：進貨模組存檔時的跨單據讀取（進貨退回從進貨單帶入的值）
+//! - [`sales`]：銷貨模組存檔時的跨單據讀取（銷貨退回從出貨單帶入的值）
 //! - [`stock_adjustment`]：盤點調整明細在過帳、作廢時的讀寫（`lot_id`、系統寫入的批號與成本）
 //! - [`system_record`]：系統資料類別的資料（`storage = table`，系統欄位是實體欄位、自訂欄位在 `custom_data`）
 //! - [`tax_rate`]：稅別（`tax_rates`）列表
@@ -45,6 +46,7 @@ mod pool;
 pub mod purchasing;
 pub mod record;
 pub mod role;
+pub mod sales;
 pub mod schema;
 pub mod session;
 pub mod settings;

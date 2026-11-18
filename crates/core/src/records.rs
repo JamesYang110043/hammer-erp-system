@@ -107,6 +107,7 @@ use crate::record_lines::{
 };
 use crate::record_titles::Titles;
 use crate::relations::{attach_relations, check_relations};
+use crate::sales;
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version, entity_from_row, field_from_row};
 use crate::stock_adjustments;
 use crate::title::{RelatedRecords, TitleRenderer};
@@ -300,6 +301,9 @@ pub async fn create_record(
     let (master, return_errors) =
         purchase_return_rules(&mut tx, &entity.key, master, None, &mut lines).await?;
     line_errors.extend(return_errors);
+    let (master, return_errors) =
+        sales_return_rules(&mut tx, &entity.key, master, None, &mut lines).await?;
+    line_errors.extend(return_errors);
     let (master, receipt_errors) = receipt_rules(&mut tx, &entity.key, master, &lines).await?;
     line_errors.extend(receipt_errors);
     let mut data = validation_error(master, line_errors)?;
@@ -450,6 +454,9 @@ pub async fn update_record(
     );
     let (master, return_errors) =
         purchase_return_rules(&mut tx, &entity.key, master, Some(existing), &mut lines).await?;
+    line_errors.extend(return_errors);
+    let (master, return_errors) =
+        sales_return_rules(&mut tx, &entity.key, master, Some(existing), &mut lines).await?;
     line_errors.extend(return_errors);
     let (master, receipt_errors) = receipt_rules(&mut tx, &entity.key, master, &lines).await?;
     line_errors.extend(receipt_errors);
@@ -2071,6 +2078,23 @@ async fn purchase_return_rules(
         .filter_map(|l| Some((l.index, l.data.as_object_mut()?)))
         .collect();
     purchasing::derive_return(tx, entity_key, master, existing, rows).await
+}
+
+/// 銷貨退回從出貨單帶入系統維護的欄位（[`sales::derive_return`]）。只處理通過欄位驗證的明細。
+async fn sales_return_rules(
+    tx: &mut PgTransaction<'_>,
+    entity_key: &str,
+    master: Result<Map<String, Value>, Vec<FieldError>>,
+    existing: Option<&Map<String, Value>>,
+    lines: &mut [DetailWrite<'_>],
+) -> Result<(Result<Map<String, Value>, Vec<FieldError>>, Vec<LineError>), CoreError> {
+    let rows: Vec<(usize, &mut Map<String, Value>)> = lines
+        .iter_mut()
+        .filter(|d| d.detail.entity.key == sales::SALES_RETURN_LINE)
+        .flat_map(|d| d.lines.iter_mut())
+        .filter_map(|l| Some((l.index, l.data.as_object_mut()?)))
+        .collect();
+    sales::derive_return(tx, entity_key, master, existing, rows).await
 }
 
 /// 進貨單存檔時的檢查（[`purchasing::receipts::check_save`]）。只檢查通過欄位驗證的明細；修改時所有

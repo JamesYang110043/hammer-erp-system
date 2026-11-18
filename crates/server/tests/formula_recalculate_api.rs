@@ -29,7 +29,7 @@ use tower::ServiceExt;
 /// 關聯目標（客戶）。
 const CUSTOMER: &str = "client";
 /// 有公式欄位的主表（訂單）。
-const ORDER: &str = "sales_order";
+const ORDER: &str = "custom_order"; // 不可用 sales_order：M4c 起是系統資料類別
 /// 訂單的明細子表（品項）。
 const ITEMS: &str = "items";
 
