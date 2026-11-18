@@ -100,14 +100,15 @@ pub enum CoreError {
     FormulaReferenced(Vec<RelationReference>),
 
     /// 刪除基本資料時，還有其他資料使用它（§7.2，[`crate::master_data`]）：單位、分類還有未刪除的商品
-    /// 使用，或分類還有子分類。`products`、`children` 為使用中的商品數、子分類數（至少一個大於 0）。
-    /// API 回應為 `VALIDATION`，`details` 為 `{ "fields": [], "in_use_count": 3, "child_count": 1 }`
-    /// （只列出大於 0 的數量）。
+    /// 使用，分類還有子分類，或商品已有庫存異動。`products`、`children`、`transactions` 為使用中的商品數、
+    /// 子分類數、庫存異動筆數（至少一個大於 0）。API 回應為 `VALIDATION`，`details` 為
+    /// `{ "fields": [], "in_use_count": 3, "child_count": 1, "transaction_count": 12 }`（只列出大於 0 的數量）。
     #[error("{message}")]
     RecordInUse {
         message: String,
         products: i64,
         children: i64,
+        transactions: i64,
     },
 
     /// 單據目前的狀態不允許此操作（§7.1「系統單據」、§10「單據動作」）：修改、刪除非草稿，過帳非草稿，
@@ -342,7 +343,10 @@ impl From<CoreError> for ApiError {
                 "formulas": formulas,
             }))
         } else if let CoreError::RecordInUse {
-            products, children, ..
+            products,
+            children,
+            transactions,
+            ..
         } = &err
         {
             let mut details = serde_json::json!({ "fields": [] });
@@ -351,6 +355,9 @@ impl From<CoreError> for ApiError {
             }
             if *children > 0 {
                 details["child_count"] = serde_json::json!(children);
+            }
+            if *transactions > 0 {
+                details["transaction_count"] = serde_json::json!(transactions);
             }
             ApiError::new(code, err.to_string()).with_details(details)
         } else if let CoreError::InvalidStatus { status, .. } = &err {
@@ -438,6 +445,7 @@ mod tests {
             message: "此單位還有 3 筆商品使用中，無法刪除".into(),
             products: 3,
             children: 0,
+            transactions: 0,
         };
         assert_eq!(err.code(), ErrorCode::Validation);
         let api: ApiError = err.into();
@@ -451,11 +459,24 @@ mod tests {
             message: String::new(),
             products: 0,
             children: 2,
+            transactions: 0,
         }
         .into();
         assert_eq!(
             api.details,
             Some(serde_json::json!({ "fields": [], "child_count": 2 }))
+        );
+
+        let api: ApiError = CoreError::RecordInUse {
+            message: String::new(),
+            products: 0,
+            children: 0,
+            transactions: 12,
+        }
+        .into();
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({ "fields": [], "transaction_count": 12 }))
         );
     }
 

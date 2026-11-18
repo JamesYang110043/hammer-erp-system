@@ -4,6 +4,7 @@
 //! - [`category_ancestors`]：商品分類往上的所有上層分類（檢查循環）
 //! - [`count_products_by_unit`]、[`count_products_by_category`]、[`count_child_categories`]：刪除單位、
 //!   分類前檢查是否還在使用中
+//! - [`count_product_transactions`]：商品的庫存異動筆數（有異動的商品不可刪除、改類型或單位）
 //!
 //! 規則本身在 `hammer_core::master_data`。
 
@@ -89,6 +90,20 @@ pub async fn count_child_categories<'e>(
         WHERE parent_id = $1 AND deleted_at IS NULL
         "#,
         parent_id,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(n)
+}
+
+/// 商品 `product_id` 的庫存異動筆數（不論來源單據之後是否作廢，§7.2「商品被庫存引用時的限制」）。
+pub async fn count_product_transactions<'e>(
+    executor: impl PgExecutor<'e>,
+    product_id: Uuid,
+) -> Result<i64, DbError> {
+    let n = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM inventory_transactions WHERE product_id = $1"#,
+        product_id,
     )
     .fetch_one(executor)
     .await?;

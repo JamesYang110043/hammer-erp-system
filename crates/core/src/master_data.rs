@@ -8,7 +8,10 @@
 //!   這裡再檢查一次，不依賴欄位定義的內容；另外檢查欄位定義無法表達的規則（統一編號格式）。
 //!   `code` 去除前後空白後儲存
 //! - [`check_references`]：需要查詢資料庫的規則——廠商的預設幣別必須有效、商品分類的上層分類不可形成循環
-//! - [`check_delete`]：還有未刪除商品使用的單位、分類，以及有子分類的分類不能刪除
+//! - [`check_delete`]：還有未刪除商品使用的單位、分類，有子分類的分類，以及有庫存異動的商品不能刪除
+//! - 商品被庫存引用時的限制（§7.2）：有庫存異動（`inventory_transactions` 有該商品的資料，不論來源單據
+//!   之後是否作廢）的商品不可刪除、不可從 `goods` 改為 `service`、不可修改 `unit_id`。修改與刪除都在
+//!   以 `FOR UPDATE` 鎖定商品之後檢查（過帳以 `FOR SHARE` 鎖定商品，兩者互斥）
 //! - [`check_lines`]（純邏輯）：系統明細子表（聯絡人）一起存檔的所有明細之間的規則——同一個客戶或廠商
 //!   最多一位主要聯絡人（`is_primary = true`）。聯絡人每一列的系統欄位限制也由 [`check_data`] 檢查
 //!
@@ -67,6 +70,9 @@ pub const MSG_CURRENCY: &str = "不是有效的幣別";
 pub const MSG_CATEGORY_CYCLE: &str = "上層分類不可是自己或自己的下層分類";
 pub const MSG_CUSTOMER_PRIMARY: &str = "每個客戶最多只能有一位主要聯絡人";
 pub const MSG_SUPPLIER_PRIMARY: &str = "每個廠商最多只能有一位主要聯絡人";
+pub const MSG_PRODUCT_DELETE_STOCK: &str = "此商品已有庫存異動，無法刪除，請改為停用";
+pub const MSG_PRODUCT_TYPE_STOCK: &str = "此商品已有庫存異動，無法改為服務";
+pub const MSG_PRODUCT_UNIT_STOCK: &str = "此商品已有庫存異動，無法修改單位";
 
 /// 有 `code` 欄位的資料類別（§7.2）。
 const WITH_CODE: &[&str] = &[UNIT, PRODUCT, CUSTOMER, SUPPLIER];
@@ -272,6 +278,30 @@ pub(crate) async fn check_references(
                 }
             }
         }
+        PRODUCT => {
+            // 修改時才有庫存異動（新增的商品還沒有異動）
+            if let (Some(record_id), Some(existing)) = (record_id, existing) {
+                let to_service = changed("product_type").is_some_and(|v| v == "service")
+                    && existing.get("product_type").is_some_and(|v| v == "goods");
+                let unit_changed = changed("unit_id").is_some();
+                if (to_service || unit_changed)
+                    && db::count_product_transactions(&mut **tx, record_id).await? > 0
+                {
+                    if to_service {
+                        errors.push(FieldError {
+                            field_key: "product_type".into(),
+                            message: MSG_PRODUCT_TYPE_STOCK.into(),
+                        });
+                    }
+                    if unit_changed {
+                        errors.push(FieldError {
+                            field_key: "unit_id".into(),
+                            message: MSG_PRODUCT_UNIT_STOCK.into(),
+                        });
+                    }
+                }
+            }
+        }
         PRODUCT_CATEGORY => {
             if let (Some(record_id), Some(parent)) = (record_id, changed("parent_id")) {
                 let parent = parent.as_str().and_then(|s| Id::parse_str(s).ok());
@@ -304,10 +334,20 @@ pub struct Usage {
     pub products: i64,
     /// 未刪除的子分類數。
     pub children: i64,
+    /// 商品的庫存異動筆數。
+    pub transactions: i64,
 }
 
 /// 依使用狀況決定能否刪除：都沒有使用時為 `None`，否則為 [`CoreError::RecordInUse`]。
 pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
+    if usage.transactions > 0 {
+        return Some(CoreError::RecordInUse {
+            message: MSG_PRODUCT_DELETE_STOCK.into(),
+            products: 0,
+            children: 0,
+            transactions: usage.transactions,
+        });
+    }
     if usage.products <= 0 && usage.children <= 0 {
         return None;
     }
@@ -327,11 +367,12 @@ pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
         message: format!("{subject}還有 {}，無法刪除", reasons.join("、")),
         products: usage.products.max(0),
         children: usage.children.max(0),
+        transactions: 0,
     })
 }
 
-/// 刪除單位、商品分類前，檢查是否還有未刪除的商品使用它，或分類還有子分類 → [`CoreError::RecordInUse`]。
-/// 其他資料類別不檢查。
+/// 刪除單位、商品分類前，檢查是否還有未刪除的商品使用它，或分類還有子分類；刪除商品前檢查是否已有
+/// 庫存異動 → [`CoreError::RecordInUse`]。其他資料類別不檢查。
 ///
 /// 必須在已鎖定（`FOR UPDATE`）要刪除的資料之後呼叫：新增、修改商品或分類時，關聯檢查會以 `FOR SHARE`
 /// 鎖定所指的單位、分類（[`crate::relations::check_relations`]），所以計數之後不會再有新的使用者。
@@ -343,11 +384,16 @@ pub(crate) async fn check_delete(
     let usage = match entity_key {
         UNIT => Usage {
             products: db::count_products_by_unit(&mut **tx, id).await?,
-            children: 0,
+            ..Usage::default()
         },
         PRODUCT_CATEGORY => Usage {
             products: db::count_products_by_category(&mut **tx, id).await?,
             children: db::count_child_categories(&mut **tx, id).await?,
+            ..Usage::default()
+        },
+        PRODUCT => Usage {
+            transactions: db::count_product_transactions(&mut **tx, id).await?,
+            ..Usage::default()
         },
         _ => return Ok(()),
     };
@@ -632,7 +678,7 @@ mod tests {
             UNIT,
             Usage {
                 products: 3,
-                children: 0,
+                ..Usage::default()
             },
         )
         .unwrap();
@@ -648,6 +694,7 @@ mod tests {
             Usage {
                 products: 2,
                 children: 1,
+                ..Usage::default()
             },
         )
         .unwrap()
@@ -664,13 +711,32 @@ mod tests {
         let api: ApiError = delete_blocked(
             PRODUCT_CATEGORY,
             Usage {
-                products: 0,
                 children: 4,
+                ..Usage::default()
             },
         )
         .unwrap()
         .into();
         assert_eq!(api.message, "此分類還有 4 個子分類，無法刪除");
         assert_eq!(api.details, Some(json!({ "fields": [], "child_count": 4 })));
+    }
+
+    #[test]
+    fn product_delete_is_blocked_by_stock_transactions() {
+        assert!(delete_blocked(PRODUCT, Usage::default()).is_none());
+        let api: ApiError = delete_blocked(
+            PRODUCT,
+            Usage {
+                transactions: 12,
+                ..Usage::default()
+            },
+        )
+        .unwrap()
+        .into();
+        assert_eq!(api.message, MSG_PRODUCT_DELETE_STOCK);
+        assert_eq!(
+            api.details,
+            Some(json!({ "fields": [], "transaction_count": 12 }))
+        );
     }
 }
