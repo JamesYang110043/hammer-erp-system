@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, sort_order, purchase_order_line_id, product_id, qty, unit_price, lot_no,\n               unit_cost_twd, lot_id\n        FROM goods_receipt_lines\n        WHERE goods_receipt_id = $1 AND deleted_at IS NULL\n        ORDER BY sort_order, id\n        FOR UPDATE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "sort_order",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "sort_order"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "purchase_order_line_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "purchase_order_line_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "product_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "product_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "qty",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "qty"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "unit_price",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "unit_price"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "lot_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "lot_no"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "unit_cost_twd",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "unit_cost_twd"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "lot_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "goods_receipt_lines",
+            "name": "lot_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "5584fd094fa219bb9644a9f37cc55b87db95067f45d5f6e32ed989870c5c56d9"
+}

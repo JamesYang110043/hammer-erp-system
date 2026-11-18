@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT l.id, l.lot_no, l.received_date, l.source_type, l.source_doc_id,\n               COALESCE(sa.record_no, '') AS \"source_record_no!\",\n               l.qty_in, l.qty_remaining, l.unit_cost_twd\n        FROM inventory_lots l\n        LEFT JOIN stock_adjustments sa\n               ON l.source_type = 'stock_adjustment_line' AND sa.id = l.source_doc_id\n        WHERE l.product_id = $1 AND l.deleted_at IS NULL\n          AND ($2::bool OR l.qty_remaining > 0)\n          AND ($3::text IS NULL OR strpos(lower(l.lot_no), lower($3)) > 0)\n        ORDER BY l.received_date, l.id\n        LIMIT $4 OFFSET $5\n        ",
+  "query": "\n        SELECT l.id, l.lot_no, l.received_date, l.source_type, l.source_doc_id,\n               COALESCE(sa.record_no, gr.record_no, '') AS \"source_record_no!\",\n               l.qty_in, l.qty_remaining, l.unit_cost_twd\n        FROM inventory_lots l\n        LEFT JOIN stock_adjustments sa\n               ON l.source_type = 'stock_adjustment_line' AND sa.id = l.source_doc_id\n        LEFT JOIN goods_receipts gr\n               ON l.source_type = 'goods_receipt_line' AND gr.id = l.source_doc_id\n        WHERE l.product_id = $1 AND l.deleted_at IS NULL\n          AND ($2::bool OR l.qty_remaining > 0)\n          AND ($3::text IS NULL OR strpos(lower(l.lot_no), lower($3)) > 0)\n        ORDER BY l.received_date, l.id\n        LIMIT $4 OFFSET $5\n        ",
   "describe": {
     "columns": [
       {
@@ -119,5 +119,5 @@
       false
     ]
   },
-  "hash": "86c8fbef9a5b7ef5f6522d15615c57c086fdb54153951ad9d682e5311849c2d3"
+  "hash": "ebbd24c76f454e387ac7e98a9bb884479dd1db6e99212750f37c33ee64565332"
 }

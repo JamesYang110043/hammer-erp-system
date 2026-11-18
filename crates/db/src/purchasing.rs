@@ -10,6 +10,9 @@
 //! - [`lock_supplier`]：確認採購單時以 `FOR SHARE` 鎖定廠商
 //! - [`list_order_lines_for_update`]：確認採購單時鎖定並讀取明細
 //! - [`count_supplier_documents`]、[`count_open_orders_by_product`]：廠商、商品被進貨單據引用時的限制
+//! - 進貨單（採購單轉進貨單、過帳、作廢）：[`find_order_for_receipt`]、[`lock_order_for_receipt`]、
+//!   [`list_order_lines`]、[`list_receipt_lines_for_update`]、[`update_receipt_line_posting`]、
+//!   [`add_received_qty`]、[`set_order_status`]、[`posted_returns_of_receipt`]
 
 use rust_decimal::Decimal;
 use sqlx::PgExecutor;
@@ -205,4 +208,206 @@ pub async fn count_open_orders_by_product<'e>(
     .fetch_one(executor)
     .await?;
     Ok(n)
+}
+
+/// 進貨單引用的採購單。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderForReceipt {
+    pub id: Uuid,
+    pub record_no: String,
+    /// `draft` / `confirmed` / `partially_received` / `closed` / `void`。
+    pub status: String,
+    pub supplier_id: Uuid,
+    pub currency_code: String,
+    pub tax_type: String,
+    /// 是否為手動結案（`closed_at` 有值）。
+    pub closed_manually: bool,
+    pub version: i32,
+}
+
+/// 未刪除的採購單（不鎖定；存檔時的檢查與帶入）。不存在或已刪除時為 `None`。
+pub async fn find_order_for_receipt<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<OrderForReceipt>, DbError> {
+    let row = sqlx::query_as!(
+        OrderForReceipt,
+        r#"
+        SELECT id, record_no, status, supplier_id, currency_code, tax_type,
+               closed_at IS NOT NULL AS "closed_manually!", version
+        FROM purchase_orders
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 同 [`find_order_for_receipt`]，並鎖定採購單（`FOR UPDATE`；進貨單過帳、作廢時）。
+pub async fn lock_order_for_receipt<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<OrderForReceipt>, DbError> {
+    let row = sqlx::query_as!(
+        OrderForReceipt,
+        r#"
+        SELECT id, record_no, status, supplier_id, currency_code, tax_type,
+               closed_at IS NOT NULL AS "closed_manually!", version
+        FROM purchase_orders
+        WHERE id = $1 AND deleted_at IS NULL
+        FOR UPDATE
+        "#,
+        id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 採購單的未刪除明細，依 `sort_order, id` 排序（不鎖定；存檔時的檢查）。
+pub async fn list_order_lines<'e>(
+    executor: impl PgExecutor<'e>,
+    purchase_order_id: Uuid,
+) -> Result<Vec<OrderLineRow>, DbError> {
+    let rows = sqlx::query_as!(
+        OrderLineRow,
+        r#"
+        SELECT id, sort_order, product_id, qty, unit_price, received_qty
+        FROM purchase_order_lines
+        WHERE purchase_order_id = $1 AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        "#,
+        purchase_order_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 一列進貨明細。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiptLineRow {
+    pub id: Uuid,
+    pub sort_order: i32,
+    pub purchase_order_line_id: Option<Uuid>,
+    pub product_id: Uuid,
+    pub qty: Decimal,
+    pub unit_price: Decimal,
+    pub lot_no: Option<String>,
+    pub unit_cost_twd: Option<Decimal>,
+    pub lot_id: Option<Uuid>,
+}
+
+/// 進貨單 `goods_receipt_id` 的未刪除明細，依 `sort_order, id` 排序並鎖定（`FOR UPDATE`）。
+/// 呼叫端必須已先鎖定進貨單。
+pub async fn list_receipt_lines_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    goods_receipt_id: Uuid,
+) -> Result<Vec<ReceiptLineRow>, DbError> {
+    let rows = sqlx::query_as!(
+        ReceiptLineRow,
+        r#"
+        SELECT id, sort_order, purchase_order_line_id, product_id, qty, unit_price, lot_no,
+               unit_cost_twd, lot_id
+        FROM goods_receipt_lines
+        WHERE goods_receipt_id = $1 AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        FOR UPDATE
+        "#,
+        goods_receipt_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 寫入進貨明細過帳的結果：`lot_no`、`unit_cost_twd`、`lot_id`，`version` + 1。回傳是否有更新。
+pub async fn update_receipt_line_posting<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    lot_no: Option<&str>,
+    unit_cost_twd: Decimal,
+    lot_id: Option<Uuid>,
+    updated_by: Uuid,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE goods_receipt_lines
+        SET lot_no = $2, unit_cost_twd = $3, lot_id = $4, updated_by = $5, version = version + 1
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        lot_no,
+        unit_cost_twd,
+        lot_id,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 採購明細的 `received_qty += delta`（作廢時為負數），`version` + 1。回傳是否有更新。
+pub async fn add_received_qty<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    delta: Decimal,
+    updated_by: Uuid,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE purchase_order_lines
+        SET received_qty = received_qty + $2, updated_by = $3, version = version + 1
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        delta,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 採購單的狀態改為 `status`（進貨過帳、作廢後重新計算的結果），`version` + 1。
+pub async fn set_order_status<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    status: &str,
+    updated_by: Uuid,
+) -> Result<bool, DbError> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE purchase_orders
+        SET status = $2, updated_by = $3, version = version + 1
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+        id,
+        status,
+        updated_by,
+    )
+    .execute(executor)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 指向進貨單、已過帳且未刪除的進貨退回 `(id, record_no)`，依單號排序。
+pub async fn posted_returns_of_receipt<'e>(
+    executor: impl PgExecutor<'e>,
+    goods_receipt_id: Uuid,
+) -> Result<Vec<(Uuid, String)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id, record_no
+        FROM purchase_returns
+        WHERE goods_receipt_id = $1 AND status = 'posted' AND deleted_at IS NULL
+        ORDER BY record_no
+        "#,
+        goods_receipt_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.record_no)).collect())
 }

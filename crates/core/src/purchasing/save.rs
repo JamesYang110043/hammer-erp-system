@@ -1,9 +1,11 @@
-//! 採購單（之後也用於進貨單）存檔時由伺服器處理的部分（docs/architecture.md §8.8「幣別與匯率」
+//! 採購單、進貨單存檔時由伺服器處理的部分（docs/architecture.md §8.8「幣別與匯率」
 //! 「金額與稅額」「存檔時的檢查」）。由 [`crate::records`] 在新增、修改時依序呼叫：
 //!
-//! 1. [`prefill`]（只有新增，欄位驗證之前）：沒有帶 `currency_code` 時帶入廠商的預設幣別；沒有帶
-//!    `tax_type`、欄位定義也沒有 `default_value` 時，本位幣為 `taxable`、外幣為 `zero_rated`
-//! 2. [`check_line_data`]（每一列明細，欄位驗證之後）：`qty > 0`、`unit_price ≥ 0`
+//! 1. [`prefill`]（只有新增，欄位驗證之前）：進貨單有 `purchase_order_id` 時，沒有帶的 `supplier_id`、
+//!    `currency_code`、`tax_type` 帶入採購單的值；之後沒有帶 `currency_code` 時帶入廠商的預設幣別；
+//!    沒有帶 `tax_type`、欄位定義也沒有 `default_value` 時，本位幣為 `taxable`、外幣為 `zero_rated`
+//! 2. [`check_line_data`]（每一列明細，欄位驗證之後）：`qty > 0`、`unit_price ≥ 0`；進貨明細的批號
+//!    去除前後空白（空字串視為沒有值）、不可有控制字元
 //! 3. [`derive_currency`]（主表欄位驗證之後）：幣別必須存在且啟用中（只在新增或值有變動時檢查）；
 //!    本位幣的匯率一律 `1.000000`；新增、或修改時幣別有變動但沒有帶 `exchange_rate` 時，帶入單據日期的
 //!    適用匯率（找不到時留空）；匯率必須大於 0
@@ -25,9 +27,10 @@ use hammer_shared::schema::{DataType, FieldDefinition, FieldValue, parse_value};
 use serde_json::{Map, Value};
 use time::Date;
 
-use super::PURCHASE_ORDER;
 use super::amounts::{self, AMOUNT_SCALE, RATE_SCALE, TWD_SCALE};
+use super::{GOODS_RECEIPT, PURCHASE_ORDER};
 use crate::CoreError;
+use crate::inventory::normalize_lot_no;
 use crate::record_data::FieldError;
 
 /// 採購明細的明細子表代碼。
@@ -40,6 +43,8 @@ pub const MSG_QTY_POSITIVE: &str = "數量必須大於 0";
 pub const MSG_PRICE_NEGATIVE: &str = "單價不可小於 0";
 
 pub(crate) const SUPPLIER_ID: &str = "supplier_id";
+pub(crate) const PURCHASE_ORDER_ID: &str = "purchase_order_id";
+pub(crate) const LOT_NO: &str = "lot_no";
 pub(crate) const CURRENCY_CODE: &str = "currency_code";
 pub(crate) const EXCHANGE_RATE: &str = "exchange_rate";
 pub(crate) const TAX_TYPE: &str = "tax_type";
@@ -62,11 +67,21 @@ pub struct PricedDocument {
     pub date_field: &'static str,
 }
 
-const PRICED: &[PricedDocument] = &[PricedDocument {
-    entity_key: PURCHASE_ORDER,
-    line_key: PURCHASE_ORDER_LINE,
-    date_field: "order_date",
-}];
+/// 進貨明細的明細子表代碼。
+pub const GOODS_RECEIPT_LINE: &str = "goods_receipt_line";
+
+const PRICED: &[PricedDocument] = &[
+    PricedDocument {
+        entity_key: PURCHASE_ORDER,
+        line_key: PURCHASE_ORDER_LINE,
+        date_field: "order_date",
+    },
+    PricedDocument {
+        entity_key: GOODS_RECEIPT,
+        line_key: GOODS_RECEIPT_LINE,
+        date_field: "receipt_date",
+    },
+];
 
 /// `entity_key` 是否為有幣別、匯率與金額計算的單據。
 pub fn priced(entity_key: &str) -> Option<&'static PricedDocument> {
@@ -122,6 +137,21 @@ pub(crate) async fn prefill(
     if priced(entity_key).is_none() {
         return Ok(());
     }
+    if entity_key == GOODS_RECEIPT
+        && let Some(order_id) = id_of(input.get(PURCHASE_ORDER_ID))
+        && let Some(order) = db::find_order_for_receipt(&mut *conn, order_id).await?
+    {
+        let values = [
+            (SUPPLIER_ID, order.supplier_id.to_string()),
+            (CURRENCY_CODE, order.currency_code),
+            (TAX_TYPE, order.tax_type),
+        ];
+        for (key, value) in values {
+            if is_missing(input, key) {
+                input.insert(key.into(), Value::String(value));
+            }
+        }
+    }
     if is_missing(input, CURRENCY_CODE)
         && let Some(supplier_id) = id_of(input.get(SUPPLIER_ID))
         && let Some(code) = db::supplier_default_currency(&mut *conn, supplier_id).await?
@@ -146,12 +176,30 @@ pub(crate) async fn prefill(
     Ok(())
 }
 
-/// 一列明細本身的檢查（欄位驗證之後）：`qty > 0`、`unit_price ≥ 0`。不是有金額計算的明細時為空。
-pub fn check_line_data(detail_key: &str, data: &Map<String, Value>) -> Vec<FieldError> {
+/// 一列明細本身的檢查（欄位驗證之後）：`qty > 0`、`unit_price ≥ 0`；進貨明細的批號去除前後空白後寫回
+/// （空字串時移除）並檢查格式。不是有金額計算的明細時為空。
+pub fn check_line_data(detail_key: &str, data: &mut Map<String, Value>) -> Vec<FieldError> {
     if !priced_line(detail_key) {
         return Vec::new();
     }
-    line_errors(decimal_of(data.get(QTY)), decimal_of(data.get(UNIT_PRICE)))
+    let mut errors = line_errors(decimal_of(data.get(QTY)), decimal_of(data.get(UNIT_PRICE)));
+    if detail_key == GOODS_RECEIPT_LINE
+        && let Some(Value::String(raw)) = data.get(LOT_NO)
+    {
+        match normalize_lot_no(raw) {
+            Ok(Some(lot_no)) => {
+                data.insert(LOT_NO.into(), Value::String(lot_no));
+            }
+            Ok(None) => {
+                data.remove(LOT_NO);
+            }
+            Err(message) => errors.push(FieldError {
+                field_key: LOT_NO.into(),
+                message,
+            }),
+        }
+    }
+    errors
 }
 
 /// `qty > 0`、`unit_price ≥ 0`；沒有值的不檢查（必填由欄位驗證處理）。
@@ -366,9 +414,9 @@ mod tests {
     #[test]
     fn line_data_checked_only_for_priced_lines() {
         let data = json!({ "qty": "0.0000", "unit_price": "1.0000" });
-        let data = data.as_object().unwrap();
-        assert_eq!(check_line_data(PURCHASE_ORDER_LINE, data).len(), 1);
-        assert!(check_line_data("supplier_contact", data).is_empty());
+        let mut data = data.as_object().unwrap().clone();
+        assert_eq!(check_line_data(PURCHASE_ORDER_LINE, &mut data).len(), 1);
+        assert!(check_line_data("supplier_contact", &mut data).is_empty());
     }
 
     #[test]
@@ -388,10 +436,37 @@ mod tests {
     }
 
     #[test]
-    fn only_purchase_orders_are_priced() {
+    fn orders_and_receipts_are_priced() {
         assert!(priced(PURCHASE_ORDER).is_some());
+        assert_eq!(priced(GOODS_RECEIPT).unwrap().date_field, "receipt_date");
         assert!(recalculates_lines(PURCHASE_ORDER));
+        assert!(recalculates_lines(GOODS_RECEIPT));
         assert!(!recalculates_lines("stock_adjustment"));
+        assert!(!recalculates_lines("purchase_return"));
         assert!(priced_line(PURCHASE_ORDER_LINE));
+        assert!(priced_line(GOODS_RECEIPT_LINE));
+    }
+
+    #[test]
+    fn receipt_lot_no_is_trimmed() {
+        let mut data = json!({ "qty": "1", "unit_price": "1", "lot_no": "  L-01 " })
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(check_line_data(GOODS_RECEIPT_LINE, &mut data).is_empty());
+        assert_eq!(data["lot_no"], "L-01");
+        data.insert("lot_no".into(), json!("   "));
+        assert!(check_line_data(GOODS_RECEIPT_LINE, &mut data).is_empty());
+        assert!(!data.contains_key("lot_no"));
+        data.insert("lot_no".into(), json!("L\u{7}"));
+        let errors = check_line_data(GOODS_RECEIPT_LINE, &mut data);
+        assert_eq!(errors[0].field_key, "lot_no");
+        // 採購明細沒有批號，不處理
+        let mut po = json!({ "qty": "1", "unit_price": "1", "lot_no": " x " })
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(check_line_data(PURCHASE_ORDER_LINE, &mut po).is_empty());
+        assert_eq!(po["lot_no"], " x ");
     }
 }

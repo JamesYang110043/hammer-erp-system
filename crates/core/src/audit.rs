@@ -7,7 +7,7 @@
 //! 敏感欄位（[`SENSITIVE_FIELDS`]，例如 `password_hash`）一律不寫入紀錄。
 
 use hammer_db::audit::{NewAuditLog, insert_audit_log};
-use hammer_db::sqlx::PgTransaction;
+use hammer_db::sqlx::PgConnection;
 use hammer_shared::{Id, audit as action, new_id};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
@@ -123,7 +123,7 @@ pub struct AuditEntry<'a> {
 ///
 /// 必須與業務資料使用同一個 transaction：rollback 時紀錄也不會留下。
 /// 回傳新紀錄的 id。
-pub async fn record(tx: &mut PgTransaction<'_>, entry: &AuditEntry<'_>) -> Result<Id, CoreError> {
+pub async fn record(conn: &mut PgConnection, entry: &AuditEntry<'_>) -> Result<Id, CoreError> {
     if !action::is_valid(entry.action) {
         return Err(CoreError::Internal(format!(
             "未定義的操作紀錄動作：{}",
@@ -132,7 +132,7 @@ pub async fn record(tx: &mut PgTransaction<'_>, entry: &AuditEntry<'_>) -> Resul
     }
     let id = new_id();
     insert_audit_log(
-        &mut **tx,
+        &mut *conn,
         &NewAuditLog {
             id,
             occurred_at: entry.occurred_at,

@@ -10,7 +10,7 @@ use crate::schema::index::DuplicateValue;
 use crate::schema::type_change::ConversionFailure;
 use hammer_db::DbError;
 use hammer_shared::document::{
-    DocumentStatus, InvalidStatusDetails, LotInUseDetails, StockInsufficientDetails,
+    DocumentRef, DocumentStatus, InvalidStatusDetails, LotInUseDetails, StockInsufficientDetails,
 };
 use hammer_shared::{ApiError, ErrorCode};
 use time::OffsetDateTime;
@@ -183,6 +183,15 @@ pub enum CoreError {
     #[error(transparent)]
     Db(#[from] DbError),
 
+    /// 單據還有其他有效的單據指向它，不能執行此操作（例如進貨單已有過帳的進貨退回時不可作廢，§8.8）。
+    /// API 回應為 `VALIDATION`，`details` 為 `{ "fields": [], "documents": [ { "entity_key",
+    /// "record_id", "record_no" } ] }`。
+    #[error("{message}")]
+    DocumentsInUse {
+        message: String,
+        documents: Vec<DocumentRef>,
+    },
+
     /// 不應發生的內部錯誤（例如資料庫中的密碼雜湊格式損壞）。訊息只寫進 log。
     #[error("內部錯誤：{0}")]
     Internal(String),
@@ -203,6 +212,7 @@ impl CoreError {
             | Self::InvalidFormula(_)
             | Self::FormulaReferenced(_)
             | Self::RecordInUse { .. }
+            | Self::DocumentsInUse { .. }
             | Self::LastAdmin => ErrorCode::Validation,
             Self::InvalidStatus { .. } => ErrorCode::InvalidStatus,
             Self::StockInsufficient { .. } => ErrorCode::StockInsufficient,
@@ -382,6 +392,11 @@ impl From<CoreError> for ApiError {
         } else if let CoreError::LotInUse { details, .. } = &err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::to_value(details).unwrap_or(serde_json::Value::Null))
+        } else if let CoreError::DocumentsInUse { documents, .. } = &err {
+            ApiError::new(code, err.to_string()).with_details(serde_json::json!({
+                "fields": [],
+                "documents": serde_json::to_value(documents).unwrap_or(serde_json::Value::Null),
+            }))
         } else if let CoreError::LastAdmin = err {
             ApiError::new(code, err.to_string())
                 .with_details(serde_json::json!({ "reason": LAST_ADMIN_REASON }))
@@ -449,6 +464,31 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::LotInUse);
         let api: ApiError = err.into();
         assert_eq!(api.details, Some(serde_json::json!({ "lots": [] })));
+    }
+
+    #[test]
+    fn documents_in_use_lists_documents() {
+        let err = CoreError::DocumentsInUse {
+            message: "此進貨單已有進貨退回 PR202611-0002，請先作廢退回單".into(),
+            documents: vec![DocumentRef {
+                entity_key: "purchase_return".into(),
+                record_id: hammer_shared::Id::nil(),
+                record_no: "PR202611-0002".into(),
+            }],
+        };
+        assert_eq!(err.code(), ErrorCode::Validation);
+        let api: ApiError = err.into();
+        assert_eq!(
+            api.details,
+            Some(serde_json::json!({
+                "fields": [],
+                "documents": [{
+                    "entity_key": "purchase_return",
+                    "record_id": hammer_shared::Id::nil(),
+                    "record_no": "PR202611-0002",
+                }],
+            }))
+        );
     }
 
     #[test]
