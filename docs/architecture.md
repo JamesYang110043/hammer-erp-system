@@ -1348,7 +1348,9 @@ GROUP BY product_id;
 
 #### 庫存查詢 API
 
-都需要 `record.read`；分頁、錯誤格式依 §10。商品不存在或已刪除 → `404`。
+都需要 `record.read`；分頁、錯誤格式依 §10。商品不存在或已刪除 → `404`。邏輯在 `hammer_core::inventory_queries`，型別在 `hammer_shared::inventory`。
+
+三個端點的篩選參數格式錯誤（uuid、日期、`true` / `false`、`txn_type` 不在選項中）一律 `422 VALIDATION`，`details.field` 為參數名稱；空字串視為未指定；`page`、`page_size` 不是整數時與其他列表相同為 `400`。
 
 **商品庫存** `GET /api/v1/inventory/balances`
 
@@ -1357,7 +1359,7 @@ GROUP BY product_id;
 | `q` | 料號或品名包含（不分大小寫；以空白分隔的每個詞都要出現在料號或品名中） |
 | `category_id` | 商品分類（只比對該分類本身，不含下層分類） |
 | `in_stock` | `true`：只列出 `qty_on_hand > 0`；`false`：只列出庫存為 0；省略：全部 |
-| `below_safety_stock` | `true`：只列出有設定 `safety_stock` 且 `qty_on_hand < safety_stock` |
+| `below_safety_stock` | `true`：只列出有設定 `safety_stock` 且 `qty_on_hand < safety_stock`；`false` 或省略：全部 |
 | `include_inactive` | 預設 `true`（停用的商品可能還有庫存）；`false` 時排除 `is_active = false` |
 | `page`、`page_size` | §10 |
 

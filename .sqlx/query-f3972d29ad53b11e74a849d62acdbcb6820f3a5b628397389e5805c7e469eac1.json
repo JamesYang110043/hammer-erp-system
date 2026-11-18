@@ -1,0 +1,223 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT t.id, t.txn_at, t.txn_date, t.txn_type, t.product_id,\n               p.code AS product_code, p.name AS product_name,\n               t.lot_id, l.lot_no, t.qty_change, t.unit_cost_twd,\n               t.ref_doc_type, t.ref_doc_id,\n               COALESCE(sa.record_no, '') AS \"ref_record_no!\",\n               t.ref_line_id, t.created_by, u.display_name AS \"created_by_name?\"\n        FROM inventory_transactions t\n        JOIN products p ON p.id = t.product_id\n        JOIN inventory_lots l ON l.id = t.lot_id\n        LEFT JOIN stock_adjustments sa\n               ON t.ref_doc_type = 'stock_adjustment' AND sa.id = t.ref_doc_id\n        LEFT JOIN users u ON u.id = t.created_by\n        WHERE ($1::uuid IS NULL OR t.product_id = $1)\n          AND ($2::uuid IS NULL OR t.lot_id = $2)\n          AND ($3::date IS NULL OR t.txn_date >= $3)\n          AND ($4::date IS NULL OR t.txn_date <= $4)\n          AND ($5::text IS NULL OR t.txn_type = $5)\n          AND ($6::text IS NULL OR t.ref_doc_type = $6)\n          AND ($7::uuid IS NULL OR t.ref_doc_id = $7)\n        ORDER BY t.txn_date DESC, t.id DESC\n        LIMIT $8 OFFSET $9\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "txn_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "txn_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "txn_date",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "txn_date"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "txn_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "txn_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "product_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "product_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "product_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "products",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "product_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "products",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "lot_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "lot_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "lot_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inventory_lots",
+            "name": "lot_no"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "qty_change",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "qty_change"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "unit_cost_twd",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "unit_cost_twd"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "ref_doc_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "ref_doc_type"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "ref_doc_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "ref_doc_id"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "ref_record_no!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "ref_line_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "ref_line_id"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "created_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "created_by_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Date",
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "f3972d29ad53b11e74a849d62acdbcb6820f3a5b628397389e5805c7e469eac1"
+}

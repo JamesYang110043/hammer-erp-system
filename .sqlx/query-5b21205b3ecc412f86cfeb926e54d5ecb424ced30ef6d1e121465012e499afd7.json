@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(*) AS \"n!\"\n        FROM products p\n        LEFT JOIN v_stock_balances b ON b.product_id = p.id\n        WHERE p.deleted_at IS NULL AND p.product_type = 'goods'\n          AND NOT EXISTS (\n              SELECT 1 FROM unnest($1::text[]) AS w(term)\n              WHERE strpos(lower(p.code), lower(w.term)) = 0\n                AND strpos(lower(p.name), lower(w.term)) = 0\n          )\n          AND ($2::uuid IS NULL OR p.category_id = $2)\n          AND ($3::bool IS NULL OR (COALESCE(b.qty_on_hand, 0) > 0) = $3)\n          AND (NOT $4::bool\n               OR (p.safety_stock IS NOT NULL AND COALESCE(b.qty_on_hand, 0) < p.safety_stock))\n          AND ($5::bool OR p.is_active)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Uuid",
+        "Bool",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5b21205b3ecc412f86cfeb926e54d5ecb424ced30ef6d1e121465012e499afd7"
+}

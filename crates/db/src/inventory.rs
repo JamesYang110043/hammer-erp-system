@@ -9,6 +9,7 @@
 //! - 批號扣除：[`insert_allocation`]、[`list_allocations_by_line`]
 //! - 異動：[`insert_transaction`]、[`lot_used_by_other_documents`]、[`documents_using_lot`]
 //! - 庫存：[`stock_balance`]
+//! - 查詢 API：[`list_stock_balances`]、[`list_lots_of_product`]、[`list_transactions`]（與對應的 `count_*`）
 //! - 商品：[`lock_products`]（過帳時以 `FOR SHARE` 鎖定，§8.10「鎖定順序」第 2 步）、[`find_products`]（不鎖定）
 //!
 //! `lot_allocations`、`inventory_transactions` 只能新增，資料庫以 trigger 拒絕修改與刪除
@@ -475,4 +476,308 @@ pub async fn find_products<'e>(
     .fetch_all(executor)
     .await?;
     Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// 庫存查詢（§8.10「庫存查詢 API」）
+// ---------------------------------------------------------------------------
+//
+// 來源單據的單號：依來源類型 LEFT JOIN 單據主表。M4a 只有盤點調整單；M4b、M4c 加上各自的單據。
+
+/// 商品庫存列表的條件。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StockBalanceFilter {
+    /// 每個詞都要出現在料號或品名中（不分大小寫）；空陣列為不限。
+    pub terms: Vec<String>,
+    pub category_id: Option<Uuid>,
+    /// `Some(true)`：庫存大於 0；`Some(false)`：庫存為 0。
+    pub in_stock: Option<bool>,
+    /// 只列出有設定安全庫存且庫存低於安全庫存。
+    pub below_safety_stock: bool,
+    pub include_inactive: bool,
+}
+
+/// 商品庫存（`products LEFT JOIN v_stock_balances`，金額未四捨五入）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StockBalanceRow {
+    pub product_id: Uuid,
+    pub code: String,
+    pub name: String,
+    pub spec: Option<String>,
+    pub unit_name: String,
+    pub is_active: bool,
+    pub qty_on_hand: Decimal,
+    pub stock_value_twd: Decimal,
+    pub safety_stock: Option<Decimal>,
+}
+
+/// 未刪除的 `goods` 商品與其庫存，依 `lower(code), id` 排序。
+pub async fn list_stock_balances<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &StockBalanceFilter,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<StockBalanceRow>, DbError> {
+    let rows = sqlx::query_as!(
+        StockBalanceRow,
+        r#"
+        SELECT p.id AS product_id, p.code, p.name, p.spec, u.name AS unit_name, p.is_active,
+               COALESCE(b.qty_on_hand, 0) AS "qty_on_hand!",
+               COALESCE(b.stock_value_twd, 0) AS "stock_value_twd!",
+               p.safety_stock
+        FROM products p
+        JOIN units u ON u.id = p.unit_id
+        LEFT JOIN v_stock_balances b ON b.product_id = p.id
+        WHERE p.deleted_at IS NULL AND p.product_type = 'goods'
+          AND NOT EXISTS (
+              SELECT 1 FROM unnest($1::text[]) AS w(term)
+              WHERE strpos(lower(p.code), lower(w.term)) = 0
+                AND strpos(lower(p.name), lower(w.term)) = 0
+          )
+          AND ($2::uuid IS NULL OR p.category_id = $2)
+          AND ($3::bool IS NULL OR (COALESCE(b.qty_on_hand, 0) > 0) = $3)
+          AND (NOT $4::bool
+               OR (p.safety_stock IS NOT NULL AND COALESCE(b.qty_on_hand, 0) < p.safety_stock))
+          AND ($5::bool OR p.is_active)
+        ORDER BY lower(p.code), p.id
+        LIMIT $6 OFFSET $7
+        "#,
+        &filter.terms,
+        filter.category_id,
+        filter.in_stock,
+        filter.below_safety_stock,
+        filter.include_inactive,
+        limit,
+        offset,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 符合條件的商品數。條件與 [`list_stock_balances`] 相同。
+pub async fn count_stock_balances<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &StockBalanceFilter,
+) -> Result<i64, DbError> {
+    let n = sqlx::query_scalar!(
+        r#"
+        SELECT count(*) AS "n!"
+        FROM products p
+        LEFT JOIN v_stock_balances b ON b.product_id = p.id
+        WHERE p.deleted_at IS NULL AND p.product_type = 'goods'
+          AND NOT EXISTS (
+              SELECT 1 FROM unnest($1::text[]) AS w(term)
+              WHERE strpos(lower(p.code), lower(w.term)) = 0
+                AND strpos(lower(p.name), lower(w.term)) = 0
+          )
+          AND ($2::uuid IS NULL OR p.category_id = $2)
+          AND ($3::bool IS NULL OR (COALESCE(b.qty_on_hand, 0) > 0) = $3)
+          AND (NOT $4::bool
+               OR (p.safety_stock IS NOT NULL AND COALESCE(b.qty_on_hand, 0) < p.safety_stock))
+          AND ($5::bool OR p.is_active)
+        "#,
+        &filter.terms,
+        filter.category_id,
+        filter.in_stock,
+        filter.below_safety_stock,
+        filter.include_inactive,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(n)
+}
+
+/// 商品批號列表的條件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LotListFilter<'a> {
+    pub product_id: Uuid,
+    /// 包含 `qty_remaining = 0` 的批號。
+    pub include_empty: bool,
+    /// 批號包含（不分大小寫）。
+    pub q: Option<&'a str>,
+}
+
+/// 批號列表的一列（含來源單據的單號）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LotListRow {
+    pub id: Uuid,
+    pub lot_no: String,
+    pub received_date: Date,
+    pub source_type: String,
+    pub source_doc_id: Uuid,
+    /// 來源單據的單號；找不到時為空字串。
+    pub source_record_no: String,
+    pub qty_in: Decimal,
+    pub qty_remaining: Decimal,
+    pub unit_cost_twd: Decimal,
+}
+
+/// 商品的未刪除批號，依先進先出順序（`received_date, id`）排序。
+pub async fn list_lots_of_product<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &LotListFilter<'_>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<LotListRow>, DbError> {
+    let rows = sqlx::query_as!(
+        LotListRow,
+        r#"
+        SELECT l.id, l.lot_no, l.received_date, l.source_type, l.source_doc_id,
+               COALESCE(sa.record_no, '') AS "source_record_no!",
+               l.qty_in, l.qty_remaining, l.unit_cost_twd
+        FROM inventory_lots l
+        LEFT JOIN stock_adjustments sa
+               ON l.source_type = 'stock_adjustment_line' AND sa.id = l.source_doc_id
+        WHERE l.product_id = $1 AND l.deleted_at IS NULL
+          AND ($2::bool OR l.qty_remaining > 0)
+          AND ($3::text IS NULL OR strpos(lower(l.lot_no), lower($3)) > 0)
+        ORDER BY l.received_date, l.id
+        LIMIT $4 OFFSET $5
+        "#,
+        filter.product_id,
+        filter.include_empty,
+        filter.q,
+        limit,
+        offset,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 符合條件的批號數。條件與 [`list_lots_of_product`] 相同。
+pub async fn count_lots_of_product<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &LotListFilter<'_>,
+) -> Result<i64, DbError> {
+    let n = sqlx::query_scalar!(
+        r#"
+        SELECT count(*) AS "n!"
+        FROM inventory_lots l
+        WHERE l.product_id = $1 AND l.deleted_at IS NULL
+          AND ($2::bool OR l.qty_remaining > 0)
+          AND ($3::text IS NULL OR strpos(lower(l.lot_no), lower($3)) > 0)
+        "#,
+        filter.product_id,
+        filter.include_empty,
+        filter.q,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(n)
+}
+
+/// 異動流水帳的條件（`None` 為不限）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransactionFilter<'a> {
+    pub product_id: Option<Uuid>,
+    pub lot_id: Option<Uuid>,
+    /// `txn_date >= date_from`（含）。
+    pub date_from: Option<Date>,
+    /// `txn_date <= date_to`（含）。
+    pub date_to: Option<Date>,
+    pub txn_type: Option<&'a str>,
+    pub ref_doc_type: Option<&'a str>,
+    pub ref_doc_id: Option<Uuid>,
+}
+
+/// 異動流水帳的一列（含商品、批號、單號與建立者名稱）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionListRow {
+    pub id: Uuid,
+    pub txn_at: time::OffsetDateTime,
+    pub txn_date: Date,
+    pub txn_type: String,
+    pub product_id: Uuid,
+    pub product_code: String,
+    pub product_name: String,
+    pub lot_id: Uuid,
+    pub lot_no: String,
+    pub qty_change: Decimal,
+    pub unit_cost_twd: Decimal,
+    pub ref_doc_type: String,
+    pub ref_doc_id: Uuid,
+    /// 來源單據的單號；找不到時為空字串。
+    pub ref_record_no: String,
+    pub ref_line_id: Uuid,
+    pub created_by: Option<Uuid>,
+    pub created_by_name: Option<String>,
+}
+
+/// 異動流水帳，依 `txn_date DESC, id DESC`（新到舊）排序。商品、批號含已刪除。
+pub async fn list_transactions<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &TransactionFilter<'_>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<TransactionListRow>, DbError> {
+    let rows = sqlx::query_as!(
+        TransactionListRow,
+        r#"
+        SELECT t.id, t.txn_at, t.txn_date, t.txn_type, t.product_id,
+               p.code AS product_code, p.name AS product_name,
+               t.lot_id, l.lot_no, t.qty_change, t.unit_cost_twd,
+               t.ref_doc_type, t.ref_doc_id,
+               COALESCE(sa.record_no, '') AS "ref_record_no!",
+               t.ref_line_id, t.created_by, u.display_name AS "created_by_name?"
+        FROM inventory_transactions t
+        JOIN products p ON p.id = t.product_id
+        JOIN inventory_lots l ON l.id = t.lot_id
+        LEFT JOIN stock_adjustments sa
+               ON t.ref_doc_type = 'stock_adjustment' AND sa.id = t.ref_doc_id
+        LEFT JOIN users u ON u.id = t.created_by
+        WHERE ($1::uuid IS NULL OR t.product_id = $1)
+          AND ($2::uuid IS NULL OR t.lot_id = $2)
+          AND ($3::date IS NULL OR t.txn_date >= $3)
+          AND ($4::date IS NULL OR t.txn_date <= $4)
+          AND ($5::text IS NULL OR t.txn_type = $5)
+          AND ($6::text IS NULL OR t.ref_doc_type = $6)
+          AND ($7::uuid IS NULL OR t.ref_doc_id = $7)
+        ORDER BY t.txn_date DESC, t.id DESC
+        LIMIT $8 OFFSET $9
+        "#,
+        filter.product_id,
+        filter.lot_id,
+        filter.date_from,
+        filter.date_to,
+        filter.txn_type,
+        filter.ref_doc_type,
+        filter.ref_doc_id,
+        limit,
+        offset,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 符合條件的異動筆數。條件與 [`list_transactions`] 相同。
+pub async fn count_transactions<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &TransactionFilter<'_>,
+) -> Result<i64, DbError> {
+    let n = sqlx::query_scalar!(
+        r#"
+        SELECT count(*) AS "n!"
+        FROM inventory_transactions t
+        WHERE ($1::uuid IS NULL OR t.product_id = $1)
+          AND ($2::uuid IS NULL OR t.lot_id = $2)
+          AND ($3::date IS NULL OR t.txn_date >= $3)
+          AND ($4::date IS NULL OR t.txn_date <= $4)
+          AND ($5::text IS NULL OR t.txn_type = $5)
+          AND ($6::text IS NULL OR t.ref_doc_type = $6)
+          AND ($7::uuid IS NULL OR t.ref_doc_id = $7)
+        "#,
+        filter.product_id,
+        filter.lot_id,
+        filter.date_from,
+        filter.date_to,
+        filter.txn_type,
+        filter.ref_doc_type,
+        filter.ref_doc_id,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(n)
 }

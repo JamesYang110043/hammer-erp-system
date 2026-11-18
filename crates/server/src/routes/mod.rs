@@ -19,6 +19,7 @@ pub mod auth;
 pub mod currencies;
 pub mod entities;
 pub mod health;
+pub mod inventory;
 pub mod layouts;
 pub mod records;
 pub mod setup;
@@ -118,6 +119,12 @@ fn protected_routes() -> Router<AppState> {
             patch(currencies::update_exchange_rate).delete(currencies::delete_exchange_rate),
         )
         .route("/tax-rates", get(currencies::list_tax_rates))
+        .route("/inventory/balances", get(inventory::list_balances))
+        .route(
+            "/inventory/products/{product_id}/lots",
+            get(inventory::list_product_lots),
+        )
+        .route("/inventory/transactions", get(inventory::list_transactions))
         .route("/entities", get(entities::list).post(entities::create))
         // 固定路徑 `order` 優先於 `{key}`。`order` 也是合法的資料類別代碼，
         // 所以同一路徑的 GET、PATCH、DELETE 轉給單一資料類別的端點
