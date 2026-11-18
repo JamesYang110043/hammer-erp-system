@@ -119,8 +119,23 @@ PR 送出前，以下都要成立：
 | 前端 | `pnpm lint`、`pnpm typecheck`（在 `apps/desktop`） |
 
 - [ ] 如果改動了架構決策或資料表設計，同步更新 architecture.md
+- [ ] 有改到畫面時，完成下方「畫面驗證」
 
 尚未建立的工具（例如 M0 之前還沒有 workspace），在 PR 裡註明「未執行」與原因，不要當作通過。
+
+### 畫面驗證
+
+**適用**：`area:desktop` 的 issue，或其他 issue 改到 `apps/desktop/src/`（畫面、元件、前端的資料處理）。
+純 db、core、server、文件、CI 的 issue 不需要，因為畫面上沒有可以操作的東西。
+
+1. **寫成 E2E 測試**：驗收條件中和畫面有關的操作（開啟畫面、輸入、送出、錯誤訊息、權限造成的按鈕顯示差異等），新增或更新 `apps/desktop/e2e/` 的 Playwright 測試，`pnpm test:e2e` 必須通過。之後 CI 每次都會自動執行。
+2. **截圖並實際檢查**：以 `E2E_SCREENSHOT=1 pnpm test:e2e` 執行，每個測試結束時的畫面存到 `apps/desktop/test-results/`（不納入版本控制）。逐張檢查版面、繁體中文文字、數字與日期格式（D13）、錯誤訊息是否符合驗收條件。
+3. **PR 記錄**：在「驗證方式」列出檢查過的畫面與結果。需要附圖時由開發者把截圖拖進 PR 內文（`gh` 無法上傳圖片）。
+4. **人工確認項目**：E2E 對 Vite dev server 執行，Tauri command 是 mock（`e2e/tauri-mock.ts`），不會連到真正的 API Server。以下情況無法以 E2E 驗證，在 PR「備註」列為「需要人工確認」，由專案負責人以 `pnpm tauri dev` 開啟桌面程式確認：
+   - 需要真實後端資料或流程才能確認的行為（例如過帳後的庫存數字）
+   - Tauri 原生功能（視窗、檔案對話框、自動更新、打包後的行為）
+
+真實桌面程式的 E2E（tauri-driver）導入後，再修訂本節。
 
 ---
 

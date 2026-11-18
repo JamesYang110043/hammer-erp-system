@@ -23,7 +23,8 @@ export default defineConfig({
     baseURL: `http://localhost:${PORT}`,
     locale: 'zh-TW',
     timezoneId: 'Asia/Taipei',
-    screenshot: 'only-on-failure',
+    // E2E_SCREENSHOT=1 時每個測試結束都截圖（畫面驗證，docs/issue-workflow.md §6）
+    screenshot: process.env.E2E_SCREENSHOT ? 'on' : 'only-on-failure',
     trace: 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
