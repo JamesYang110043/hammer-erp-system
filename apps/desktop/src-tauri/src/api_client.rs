@@ -22,6 +22,9 @@ use hammer_shared::exchange_rate::{
     UpdateExchangeRateRequest,
 };
 use hammer_shared::health::HealthResponse;
+use hammer_shared::inventory::{
+    InventoryLot, InventoryTransaction, LotQuery, StockBalance, StockBalanceQuery, TransactionQuery,
+};
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
     ViewLayout,
@@ -288,6 +291,55 @@ impl ApiClient {
         let builder = self
             .http
             .get(endpoint(server_url, "/audit-logs"))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/inventory/balances`（商品庫存）。
+    pub async fn list_stock_balances(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &StockBalanceQuery,
+    ) -> Result<Page<StockBalance>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/inventory/balances"))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/inventory/products/{product_id}/lots`（商品的批號，先進先出順序）。
+    pub async fn list_product_lots(
+        &self,
+        server_url: &str,
+        token: &str,
+        product_id: Id,
+        query: &LotQuery,
+    ) -> Result<Page<InventoryLot>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(
+                server_url,
+                &format!("/inventory/products/{product_id}/lots"),
+            ))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/inventory/transactions`（異動流水帳，新到舊）。
+    pub async fn list_inventory_transactions(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &TransactionQuery,
+    ) -> Result<Page<InventoryTransaction>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/inventory/transactions"))
             .bearer_auth(token)
             .query(query);
         authed(read_json(send(builder).await?).await)
@@ -1972,6 +2024,105 @@ mod tests {
             "updated_by": null,
             "version": version,
         })
+    }
+
+    #[tokio::test]
+    async fn inventory_query_endpoints() {
+        use axum::extract::{Path, RawQuery};
+
+        let product_id: Id = "0196f5a0-0000-7000-8000-000000000601".parse().unwrap();
+        let url = serve(
+            Router::new()
+                .route(
+                    "/inventory/balances",
+                    get(|RawQuery(query): RawQuery| async move {
+                        // 沒有指定的參數不送出
+                        assert_eq!(query.as_deref(), Some("q=%E8%9E%BA&below_safety_stock=true&page=1"));
+                        axum::Json(json!({
+                            "items": [{
+                                "product_id": "0196f5a0-0000-7000-8000-000000000601",
+                                "code": "A001", "name": "螺絲", "spec": null, "unit_name": "個",
+                                "is_active": true, "qty_on_hand": "3.0000", "stock_value_twd": "30.00",
+                                "safety_stock": "10.0000", "below_safety_stock": true,
+                            }],
+                            "total": 1, "page": 1, "page_size": 50,
+                        }))
+                    }),
+                )
+                .route(
+                    "/inventory/products/{product_id}/lots",
+                    get(|Path(id): Path<String>, RawQuery(query): RawQuery| async move {
+                        assert_eq!(id, "0196f5a0-0000-7000-8000-000000000601");
+                        assert_eq!(query.as_deref(), Some("include_empty=true"));
+                        axum::Json(json!({
+                            "items": [{
+                                "id": "0196f5a0-0000-7000-8000-000000000701",
+                                "lot_no": "L-01", "received_date": "2026-11-17",
+                                "source_type": "stock_adjustment_line",
+                                "source_doc_id": "0196f5a0-0000-7000-8000-000000000501",
+                                "source_record_no": "ADJ202611-0001",
+                                "qty_in": "5.0000", "qty_remaining": "3.0000", "unit_cost_twd": "10.0000",
+                            }],
+                            "total": 1, "page": 1, "page_size": 50,
+                        }))
+                    }),
+                )
+                .route(
+                    "/inventory/transactions",
+                    get(|RawQuery(query): RawQuery| async move {
+                        assert_eq!(
+                            query.as_deref(),
+                            Some("product_id=0196f5a0-0000-7000-8000-000000000601")
+                        );
+                        axum::Json(json!({ "items": [], "total": 0, "page": 1, "page_size": 50 }))
+                    }),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+
+        let balances = client
+            .list_stock_balances(
+                &url,
+                "tok",
+                &StockBalanceQuery {
+                    q: Some("螺".into()),
+                    below_safety_stock: Some("true".into()),
+                    page: Some(1),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(balances.items[0].below_safety_stock);
+        assert_eq!(balances.items[0].qty_on_hand.to_string(), "3.0000");
+
+        let lots = client
+            .list_product_lots(
+                &url,
+                "tok",
+                product_id,
+                &LotQuery {
+                    include_empty: Some("true".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(lots.items[0].source_record_no, "ADJ202611-0001");
+
+        let txns = client
+            .list_inventory_transactions(
+                &url,
+                "tok",
+                &TransactionQuery {
+                    product_id: Some(product_id.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(txns.total, 0);
     }
 
     #[tokio::test]

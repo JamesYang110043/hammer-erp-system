@@ -27,7 +27,9 @@ import {
   masterDataEntities,
   menuEntityGroups,
 } from '../modules';
+import { INVENTORY_MODULES } from '../inventoryModules';
 import { entityIcon } from '../pages/schema/entityIcons';
+import { INVENTORY_GROUP_LABEL, inventoryEntities } from '../records/inventory';
 import { MASTER_DATA_LABEL } from '../schema/entities';
 
 const { Header, Sider, Content, Footer } = Layout;
@@ -84,9 +86,32 @@ export function AppLayout() {
         ]
       : [];
 
+  // 庫存：盤點調整單與庫存查詢（docs/architecture.md §8.10）
+  const inventory: MenuItem[] = [
+    ...(canReadRecords ? inventoryEntities(entities.data ?? []) : []).map(entityItem),
+    ...INVENTORY_MODULES.filter((m) => !m.permission || can(m.permission)).map((m): MenuItem => ({
+      key: m.path,
+      icon: m.icon,
+      label: m.label,
+    })),
+  ];
+  const inventoryItems: MenuItem[] =
+    inventory.length > 0
+      ? [
+          {
+            type: 'group',
+            key: 'inventory-group',
+            label: INVENTORY_GROUP_LABEL,
+            children: inventory,
+          },
+          { type: 'divider', key: 'inventory-group-divider' },
+        ]
+      : [];
+
   // 選單依權限顯示；頁面本身也有檢查（router.tsx 的 RequirePermission）
   const menuItems: MenuItem[] = [
     ...masterDataItems,
+    ...inventoryItems,
     ...MODULES.filter((m) => !m.permission || can(m.permission)).flatMap((m) => {
       const item: MenuItem = { key: m.path, icon: m.icon, label: m.label };
       return m.path === ENTITY_MENU_AFTER ? [item, ...entityItems] : [item];

@@ -15,6 +15,9 @@ use hammer_shared::exchange_rate::{
     CreateExchangeRateRequest, DeleteExchangeRateQuery, ExchangeRate, ExchangeRateQuery,
     UpdateExchangeRateRequest,
 };
+use hammer_shared::inventory::{
+    InventoryLot, InventoryTransaction, LotQuery, StockBalance, StockBalanceQuery, TransactionQuery,
+};
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
     ViewLayout,
@@ -473,6 +476,42 @@ impl AppState {
             client
                 .document_action(url, token, key, id, action, req)
                 .await
+        })
+        .await
+    }
+
+    /// 商品庫存。
+    pub async fn list_stock_balances(
+        &self,
+        query: &StockBalanceQuery,
+    ) -> Result<Page<StockBalance>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.list_stock_balances(url, token, query).await
+        })
+        .await
+    }
+
+    /// 商品的批號。
+    pub async fn list_product_lots(
+        &self,
+        product_id: Id,
+        query: &LotQuery,
+    ) -> Result<Page<InventoryLot>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client
+                .list_product_lots(url, token, product_id, query)
+                .await
+        })
+        .await
+    }
+
+    /// 庫存異動流水帳。
+    pub async fn list_inventory_transactions(
+        &self,
+        query: &TransactionQuery,
+    ) -> Result<Page<InventoryTransaction>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.list_inventory_transactions(url, token, query).await
         })
         .await
     }

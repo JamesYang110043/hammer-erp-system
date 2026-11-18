@@ -18,6 +18,9 @@ use hammer_shared::exchange_rate::{
     UpdateExchangeRateRequest,
 };
 use hammer_shared::health::HealthResponse;
+use hammer_shared::inventory::{
+    InventoryLot, InventoryTransaction, LotQuery, StockBalance, StockBalanceQuery, TransactionQuery,
+};
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
     ViewLayout,
@@ -567,6 +570,37 @@ pub async fn void_record(
             &DocumentActionRequest { version },
         )
         .await
+}
+
+/// 商品庫存（需要 `record.read`）：未刪除的 `goods` 商品，依料號排序。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_stock_balances(
+    state: State<'_, AppState>,
+    query: StockBalanceQuery,
+) -> Result<Page<StockBalance>, ClientError> {
+    state.list_stock_balances(&query).await
+}
+
+/// 商品的批號（需要 `record.read`），依先進先出順序。商品不存在時回傳 `404 NOT_FOUND`。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_product_lots(
+    state: State<'_, AppState>,
+    product_id: Id,
+    query: LotQuery,
+) -> Result<Page<InventoryLot>, ClientError> {
+    state.list_product_lots(product_id, &query).await
+}
+
+/// 庫存異動流水帳（需要 `record.read`），新到舊。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_inventory_transactions(
+    state: State<'_, AppState>,
+    query: TransactionQuery,
+) -> Result<Page<InventoryTransaction>, ClientError> {
+    state.list_inventory_transactions(&query).await
 }
 
 /// 列表版面：全域版面與自己的個人版面（需要 `record.read`）。

@@ -152,6 +152,12 @@ export const commands = {
 	 *  反向處理失敗時回傳 `422 STOCK_INSUFFICIENT` 或 `LOT_IN_USE`。
 	 */
 	voidRecord: (key: string, id: string, version: number) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("void_record", { key, id, version })),
+	/**  商品庫存（需要 `record.read`）：未刪除的 `goods` 商品，依料號排序。 */
+	listStockBalances: (query: StockBalanceQuery_Deserialize) => typedError<Page<StockBalance_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_stock_balances", { query })),
+	/**  商品的批號（需要 `record.read`），依先進先出順序。商品不存在時回傳 `404 NOT_FOUND`。 */
+	listProductLots: (productId: string, query: LotQuery_Deserialize) => typedError<Page<InventoryLot_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_product_lots", { productId, query })),
+	/**  庫存異動流水帳（需要 `record.read`），新到舊。 */
+	listInventoryTransactions: (query: TransactionQuery_Deserialize) => typedError<Page<InventoryTransaction_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_inventory_transactions", { query })),
 	/**  列表版面：全域版面與自己的個人版面（需要 `record.read`）。 */
 	listLayouts: (key: string) => typedError<ViewLayout_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_layouts", { key })),
 	/**  要套用的預設版面：自己的預設 → 全域預設 → 依欄位定義產生。 */
@@ -1522,6 +1528,90 @@ export type InvalidStatusDetails = {
 	status: DocumentStatus,
 };
 
+/**  一個批號（依先進先出順序 `received_date, id` 排列）。 */
+export type InventoryLot = InventoryLot_Serialize | InventoryLot_Deserialize;
+
+/**  一個批號（依先進先出順序 `received_date, id` 排列）。 */
+export type InventoryLot_Deserialize = {
+	id: string,
+	lot_no: string,
+	received_date: string,
+	/**  產生此批號的單據明細子表代碼（例如 `stock_adjustment_line`）。 */
+	source_type: string,
+	/**  來源單據（主表）的 id。 */
+	source_doc_id: string,
+	/**  來源單據的單號。 */
+	source_record_no: string,
+	qty_in: string,
+	qty_remaining: string,
+	unit_cost_twd: string,
+};
+
+/**  一個批號（依先進先出順序 `received_date, id` 排列）。 */
+export type InventoryLot_Serialize = {
+	id: string,
+	lot_no: string,
+	received_date: string,
+	/**  產生此批號的單據明細子表代碼（例如 `stock_adjustment_line`）。 */
+	source_type: string,
+	/**  來源單據（主表）的 id。 */
+	source_doc_id: string,
+	/**  來源單據的單號。 */
+	source_record_no: string,
+	qty_in: string,
+	qty_remaining: string,
+	unit_cost_twd: string,
+};
+
+/**  一筆庫存異動（依 `txn_date DESC, id DESC` 由新到舊排列）。 */
+export type InventoryTransaction = InventoryTransaction_Serialize | InventoryTransaction_Deserialize;
+
+/**  一筆庫存異動（依 `txn_date DESC, id DESC` 由新到舊排列）。 */
+export type InventoryTransaction_Deserialize = {
+	id: string,
+	txn_at: string,
+	txn_date: string,
+	txn_type: TxnType,
+	product_id: string,
+	product_code: string,
+	product_name: string,
+	lot_id: string,
+	lot_no: string,
+	/**  數量變動（入庫為正、出庫為負，4 位小數）。 */
+	qty_change: string,
+	unit_cost_twd: string,
+	ref_doc_type: string,
+	ref_doc_id: string,
+	/**  來源單據的單號。 */
+	ref_record_no: string,
+	ref_line_id: string,
+	created_by?: string | null,
+	created_by_name?: string | null,
+};
+
+/**  一筆庫存異動（依 `txn_date DESC, id DESC` 由新到舊排列）。 */
+export type InventoryTransaction_Serialize = {
+	id: string,
+	txn_at: string,
+	txn_date: string,
+	txn_type: TxnType,
+	product_id: string,
+	product_code: string,
+	product_name: string,
+	lot_id: string,
+	lot_no: string,
+	/**  數量變動（入庫為正、出庫為負，4 位小數）。 */
+	qty_change: string,
+	unit_cost_twd: string,
+	ref_doc_type: string,
+	ref_doc_id: string,
+	/**  來源單據的單號。 */
+	ref_record_no: string,
+	ref_line_id: string,
+	created_by: string | null,
+	created_by_name: string | null,
+};
+
 /**  列表的一個顯示欄位。 */
 export type LayoutColumn = LayoutColumn_Serialize | LayoutColumn_Deserialize;
 
@@ -1681,6 +1771,29 @@ export type LotInUse = {
 /**  `LOT_IN_USE` 的 `details`：被其他有效單據使用的批號。 */
 export type LotInUseDetails = {
 	lots: LotInUse[],
+};
+
+/**  `GET /api/v1/inventory/products/{product_id}/lots` 的 query string。 */
+export type LotQuery = LotQuery_Serialize | LotQuery_Deserialize;
+
+/**  `GET /api/v1/inventory/products/{product_id}/lots` 的 query string。 */
+export type LotQuery_Deserialize = {
+	/**  `true`：包含已用完（`qty_remaining = 0`）的批號；預設 `false`。 */
+	include_empty?: string | null,
+	/**  批號包含（不分大小寫）。 */
+	q?: string | null,
+	page?: number | null,
+	page_size?: number | null,
+};
+
+/**  `GET /api/v1/inventory/products/{product_id}/lots` 的 query string。 */
+export type LotQuery_Serialize = {
+	/**  `true`：包含已用完（`qty_remaining = 0`）的批號；預設 `false`。 */
+	include_empty: string | null,
+	/**  批號包含（不分大小寫）。 */
+	q: string | null,
+	page: number | null,
+	page_size: number | null,
 };
 
 /**  分頁的列表回應。 */
@@ -1959,6 +2072,80 @@ export type SetupStatus = {
 	needs_setup: boolean,
 };
 
+/**  一個商品的庫存（未刪除的 `goods` 商品；沒有批號時庫存為 0）。 */
+export type StockBalance = StockBalance_Serialize | StockBalance_Deserialize;
+
+/**  `GET /api/v1/inventory/balances` 的 query string。 */
+export type StockBalanceQuery = StockBalanceQuery_Serialize | StockBalanceQuery_Deserialize;
+
+/**  `GET /api/v1/inventory/balances` 的 query string。 */
+export type StockBalanceQuery_Deserialize = {
+	/**  料號或品名包含（不分大小寫）；以空白分隔的每個詞都要出現在料號或品名中。 */
+	q?: string | null,
+	/**  商品分類 id（只比對該分類本身，不含下層分類）。 */
+	category_id?: string | null,
+	/**  `true`：只列出庫存大於 0；`false`：只列出庫存為 0；省略：全部。 */
+	in_stock?: string | null,
+	/**  `true`：只列出有設定安全庫存且庫存低於安全庫存的商品；`false` 或省略：全部。 */
+	below_safety_stock?: string | null,
+	/**  是否包含停用的商品；預設 `true`（停用的商品可能還有庫存）。 */
+	include_inactive?: string | null,
+	page?: number | null,
+	page_size?: number | null,
+};
+
+/**  `GET /api/v1/inventory/balances` 的 query string。 */
+export type StockBalanceQuery_Serialize = {
+	/**  料號或品名包含（不分大小寫）；以空白分隔的每個詞都要出現在料號或品名中。 */
+	q: string | null,
+	/**  商品分類 id（只比對該分類本身，不含下層分類）。 */
+	category_id: string | null,
+	/**  `true`：只列出庫存大於 0；`false`：只列出庫存為 0；省略：全部。 */
+	in_stock: string | null,
+	/**  `true`：只列出有設定安全庫存且庫存低於安全庫存的商品；`false` 或省略：全部。 */
+	below_safety_stock: string | null,
+	/**  是否包含停用的商品；預設 `true`（停用的商品可能還有庫存）。 */
+	include_inactive: string | null,
+	page: number | null,
+	page_size: number | null,
+};
+
+/**  一個商品的庫存（未刪除的 `goods` 商品；沒有批號時庫存為 0）。 */
+export type StockBalance_Deserialize = {
+	product_id: string,
+	code: string,
+	name: string,
+	spec?: string | null,
+	unit_name: string,
+	is_active: boolean,
+	/**  庫存數量（4 位小數）。 */
+	qty_on_hand: string,
+	/**  台幣庫存金額（四捨五入到 2 位小數）。 */
+	stock_value_twd: string,
+	/**  安全庫存（4 位小數）；沒有設定時為 `null`。 */
+	safety_stock: string | null,
+	/**  有設定安全庫存且庫存低於安全庫存。 */
+	below_safety_stock: boolean,
+};
+
+/**  一個商品的庫存（未刪除的 `goods` 商品；沒有批號時庫存為 0）。 */
+export type StockBalance_Serialize = {
+	product_id: string,
+	code: string,
+	name: string,
+	spec: string | null,
+	unit_name: string,
+	is_active: boolean,
+	/**  庫存數量（4 位小數）。 */
+	qty_on_hand: string,
+	/**  台幣庫存金額（四捨五入到 2 位小數）。 */
+	stock_value_twd: string,
+	/**  安全庫存（4 位小數）；沒有設定時為 `null`。 */
+	safety_stock: string | null,
+	/**  有設定安全庫存且庫存低於安全庫存。 */
+	below_safety_stock: boolean,
+};
+
 /**  `STOCK_INSUFFICIENT` 的 `details`：所有不足的項目。 */
 export type StockInsufficientDetails = StockInsufficientDetails_Serialize | StockInsufficientDetails_Deserialize;
 
@@ -2040,6 +2227,60 @@ export type TargetSnapshot_Serialize = {
 	fields: FieldDefinition_Serialize[],
 	records: TargetRecord[],
 };
+
+/**  `GET /api/v1/inventory/transactions` 的 query string。 */
+export type TransactionQuery = TransactionQuery_Serialize | TransactionQuery_Deserialize;
+
+/**  `GET /api/v1/inventory/transactions` 的 query string。 */
+export type TransactionQuery_Deserialize = {
+	product_id?: string | null,
+	lot_id?: string | null,
+	/**  `txn_date >= date_from`（含），`YYYY-MM-DD`。 */
+	date_from?: string | null,
+	/**  `txn_date <= date_to`（含），`YYYY-MM-DD`。 */
+	date_to?: string | null,
+	/**  異動類型（[`TxnType`]）。 */
+	txn_type?: string | null,
+	/**  來源單據的主表代碼（例如 `stock_adjustment`）。 */
+	ref_doc_type?: string | null,
+	/**  來源單據 id。 */
+	ref_doc_id?: string | null,
+	page?: number | null,
+	page_size?: number | null,
+};
+
+/**  `GET /api/v1/inventory/transactions` 的 query string。 */
+export type TransactionQuery_Serialize = {
+	product_id: string | null,
+	lot_id: string | null,
+	/**  `txn_date >= date_from`（含），`YYYY-MM-DD`。 */
+	date_from: string | null,
+	/**  `txn_date <= date_to`（含），`YYYY-MM-DD`。 */
+	date_to: string | null,
+	/**  異動類型（[`TxnType`]）。 */
+	txn_type: string | null,
+	/**  來源單據的主表代碼（例如 `stock_adjustment`）。 */
+	ref_doc_type: string | null,
+	/**  來源單據 id。 */
+	ref_doc_id: string | null,
+	page: number | null,
+	page_size: number | null,
+};
+
+/**  庫存異動的類型（`inventory_transactions.txn_type`）。JSON 中為 snake_case。 */
+export type TxnType = 
+/**  進貨入庫。 */
+"receipt" | 
+/**  出貨。 */
+"shipment" | 
+/**  銷貨退回。 */
+"sales_return" | 
+/**  進貨退回。 */
+"purchase_return" | 
+/**  盤點與調整（含期初庫存）。 */
+"adjustment" | 
+/**  作廢單據產生的反向異動。 */
+"void_reversal";
 
 /**
  *  `PATCH /api/v1/currencies/{code}` 的輸入。省略或 `null` 的欄位不修改。

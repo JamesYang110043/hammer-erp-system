@@ -1,4 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryKey } from '@tanstack/react-query';
 
 import { LOOKUP_DEFAULT_LIMIT, commands } from '../bindings';
 import type {
@@ -13,6 +14,7 @@ import type {
 } from '../bindings';
 import { useDebouncedValue } from '../utils/useDebouncedValue';
 import { auditLogsKey } from './auditLogs';
+import { inventoryKey } from './inventory';
 import { unwrap } from './client';
 
 /** 自訂資料類別的資料（讀取需要 `record.read`、寫入需要 `record.write`，伺服器檢查）。 */
@@ -120,10 +122,11 @@ export function useFormulaPreview(req: FormulaPreviewRequest | undefined) {
   });
 }
 
-/** 新增、修改資料成功後更新單筆快取，並重新取得列表與操作紀錄。 */
+/** 新增、修改資料成功後更新單筆快取，並重新取得列表、操作紀錄與 `extraKeys`。 */
 function useRecordMutation<TVars>(
   entityKey: string,
   mutationFn: (vars: TVars) => Promise<DataRecord>,
+  extraKeys: readonly QueryKey[] = [],
 ) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -133,6 +136,7 @@ function useRecordMutation<TVars>(
       return Promise.all([
         queryClient.invalidateQueries({ queryKey: recordsKey(entityKey) }),
         queryClient.invalidateQueries({ queryKey: auditLogsKey }),
+        ...extraKeys.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
       ]);
     },
   });
@@ -152,15 +156,19 @@ export function useUpdateRecord(entityKey: string) {
 
 /**
  * 系統單據的過帳、作廢（需要 `record.post`，伺服器檢查）。成功後更新單筆快取，
- * 並重新取得列表與操作紀錄。
+ * 並重新取得列表、操作紀錄與庫存查詢。
  */
 export function useDocumentAction(entityKey: string, action: 'post' | 'void') {
-  return useRecordMutation(entityKey, (record: Pick<DataRecord, 'id' | 'version'>) =>
-    unwrap(
-      action === 'post'
-        ? commands.postRecord(entityKey, record.id, record.version)
-        : commands.voidRecord(entityKey, record.id, record.version),
-    ),
+  return useRecordMutation(
+    entityKey,
+    (record: Pick<DataRecord, 'id' | 'version'>) =>
+      unwrap(
+        action === 'post'
+          ? commands.postRecord(entityKey, record.id, record.version)
+          : commands.voidRecord(entityKey, record.id, record.version),
+      ),
+    // 過帳、作廢會異動庫存
+    [inventoryKey],
   );
 }
 

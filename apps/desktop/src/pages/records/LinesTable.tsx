@@ -8,10 +8,12 @@ import { isNumericType } from '../../records/display';
 import { validateFieldValue } from '../../records/form';
 import type { FormulaCell } from '../../records/formulaPreview';
 import { LINES_FORM_KEY, LINE_ID_KEY, lineFormValues } from '../../records/lines';
+import { LINE_FIELDS, STOCK_ADJUSTMENT_LINE } from '../../records/inventory';
 import { isExclusiveLineField, rowsToClear } from '../../records/masterData';
 import type { DetailTable } from '../../records/lines';
 import { FormulaValue } from './FieldValue';
 import { RecordFieldInput } from './RecordFieldInput';
+import { CurrentQty, LotNoInput, UnitCostInput } from './StockAdjustmentLineInputs';
 
 /** 明細列目前的關聯與附件（顯示關聯標題、附件檔名用），鍵為明細 id。 */
 export interface LineRefs {
@@ -58,6 +60,8 @@ export function LinesTable({
   );
   const form = Form.useFormInstance();
   const listName = [LINES_FORM_KEY, entity.key];
+  // 盤點調整明細：批號選擇、成本與目前數量（StockAdjustmentLineInputs）
+  const isStockAdjustment = entity.key === STOCK_ADJUSTMENT_LINE;
 
   return (
     <Form.List name={listName}>
@@ -105,6 +109,8 @@ export function LinesTable({
                   width: field.column_width ?? undefined,
                   render: (_, row) => {
                     const id = lineId(row.name);
+                    const rowPath = [...listName, row.name];
+                    const disabled = field.is_readonly || undefined;
                     return (
                       <Form.Item
                         name={[row.name, field.field_key]}
@@ -118,7 +124,19 @@ export function LinesTable({
                           },
                         ]}
                       >
-                        {isExclusiveLineField(field) ? (
+                        {isStockAdjustment && field.field_key === LINE_FIELDS.lotNo ? (
+                          <LotNoInput
+                            row={rowPath}
+                            label={field.label}
+                            disabled={disabled || !canWrite}
+                          />
+                        ) : isStockAdjustment && field.field_key === LINE_FIELDS.unitCost ? (
+                          <UnitCostInput
+                            row={rowPath}
+                            field={field}
+                            disabled={disabled || !canWrite}
+                          />
+                        ) : isExclusiveLineField(field) ? (
                           <ExclusiveRadio
                             label={`第 ${row.name + 1} 列${field.label}`}
                             disabled={field.is_readonly || undefined}
@@ -145,6 +163,15 @@ export function LinesTable({
                 },
           ),
         ];
+        if (isStockAdjustment && canWrite) {
+          const lotIndex = columns.findIndex((c) => c.key === LINE_FIELDS.lotNo);
+          columns.splice(lotIndex < 0 ? columns.length : lotIndex + 1, 0, {
+            key: '__current_qty',
+            title: '目前數量',
+            align: 'right',
+            render: (_, row) => <CurrentQty row={[...listName, row.name]} />,
+          });
+        }
         if (canWrite) {
           columns.push({
             title: '操作',

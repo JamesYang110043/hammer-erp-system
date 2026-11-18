@@ -5,6 +5,7 @@ import { AppLayout } from './layouts/AppLayout';
 import { PERMISSIONS } from './bindings';
 import { CONNECTION_SETTINGS_PATH, ENTITIES_PATH, MASTER_DATA_MODULES, MODULES } from './modules';
 import { ConnectionSettingsPage } from './pages/ConnectionSettingsPage';
+import { INVENTORY_MODULES } from './inventoryModules';
 import { PlaceholderPage } from './pages/PlaceholderPage';
 import { RecordFormPage } from './pages/records/RecordFormPage';
 import { RecordsPage } from './pages/records/RecordsPage';
@@ -20,7 +21,7 @@ export const router = createHashRouter([
         index: true,
         element: <Navigate to={MODULES[0]?.path ?? CONNECTION_SETTINGS_PATH} replace />,
       },
-      ...[...MASTER_DATA_MODULES, ...MODULES].flatMap((m) => [
+      ...[...MASTER_DATA_MODULES, ...INVENTORY_MODULES, ...MODULES].flatMap((m) => [
         {
           path: m.path,
           element: (
