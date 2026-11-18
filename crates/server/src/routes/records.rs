@@ -3,12 +3,16 @@
 //!
 //! 讀取需要 `record.read`，寫入需要 `record.write`（在 `hammer_core::records` 檢查）。
 //! request / response 型別、端點清單、query string 格式與錯誤見 [`hammer_shared::record`]。
+//!
+//! 系統單據的過帳、作廢（`POST …/records/{id}/post`、`…/void`）需要 `record.post`，在
+//! `hammer_core::documents` 檢查與分派；型別見 [`hammer_shared::document`]。
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use hammer_core::records;
+use hammer_core::{documents, records};
 use hammer_shared::Id;
+use hammer_shared::document::DocumentActionRequest;
 use hammer_shared::pagination::Page;
 use hammer_shared::record::{
     CreateRecordRequest, DeleteRecordQuery, LookupItem, Record, UpdateRecordRequest,
@@ -120,4 +124,50 @@ pub async fn delete(
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/entities/{key}/records/{id}/post`
+pub async fn post(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    Path((key, id)): Path<(String, Id)>,
+    Json(req): Json<DocumentActionRequest>,
+) -> Result<Json<Record>, AppError> {
+    let info = request_client_info(&headers);
+    let record = documents::post_document(
+        &state.pool,
+        &state.documents,
+        &auth,
+        &key,
+        id,
+        &req,
+        info.as_deref(),
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(Json(record))
+}
+
+/// `POST /api/v1/entities/{key}/records/{id}/void`
+pub async fn void(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    Path((key, id)): Path<(String, Id)>,
+    Json(req): Json<DocumentActionRequest>,
+) -> Result<Json<Record>, AppError> {
+    let info = request_client_info(&headers);
+    let record = documents::void_document(
+        &state.pool,
+        &state.documents,
+        &auth,
+        &key,
+        id,
+        &req,
+        info.as_deref(),
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(Json(record))
 }

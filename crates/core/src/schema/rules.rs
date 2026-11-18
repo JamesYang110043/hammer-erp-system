@@ -147,6 +147,10 @@ pub fn plan_create_entity(
 
 /// 明細子表設定單號規則時的錯誤訊息。
 const MSG_DETAIL_NUMBERING_PATTERN: &str = "明細子表不可設定單號規則";
+/// 清空系統單據的單號規則時的錯誤訊息。
+const MSG_SYSTEM_DOCUMENT_NUMBERING_PATTERN: &str = "系統單據的單號規則不可清空";
+/// 主檔類的系統資料類別設定單號規則時的錯誤訊息。
+const MSG_SYSTEM_MASTER_NUMBERING_PATTERN: &str = "此資料類別不使用單號，不可設定單號規則";
 
 /// 檢查明細子表的主表：必須存在、是**自訂**（`storage = custom_records`）、有效、`kind` 為
 /// `master` 或 `document`（不可是另一個明細子表）。錯誤為 [`CoreError::InvalidField`]
@@ -198,6 +202,24 @@ pub fn plan_update_entity(
             field::NUMBERING_PATTERN,
             MSG_DETAIL_NUMBERING_PATTERN,
         ));
+    }
+    // 系統資料類別（§7.1）：系統單據一律有單號規則，主檔類不使用單號
+    if current.is_system && current.storage == EntityStorage::Table {
+        match (current.kind, &numbering_pattern) {
+            (EntityKind::Document, None) => {
+                return Err(invalid(
+                    field::NUMBERING_PATTERN,
+                    MSG_SYSTEM_DOCUMENT_NUMBERING_PATTERN,
+                ));
+            }
+            (EntityKind::Master, Some(_)) => {
+                return Err(invalid(
+                    field::NUMBERING_PATTERN,
+                    MSG_SYSTEM_MASTER_NUMBERING_PATTERN,
+                ));
+            }
+            _ => {}
+        }
     }
     Ok(EntityDefinition {
         label: validate_label(&req.label)?,
@@ -1268,6 +1290,47 @@ mod tests {
             field_of(&update(Some("RO-{000}{000}")).unwrap_err()),
             field::NUMBERING_PATTERN
         );
+    }
+
+    #[test]
+    fn system_document_numbering_pattern_cannot_be_cleared() {
+        let document = EntityDefinition {
+            kind: EntityKind::Document,
+            storage: EntityStorage::Table,
+            numbering_pattern: Some("ADJ{yyyyMM}-{0000}".into()),
+            ..entity(true)
+        };
+        let master = EntityDefinition {
+            storage: EntityStorage::Table,
+            ..entity(true)
+        };
+        let update = |current: &EntityDefinition, pattern: Option<&str>| {
+            plan_update_entity(
+                current,
+                &[],
+                &TargetFields::new(),
+                &UpdateEntityRequest {
+                    numbering_pattern: pattern.map(str::to_owned),
+                    ..entity_update(current)
+                },
+            )
+        };
+        assert_eq!(
+            update(&document, Some("SA-{000}"))
+                .unwrap()
+                .numbering_pattern
+                .as_deref(),
+            Some("SA-{000}")
+        );
+        for pattern in [None, Some(" ")] {
+            let err = update(&document, pattern).unwrap_err();
+            assert_eq!(field_of(&err), field::NUMBERING_PATTERN);
+            assert_eq!(err.to_string(), MSG_SYSTEM_DOCUMENT_NUMBERING_PATTERN);
+        }
+        assert_eq!(update(&master, None).unwrap().numbering_pattern, None);
+        let err = update(&master, Some("C-{000}")).unwrap_err();
+        assert_eq!(field_of(&err), field::NUMBERING_PATTERN);
+        assert_eq!(err.to_string(), MSG_SYSTEM_MASTER_NUMBERING_PATTERN);
     }
 
     #[test]

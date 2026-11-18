@@ -27,6 +27,14 @@
 //! 資料類別有設定單號規則時，新增資料在同一個 transaction 內取號（[`crate::numbering`]、
 //! `hammer_db::number_sequence`）並寫入 `record_no`；單號不可由客戶端指定或修改。
 //!
+//! 系統單據（`kind = document` 的系統資料類別，§7.1「系統單據」）另外：
+//!
+//! - 新增時依單號規則取號，寫入主表的 `record_no` 實體欄位；`status` 由伺服器寫入 `draft`
+//! - request 的 `data` 帶了系統維護的欄位（`status`、金額合計：唯讀的系統欄位）一律忽略
+//! - 只有 `draft` 可以修改、刪除，其他狀態 → [`CoreError::InvalidStatus`]（檢查順序：權限 → 資料存在 →
+//!   `version` → 狀態 → 內容）
+//! - 回應的 [`Record::document`] 為過帳、作廢資訊；過帳、作廢在 [`crate::documents`]
+//!
 //! 列表的 query string 格式見 [`hammer_shared::record`]；欄位與運算子的檢查在 [`plan_list`]。
 //!
 //! 回應的 [`Record::title`] 依資料類別的 `title_template` 產生（[`crate::title`]）。
@@ -50,6 +58,7 @@
 //! 篩選與排序依 `formula_result_type`。
 
 use hammer_db::DbError;
+use hammer_db::document as document_db;
 use hammer_db::ensure_version_matched;
 use hammer_db::number_sequence;
 use hammer_db::record::{
@@ -63,6 +72,7 @@ use hammer_db::system_record::{
     self as system_db, ColumnType, NewSystemRecord, SystemColumn, SystemDetailTable,
     SystemLineUpdate, SystemRecordUpdate, SystemTable,
 };
+use hammer_shared::document::{DocumentInfo, DocumentStatus, STATUS_FIELD};
 use hammer_shared::pagination::{Page, PageRequest};
 use hammer_shared::record::{
     CreateRecordRequest, FilterOp, LineInput, LookupItem, LookupQuery, QueryParamError, RECORD_NO,
@@ -74,6 +84,7 @@ use hammer_shared::schema::{
 };
 use hammer_shared::{Id, audit as action, new_id, permission};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use time::OffsetDateTime;
 
@@ -139,6 +150,7 @@ pub async fn list_records(
     let mut items = titles.records(&mut conn, rows).await?;
     attach_relations(&mut conn, &fields, &mut items).await?;
     attach_files(&mut conn, &fields, &mut items).await?;
+    attach_documents(&mut conn, &store, &mut items).await?;
     let total = u32::try_from(total).unwrap_or(u32::MAX);
     Ok(Page::new(items, total, page))
 }
@@ -163,7 +175,7 @@ pub async fn get_record(
         .await?
         .record(&mut conn, row)
         .await?;
-    let mut record = with_relations(&mut conn, &fields, record).await?;
+    let mut record = with_relations(&mut conn, &fields, &store, record).await?;
     record.lines = Some(fetch_lines(&mut conn, &details, id).await?);
     Ok(record)
 }
@@ -252,7 +264,18 @@ pub async fn create_record(
     let (entity, fields, store) = load_target_for_write(&mut tx, entity_key).await?;
     let details = load_details_for_write(&mut tx, &entity).await?;
     let formulas = formulas_of(&fields, &details);
-    let master = normalize_record_data(&fields, &req.data, WriteMode::Create);
+    let input = document_input(&store, &fields, &req.data);
+    let master = normalize_record_data(&fields, &input, WriteMode::Create);
+    // 系統單據新增時一律是草稿（§7.1「系統單據」）
+    let master = master.map(|mut data| {
+        if store.document_table().is_some() {
+            data.insert(
+                STATUS_FIELD.to_owned(),
+                Value::String(DocumentStatus::Draft.as_str().to_owned()),
+            );
+        }
+        data
+    });
     let master = system_rules(&store, &entity.key, master, None);
     let mut line_errors = Vec::new();
     let mut lines =
@@ -270,9 +293,17 @@ pub async fn create_record(
     let data = Value::Object(data);
 
     // 驗證通過後才取號：流水號的列鎖定到 transaction 結束，越晚取號鎖定的時間越短
-    let record_no = match store {
+    let record_no = match &store {
         Store::CustomRecords => next_record_no(&mut tx, &entity, now).await?,
-        // 系統資料類別在 M3 沒有單號（§7.1）
+        // 系統單據一律有單號規則（不可清空，§7.1「系統單據」）
+        Store::Table(table) if table.is_document() => Some(
+            next_record_no(&mut tx, &entity, now)
+                .await?
+                .ok_or_else(|| {
+                    CoreError::Internal(format!("系統單據 {} 沒有設定單號規則", entity.key))
+                })?,
+        ),
+        // 主檔類的系統資料類別沒有單號（§7.1）
         Store::Table(_) => None,
     };
     let id = new_id();
@@ -354,11 +385,13 @@ pub async fn update_record(
     let (entity, fields, store) = load_target_for_write(&mut tx, entity_key).await?;
     let current = lock_record(&mut tx, &store, entity.id, id).await?;
     ensure_version(current.version, req.version)?;
+    ensure_draft(&store, &current, "修改")?;
 
     let details = load_details_for_write(&mut tx, &entity).await?;
     let formulas = formulas_of(&fields, &details);
     let existing = data_object(&current.data)?;
-    let master = normalize_record_data(&fields, &req.data, WriteMode::Update { existing });
+    let input = document_input(&store, &fields, &req.data);
+    let master = normalize_record_data(&fields, &input, WriteMode::Update { existing });
     let master = system_rules(&store, &entity.key, master, Some(existing));
     let mut line_errors = Vec::new();
     // 有公式時所有明細都要重算（主表的子表彙總也需要沒帶到的明細）
@@ -384,7 +417,7 @@ pub async fn update_record(
             .await?
             .record(&mut tx, current)
             .await?;
-        let mut record = with_relations(&mut tx, &fields, record).await?;
+        let mut record = with_relations(&mut tx, &fields, &store, record).await?;
         record.lines = Some(fetch_lines(&mut tx, &details, id).await?);
         commit(tx).await?;
         return Ok(record);
@@ -470,6 +503,7 @@ pub async fn delete_record(
     let (entity, _, store) = load_target_for_write(&mut tx, entity_key).await?;
     let current = lock_record(&mut tx, &store, entity.id, id).await?;
     ensure_version(current.version, version)?;
+    ensure_draft(&store, &current, "刪除")?;
     if let Store::Table(_) = store {
         master_data::check_delete(&mut tx, &entity.key, id).await?;
     }
@@ -762,7 +796,7 @@ async fn load_entity(
 /// 同 [`load_entity`]，寫入資料時使用：以 `FOR SHARE` 鎖定資料類別，等待進行中的欄位定義變更
 /// （例如變更欄位型態，[`crate::schema::change_field_type`]）完成後才讀取欄位定義，
 /// 避免依舊的定義寫入資料。
-async fn load_target_for_write(
+pub(crate) async fn load_target_for_write(
     tx: &mut PgTransaction<'_>,
     key: &str,
 ) -> Result<(EntityDefinition, Vec<FieldDefinition>, Store), CoreError> {
@@ -821,7 +855,13 @@ pub(crate) async fn fields_and_table(
             let table_name = table_name.ok_or_else(|| {
                 CoreError::Internal(format!("系統資料類別 {} 沒有設定 table_name", entity.key))
             })?;
-            Some(system_table(entity.id, &table_name, &fields, &columns)?)
+            let table = system_table(entity.id, &table_name, &fields, &columns)?;
+            // 系統單據的主表有單號與狀態（§7.1「系統單據」）
+            Some(if entity.kind == EntityKind::Document {
+                table.document()
+            } else {
+                table
+            })
         }
     };
     Ok((fields, table))
@@ -885,7 +925,30 @@ pub(crate) enum Store {
 }
 
 impl Store {
-    async fn find(
+    /// 系統單據的主表（§7.1「系統單據」）；其他資料類別為 `None`。
+    pub(crate) fn document_table(&self) -> Option<&SystemTable> {
+        match self {
+            Self::Table(table) if table.is_document() => Some(table),
+            _ => None,
+        }
+    }
+
+    /// `index` 是否為單號的唯一索引：`custom_records` 為 [`RECORD_NO_UNIQUE`]；系統單據為
+    /// `uq_<資料表>_record_no`（migration 的命名慣例）。
+    fn is_record_no_index(&self, index: &str) -> bool {
+        match self {
+            Self::CustomRecords => index == RECORD_NO_UNIQUE,
+            Self::Table(table) => {
+                table.is_document()
+                    && index
+                        .strip_prefix("uq_")
+                        .and_then(|rest| rest.strip_suffix("_record_no"))
+                        == Some(table.name())
+            }
+        }
+    }
+
+    pub(crate) async fn find(
         &self,
         conn: &mut PgConnection,
         entity_id: Id,
@@ -897,7 +960,7 @@ impl Store {
         }
     }
 
-    async fn find_for_update(
+    pub(crate) async fn find_for_update(
         &self,
         conn: &mut PgConnection,
         entity_id: Id,
@@ -964,7 +1027,7 @@ impl Store {
         }
     }
 
-    /// 新增主表資料。系統資料類別不使用 `record_no`、`parent_record_id`、`sort_order`。
+    /// 新增主表資料。系統資料類別不使用 `parent_record_id`、`sort_order`；只有系統單據使用 `record_no`。
     async fn insert(&self, conn: &mut PgConnection, new: &NewRecord<'_>) -> Result<(), DbError> {
         match self {
             Self::CustomRecords => db::insert_record(conn, new).await,
@@ -975,6 +1038,7 @@ impl Store {
                     table,
                     &NewSystemRecord {
                         id: new.id,
+                        record_no: new.record_no.filter(|_| table.is_document()),
                         data: new.data,
                         custom_data: &custom_data,
                         formula_errors: new.formula_errors,
@@ -1074,6 +1138,65 @@ fn system_rules(
     }
 }
 
+/// 系統單據：去除 request 的 `data` 中系統維護的欄位（唯讀的系統欄位，例如 `status`、金額合計），
+/// 這些欄位由伺服器寫入，帶了一律忽略（§7.1「系統單據」）。其他資料類別原樣回傳。
+fn document_input<'a>(
+    store: &Store,
+    fields: &[FieldDefinition],
+    input: &'a Map<String, Value>,
+) -> Cow<'a, Map<String, Value>> {
+    if store.document_table().is_none() {
+        return Cow::Borrowed(input);
+    }
+    let maintained = |key: &str| {
+        fields
+            .iter()
+            .any(|f| f.field_key == key && f.is_system && f.is_readonly)
+    };
+    if !input.keys().any(|k| maintained(k)) {
+        return Cow::Borrowed(input);
+    }
+    Cow::Owned(
+        input
+            .iter()
+            .filter(|(k, _)| !maintained(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    )
+}
+
+/// 系統單據的狀態（`data.status`）。不是系統單據時為 `None`；值不正確時回傳 [`CoreError::Internal`]。
+pub(crate) fn document_status(
+    store: &Store,
+    row: &RecordRow,
+) -> Result<Option<DocumentStatus>, CoreError> {
+    if store.document_table().is_none() {
+        return Ok(None);
+    }
+    row.data
+        .get(STATUS_FIELD)
+        .and_then(Value::as_str)
+        .and_then(DocumentStatus::parse)
+        .map(Some)
+        .ok_or_else(|| CoreError::Internal(format!("單據 {} 的狀態不正確", row.id)))
+}
+
+/// 狀態不允許某個操作時的錯誤，例如「已過帳的單據不可修改」。
+pub(crate) fn invalid_status(status: DocumentStatus, operation: &str) -> CoreError {
+    CoreError::InvalidStatus {
+        status,
+        message: format!("{}的單據不可{operation}", status.label()),
+    }
+}
+
+/// 系統單據只有 `draft` 可以修改、刪除（§7.1「系統單據」）。`operation` 為「修改」「刪除」。
+fn ensure_draft(store: &Store, row: &RecordRow, operation: &str) -> Result<(), CoreError> {
+    match document_status(store, row)? {
+        Some(status) if status != DocumentStatus::Draft => Err(invalid_status(status, operation)),
+        _ => Ok(()),
+    }
+}
+
 /// 要寫入 `custom_data` 的部分：`data` 中系統欄位以外的鍵。
 fn custom_data_of(table: &SystemTable, data: &Value) -> Value {
     let map = data
@@ -1110,6 +1233,7 @@ pub fn record_from_row(
         attachments: Default::default(),
         formula_errors: errors_from_json(row.formula_errors.as_ref()),
         lines: None,
+        document: None,
         created_at: row.created_at,
         created_by: row.created_by,
         updated_at: row.updated_at,
@@ -1137,7 +1261,9 @@ async fn write_error(
 ) -> CoreError {
     match err.unique_violation() {
         None => return err.into(),
-        Some(RECORD_NO_UNIQUE) => return CoreError::Validation(RECORD_NO_TAKEN.into()),
+        Some(index) if store.is_record_no_index(index) => {
+            return CoreError::Validation(RECORD_NO_TAKEN.into());
+        }
         Some(_) => {}
     }
     // transaction 已中止，不能再查詢
@@ -1179,7 +1305,7 @@ async fn duplicate_fields(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn record_audit(
+pub(crate) async fn record_audit(
     tx: &mut PgTransaction<'_>,
     ctx: &AuthContext,
     action: &str,
@@ -1225,7 +1351,7 @@ async fn next_record_no(
     Ok(Some(pattern.format(date, sequence)))
 }
 
-async fn lock_record(
+pub(crate) async fn lock_record(
     tx: &mut PgTransaction<'_>,
     store: &Store,
     entity_id: Id,
@@ -1237,7 +1363,7 @@ async fn lock_record(
         .ok_or_else(record_not_found)
 }
 
-async fn fetch_record(
+pub(crate) async fn fetch_record(
     tx: &mut PgTransaction<'_>,
     entity: &EntityDefinition,
     fields: &[FieldDefinition],
@@ -1253,7 +1379,7 @@ async fn fetch_record(
         .await?
         .record(tx, row)
         .await?;
-    let mut record = with_relations(tx, fields, record).await?;
+    let mut record = with_relations(tx, fields, store, record).await?;
     record.lines = Some(fetch_lines(tx, details, id).await?);
     Ok(record)
 }
@@ -1262,20 +1388,56 @@ async fn fetch_record(
 async fn with_relations(
     conn: &mut PgConnection,
     fields: &[FieldDefinition],
+    store: &Store,
     record: Record,
 ) -> Result<Record, CoreError> {
     let mut records = [record];
     attach_relations(conn, fields, &mut records).await?;
     attach_files(conn, fields, &mut records).await?;
+    attach_documents(conn, store, &mut records).await?;
     let [record] = records;
     Ok(record)
+}
+
+/// 系統單據：填入 [`Record::document`]（過帳、作廢資訊）。其他資料類別不變（`None`）。
+async fn attach_documents(
+    conn: &mut PgConnection,
+    store: &Store,
+    records: &mut [Record],
+) -> Result<(), CoreError> {
+    let Some(table) = store.document_table() else {
+        return Ok(());
+    };
+    if records.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<Id> = records.iter().map(|r| r.id).collect();
+    let states: BTreeMap<Id, DocumentInfo> = document_db::find_states(&mut *conn, table, &ids)
+        .await?
+        .into_iter()
+        .map(|row| {
+            (
+                row.id,
+                DocumentInfo {
+                    posted_at: row.posted_at,
+                    posted_by: row.posted_by,
+                    voided_at: row.voided_at,
+                    voided_by: row.voided_by,
+                },
+            )
+        })
+        .collect();
+    for record in records {
+        record.document = Some(states.get(&record.id).cloned().unwrap_or_default());
+    }
+    Ok(())
 }
 
 fn record_not_found() -> CoreError {
     CoreError::NotFound(RECORD_NOT_FOUND.into())
 }
 
-async fn commit(tx: PgTransaction<'_>) -> Result<(), CoreError> {
+pub(crate) async fn commit(tx: PgTransaction<'_>) -> Result<(), CoreError> {
     tx.commit().await.map_err(DbError::from)?;
     Ok(())
 }
@@ -1343,7 +1505,7 @@ pub(crate) async fn load_details_for_write(
 
 /// 主表資料 `parent_id` 每個明細子表（`details`，含已停用）的未刪除明細，與 `details` 的順序相同，
 /// 每個明細子表內依 `sort_order`、`id` 排序。
-async fn detail_lines(
+pub(crate) async fn detail_lines(
     conn: &mut PgConnection,
     details: &[Detail],
     parent_id: Id,
@@ -1916,6 +2078,7 @@ async fn write_lines(
                         table,
                         &NewSystemRecord {
                             id: line.id,
+                            record_no: None,
                             data: &line.data,
                             custom_data: &custom_data,
                             formula_errors: line.formula_errors.as_ref(),

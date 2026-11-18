@@ -166,6 +166,8 @@ fn protected_routes() -> Router<AppState> {
                 .patch(records::update)
                 .delete(records::delete),
         )
+        .route("/entities/{key}/records/{id}/post", post(records::post))
+        .route("/entities/{key}/records/{id}/void", post(records::void))
         .route(
             "/entities/{key}/layouts",
             get(layouts::list).post(layouts::create),

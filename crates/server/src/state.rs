@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use hammer_core::attachments::AttachmentStore;
 use hammer_core::db::sqlx::PgPool;
+use hammer_core::documents::DocumentHandlers;
 
 use crate::Config;
 
@@ -16,6 +17,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// 附件目錄與單檔大小上限（由 `config` 產生）。
     pub attachments: Arc<AttachmentStore>,
+    /// 各系統單據的過帳、作廢處理函式（§10「單據動作」）。
+    pub documents: DocumentHandlers,
 }
 
 impl AppState {
@@ -26,6 +29,7 @@ impl AppState {
             pool,
             config: Arc::new(config),
             attachments: Arc::new(attachments),
+            documents: DocumentHandlers::standard(),
         }
     }
 }

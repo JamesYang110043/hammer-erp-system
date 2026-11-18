@@ -136,6 +136,7 @@ use time::OffsetDateTime;
 
 use crate::Id;
 use crate::attachment::Attachment;
+use crate::document::DocumentInfo;
 use crate::pagination::field as page_field;
 
 /// 單號在列表排序、篩選中使用的代碼，也是保留的欄位代碼（不可作為 `field_key`）。
@@ -168,6 +169,9 @@ pub struct Record {
     /// 有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lines: Option<BTreeMap<String, Vec<Record>>>,
+    /// 系統單據主表的過帳、作廢資訊（[`crate::document`]）；不是系統單據的資料與明細為 `null`。
+    #[serde(default)]
+    pub document: Option<DocumentInfo>,
     /// 建立時間（RFC 3339）。
     #[serde(with = "time::serde::rfc3339")]
     #[specta(type = String)]
@@ -759,6 +763,7 @@ mod tests {
             formula_errors: BTreeMap::new(),
             attachments: BTreeMap::new(),
             lines: None,
+            document: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,
             updated_at: OffsetDateTime::UNIX_EPOCH,
@@ -834,6 +839,7 @@ mod tests {
             formula_errors: BTreeMap::new(),
             attachments: BTreeMap::new(),
             lines: None,
+            document: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             created_by: None,
             updated_at: OffsetDateTime::UNIX_EPOCH,

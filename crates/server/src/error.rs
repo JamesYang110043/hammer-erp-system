@@ -96,6 +96,9 @@ pub fn default_message(code: ErrorCode) -> &'static str {
         ErrorCode::PasswordChangeRequired => "請先修改密碼",
         ErrorCode::AccountLocked => "帳號已暫時鎖定，請稍後再試",
         ErrorCode::AccountDisabled => "此帳號已停用，請聯絡管理者",
+        ErrorCode::InvalidStatus => "單據目前的狀態不允許此操作",
+        ErrorCode::StockInsufficient => "庫存不足",
+        ErrorCode::LotInUse => "批號已被其他單據使用",
     }
 }
 

@@ -969,6 +969,42 @@ export type DetailSchema_Serialize = {
 };
 
 /**
+ *  單據主表的過帳、作廢資訊（[`Record::document`](crate::record::Record::document)）。
+ *  這些值不是欄位，不出現在 `data`。
+ */
+export type DocumentInfo = DocumentInfo_Serialize | DocumentInfo_Deserialize;
+
+/**
+ *  單據主表的過帳、作廢資訊（[`Record::document`](crate::record::Record::document)）。
+ *  這些值不是欄位，不出現在 `data`。
+ */
+export type DocumentInfo_Deserialize = {
+	/**  過帳時間（RFC 3339）；草稿為 `null`。 */
+	posted_at?: string | null,
+	/**  過帳人員。 */
+	posted_by?: string | null,
+	/**  作廢時間（RFC 3339）；未作廢為 `null`。 */
+	voided_at?: string | null,
+	/**  作廢人員。 */
+	voided_by?: string | null,
+};
+
+/**
+ *  單據主表的過帳、作廢資訊（[`Record::document`](crate::record::Record::document)）。
+ *  這些值不是欄位，不出現在 `data`。
+ */
+export type DocumentInfo_Serialize = {
+	/**  過帳時間（RFC 3339）；草稿為 `null`。 */
+	posted_at: string | null,
+	/**  過帳人員。 */
+	posted_by: string | null,
+	/**  作廢時間（RFC 3339）；未作廢為 `null`。 */
+	voided_at: string | null,
+	/**  作廢人員。 */
+	voided_by: string | null,
+};
+
+/**
  *  資料類別定義（API 回應）。
  * 
  *  不包含 `table_name` 等資料庫內部資訊。
@@ -1092,7 +1128,7 @@ export type EntityStorage =
 /**
  *  錯誤碼。JSON 中為 `SCREAMING_SNAKE_CASE` 字串。
  * 
- *  之後各模組的業務錯誤碼（例如 `STOCK_INSUFFICIENT`）加在這裡。
+ *  之後各模組的業務錯誤碼加在這裡。
  */
 export type ErrorCode = 
 /**  伺服器內部錯誤。 */
@@ -1120,7 +1156,22 @@ export type ErrorCode =
 /**  連續登入失敗，帳號暫時鎖定（§6.2）。`details.locked_until` 為解鎖時間（RFC 3339）。 */
 "ACCOUNT_LOCKED" | 
 /**  帳號已停用，無法登入。 */
-"ACCOUNT_DISABLED";
+"ACCOUNT_DISABLED" | 
+/**
+ *  單據狀態不允許此操作（修改、刪除非草稿；過帳非草稿；作廢非已過帳，§7.1「系統單據」）。
+ *  `details` 為 [`crate::document::InvalidStatusDetails`]。
+ */
+"INVALID_STATUS" | 
+/**
+ *  過帳或作廢時批號或商品的數量不足（§10「單據動作」）。
+ *  `details` 為 [`crate::document::StockInsufficientDetails`]。
+ */
+"STOCK_INSUFFICIENT" | 
+/**
+ *  作廢時要刪除的批號已被其他有效單據使用（§10「單據動作」）。
+ *  `details` 為 [`crate::document::LotInUseDetails`]。
+ */
+"LOT_IN_USE";
 
 /**  匯率。 */
 export type ExchangeRate = ExchangeRate_Serialize | ExchangeRate_Deserialize;
@@ -1705,6 +1756,8 @@ export type Record_Deserialize = {
 	 *  有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
 	 */
 	lines?: { [key in string]: Record_Deserialize[] } | null,
+	/**  系統單據主表的過帳、作廢資訊（[`crate::document`]）；不是系統單據的資料與明細為 `null`。 */
+	document?: DocumentInfo_Deserialize | null,
 	/**  建立時間（RFC 3339）。 */
 	created_at: string,
 	created_by?: string | null,
@@ -1744,6 +1797,8 @@ export type Record_Serialize = {
 	 *  有效的明細子表（沒有明細時為空陣列），依 `sort_order` 排序；列表與明細本身為 `null`（不輸出）。
 	 */
 	lines?: { [key in string]: Record_Serialize[] },
+	/**  系統單據主表的過帳、作廢資訊（[`crate::document`]）；不是系統單據的資料與明細為 `null`。 */
+	document: DocumentInfo_Serialize | null,
 	/**  建立時間（RFC 3339）。 */
 	created_at: string,
 	created_by: string | null,

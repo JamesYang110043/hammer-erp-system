@@ -5,6 +5,7 @@
 //! - [`audit_logs`]：操作紀錄查詢（分頁、篩選）
 //! - [`auth`]：密碼、session token、session 有效判斷、登入鎖定、目前使用者與權限檢查
 //! - [`currencies`]：幣別的列表、新增、修改（本位幣不可停用）
+//! - [`documents`]：系統單據的過帳、作廢（共通檢查、依資料類別分派處理函式、操作紀錄）
 //! - [`exchange_rates`]：匯率的查詢、新增、修改、刪除，以及單據日期適用的匯率
 //! - [`formulas`]：存檔時計算公式欄位
 //! - [`layouts`]：列表版面（`view_layouts`）
@@ -30,6 +31,7 @@ pub mod audit;
 pub mod audit_logs;
 pub mod auth;
 pub mod currencies;
+pub mod documents;
 mod error;
 pub mod exchange_rates;
 pub mod formulas;
