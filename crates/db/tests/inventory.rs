@@ -652,8 +652,9 @@ async fn inventory_checks(pool: PgPool) {
             unit_cost_twd: dec("-1"),
             ..new_lot(product, "L2", "1", "1")
         },
+        // M4c 才加上出貨明細（0012 起進貨明細可以產生批號）
         NewLot {
-            source_type: "goods_receipt_line",
+            source_type: "shipment_line",
             ..new_lot(product, "L2", "1", "1")
         },
         new_lot(product, "", "1", "1"),

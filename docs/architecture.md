@@ -1030,7 +1030,7 @@ M4b 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 
 六張表都依照 §8.6「系統資料表的共同規則」（欄位順序、`custom_data`、`formula_errors`、共通欄位、`set_updated_at` trigger、`GIN (custom_data)`、外鍵索引、`field_definitions` 的寫法），以及 §7.1「系統單據」（`record_no` 與唯一索引 `uq_<資料表>_record_no`、`sort_order`、父資料欄位）。主表另外都有：
 
-- `posted_at` / `posted_by`、`voided_at` / `voided_by`（不是欄位），CHECK 與盤點調整單相同：`CHECK ((status = 'draft') = (posted_at IS NULL))`、`CHECK ((status = 'void') = (voided_at IS NOT NULL))`、`CHECK ((posted_at IS NULL) = (posted_by IS NULL))`、`CHECK ((voided_at IS NULL) = (voided_by IS NULL))`。採購單的 `posted_at` / `posted_by` 記錄**確認**的時間與人員。
+- `posted_at` / `posted_by`、`voided_at` / `voided_by`（不是欄位），CHECK 與盤點調整單相同：`CHECK ((status = 'draft') = (posted_at IS NULL))`、`CHECK ((status = 'void') = (voided_at IS NOT NULL))`、`CHECK ((posted_at IS NULL) = (posted_by IS NULL))`、`CHECK ((voided_at IS NULL) = (voided_by IS NULL))`。採購單的 `posted_at` / `posted_by` 記錄**確認**的時間與人員。採購單、進貨單另有 `CHECK (status = 'draft' OR exchange_rate IS NOT NULL)`（確認、過帳後必須有匯率）。
 - 索引：`(<單據日期>, id)`、`(status)`、`(supplier_id)`；明細 `(<主表單數>_id, sort_order, id) WHERE deleted_at IS NULL`、`(product_id)`。
 
 表中「系統維護」的欄位依 §7.1：`is_readonly = true`，request 帶了一律忽略，由伺服器在存檔、確認、過帳時寫入。

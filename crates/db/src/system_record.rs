@@ -247,7 +247,8 @@ pub struct NewSystemRecord<'a> {
     pub id: Uuid,
     /// 系統單據的單號；不是系統單據時必須為 `None`（不寫入）。
     pub record_no: Option<&'a str>,
-    /// 完整的資料（JSON 物件），實體欄位的值從這裡取出。
+    /// 完整的資料（JSON 物件），實體欄位的值從這裡取出。沒有該鍵的實體欄位不寫入，使用資料表的
+    /// 預設值；鍵的值為 `null` 時寫入 `NULL`。
     pub data: &'a Value,
     /// 自訂欄位（JSON 物件）。
     pub custom_data: &'a Value,
@@ -287,7 +288,13 @@ fn insert_query_with_parent(
     if let Some((column, _, _)) = parent {
         qb.push(", \"").push(column).push("\", sort_order");
     }
-    for c in &table.columns {
+    // `data` 沒有的實體欄位不寫入，使用資料表的預設值（例如系統單據的金額合計 `DEFAULT 0`）
+    let columns: Vec<&SystemColumn> = table
+        .columns
+        .iter()
+        .filter(|c| new.data.get(&c.name).is_some())
+        .collect();
+    for c in &columns {
         qb.push(", \"").push(&c.name).push("\"");
     }
     qb.push(
@@ -303,7 +310,7 @@ fn insert_query_with_parent(
             .push(", ")
             .push_bind(sort_order);
     }
-    for c in &table.columns {
+    for c in columns {
         qb.push(", ");
         SystemTable::push_column_value(&mut qb, c);
     }
@@ -1051,7 +1058,7 @@ mod tests {
                 .as_str()
                 .starts_with("SELECT id, $1::uuid AS entity_id, record_no AS record_no, ")
         );
-        let data = serde_json::json!({});
+        let data = serde_json::json!({ "notes": "n" });
         let new = NewSystemRecord {
             id: Uuid::nil(),
             record_no: Some("ADJ202611-0001"),
@@ -1095,7 +1102,7 @@ mod tests {
 
     #[test]
     fn insert_and_update_read_columns_from_data() {
-        let data = serde_json::json!({});
+        let data = serde_json::json!({ "code": "C1", "credit_limit": null, "is_active": true });
         let new = NewSystemRecord {
             id: Uuid::nil(),
             record_no: None,
@@ -1128,6 +1135,26 @@ mod tests {
              formula_errors = $2, updated_by = $3, version = version + 1 \
              FROM (SELECT $4::jsonb AS d) AS v WHERE id = $5 AND version = $6 \
              AND deleted_at IS NULL"
+        );
+    }
+
+    #[test]
+    fn insert_omits_columns_missing_from_data() {
+        let data = serde_json::json!({ "code": "C1" });
+        let new = NewSystemRecord {
+            id: Uuid::nil(),
+            record_no: None,
+            data: &data,
+            custom_data: &data,
+            formula_errors: None,
+            created_by: Uuid::nil(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        assert_eq!(
+            insert_query(&table(), &new).sql().as_str(),
+            "INSERT INTO \"customers\" (id, \"code\", custom_data, formula_errors, created_at, \
+             created_by, updated_at, updated_by) SELECT $1, (v.d ->> 'code'), $2, $3, $4, $5, $6, \
+             $7 FROM (SELECT $8::jsonb AS d) AS v"
         );
     }
 
@@ -1333,7 +1360,7 @@ mod tests {
 
     #[test]
     fn insert_and_update_line_write_parent_and_sort_order() {
-        let data = serde_json::json!({});
+        let data = serde_json::json!({ "name": "王", "is_primary": false });
         let new = NewSystemRecord {
             id: Uuid::nil(),
             record_no: None,
