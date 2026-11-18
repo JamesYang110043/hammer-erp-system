@@ -98,6 +98,7 @@ use crate::formulas::{
 };
 use crate::master_data;
 use crate::numbering::{NumberingPattern, numbering_date};
+use crate::purchasing;
 use crate::record_data::{FieldError, WriteMode, normalize_record_data};
 use crate::record_lines::{
     LineError, LineFiles, LineTarget, audit_key, audit_value, duplicate_attachments,
@@ -286,6 +287,9 @@ pub async fn create_record(
     line_errors.extend(
         document_line_rules(&mut tx, &entity.key, &master, None, &details, &lines, None).await?,
     );
+    let (master, return_errors) =
+        purchase_return_rules(&mut tx, &entity.key, master, None, &mut lines).await?;
+    line_errors.extend(return_errors);
     let mut data = validation_error(master, line_errors)?;
     check_relations(&mut tx, &fields, &data, None).await?;
     if let Store::Table(_) = store {
@@ -423,6 +427,9 @@ pub async fn update_record(
         )
         .await?,
     );
+    let (master, return_errors) =
+        purchase_return_rules(&mut tx, &entity.key, master, Some(existing), &mut lines).await?;
+    line_errors.extend(return_errors);
     let mut data = validation_error(master, line_errors)?;
     let formula_errors = compute_formulas(&mut tx, &formulas, &mut data, &mut lines, now).await?;
     let formula_errors = errors_to_json(&formula_errors);
@@ -1165,6 +1172,15 @@ fn document_input<'a>(
     if store.document_table().is_none() {
         return Cow::Borrowed(input);
     }
+    without_maintained(fields, input)
+}
+
+/// 去除 `input` 中唯讀的系統欄位（系統維護的欄位）。系統明細子表的明細也適用（例如採購明細的
+/// `amount`、`received_qty`，§7.1、§8.8）；主檔類的系統明細子表（聯絡人）沒有唯讀的系統欄位。
+fn without_maintained<'a>(
+    fields: &[FieldDefinition],
+    input: &'a Map<String, Value>,
+) -> Cow<'a, Map<String, Value>> {
     let maintained = |key: &str| {
         fields
             .iter()
@@ -1908,7 +1924,11 @@ async fn prepare_line(
         Some(existing) => WriteMode::Update { existing },
         None => WriteMode::Create,
     };
-    let mut data = match normalize_record_data(&detail.fields, &line.data, mode) {
+    let input = match detail.store {
+        LineStore::Table(_) => without_maintained(&detail.fields, &line.data),
+        LineStore::CustomRecords => Cow::Borrowed(&line.data),
+    };
+    let mut data = match normalize_record_data(&detail.fields, &input, mode) {
         Ok(data) => data,
         Err(errors) => return Ok(Err(errors)),
     };
@@ -2004,6 +2024,23 @@ async fn document_line_rules(
         .filter_map(|(i, r)| Some((i, r.data.as_object()?)))
         .collect();
     stock_adjustments::check_save(tx, adjustment_type.and_then(Value::as_str), &rows).await
+}
+
+/// 進貨退回從進貨單帶入系統維護的欄位（[`purchasing::derive_return`]）。只處理通過欄位驗證的明細。
+async fn purchase_return_rules(
+    tx: &mut PgTransaction<'_>,
+    entity_key: &str,
+    master: Result<Map<String, Value>, Vec<FieldError>>,
+    existing: Option<&Map<String, Value>>,
+    lines: &mut [DetailWrite<'_>],
+) -> Result<(Result<Map<String, Value>, Vec<FieldError>>, Vec<LineError>), CoreError> {
+    let rows: Vec<(usize, &mut Map<String, Value>)> = lines
+        .iter_mut()
+        .filter(|d| d.detail.entity.key == purchasing::PURCHASE_RETURN_LINE)
+        .flat_map(|d| d.lines.iter_mut())
+        .filter_map(|l| Some((l.index, l.data.as_object_mut()?)))
+        .collect();
+    purchasing::derive_return(tx, entity_key, master, existing, rows).await
 }
 
 /// 主表與有效明細子表的公式欄位（[`Formulas`]）。
