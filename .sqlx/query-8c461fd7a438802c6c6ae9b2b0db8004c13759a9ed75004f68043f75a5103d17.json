@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            (SELECT count(*) FROM sales_orders WHERE customer_id = $1 AND deleted_at IS NULL)\n          + (SELECT count(*) FROM shipments WHERE customer_id = $1 AND deleted_at IS NULL)\n          + (SELECT count(*) FROM sales_returns WHERE customer_id = $1 AND deleted_at IS NULL)\n            AS \"n!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8c461fd7a438802c6c6ae9b2b0db8004c13759a9ed75004f68043f75a5103d17"
+}

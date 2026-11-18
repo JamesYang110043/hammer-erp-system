@@ -31,7 +31,7 @@ pub const TAXABLE: &str = "taxable";
 pub const ZERO_RATED: &str = "zero_rated";
 
 /// 四捨五入到 `dp` 位，並補齊到 `scale` 位小數（`dp ≤ scale`）。
-fn round_to(value: Decimal, dp: u32, scale: u32) -> Decimal {
+pub fn round_to(value: Decimal, dp: u32, scale: u32) -> Decimal {
     let mut v = value.round_dp_with_strategy(dp, RoundingStrategy::MidpointAwayFromZero);
     v.rescale(scale);
     v

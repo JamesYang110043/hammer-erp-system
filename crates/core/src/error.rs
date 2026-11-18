@@ -104,7 +104,7 @@ pub enum CoreError {
     /// `children`、`transactions`、`documents`、`open_orders` 為使用中的商品數、子分類數、庫存異動筆數、
     /// 採購或進貨單據張數、未結案的採購單張數（至少一個大於 0）。API 回應為 `VALIDATION`，`details` 為
     /// `{ "fields": [], "in_use_count": 3, "child_count": 1, "transaction_count": 12, "document_count": 3,
-    /// "open_purchase_order_count": 2 }`（只列出大於 0 的數量）。
+    /// "open_purchase_order_count": 2, "open_sales_order_count": 1 }`（只列出大於 0 的數量）。
     #[error("{message}")]
     RecordInUse {
         message: String,
@@ -113,6 +113,7 @@ pub enum CoreError {
         transactions: i64,
         documents: i64,
         open_orders: i64,
+        open_sales_orders: i64,
     },
 
     /// 單據目前的狀態不允許此操作（§7.1「系統單據」、§10「單據動作」）：修改、刪除非草稿，過帳非草稿，
@@ -362,6 +363,7 @@ impl From<CoreError> for ApiError {
             transactions,
             documents,
             open_orders,
+            open_sales_orders,
             ..
         } = &err
         {
@@ -380,6 +382,9 @@ impl From<CoreError> for ApiError {
             }
             if *open_orders > 0 {
                 details["open_purchase_order_count"] = serde_json::json!(open_orders);
+            }
+            if *open_sales_orders > 0 {
+                details["open_sales_order_count"] = serde_json::json!(open_sales_orders);
             }
             ApiError::new(code, err.to_string()).with_details(details)
         } else if let CoreError::InvalidStatus { status, .. } = &err {
@@ -500,6 +505,7 @@ mod tests {
             transactions: 0,
             documents: 0,
             open_orders: 0,
+            open_sales_orders: 0,
         };
         assert_eq!(err.code(), ErrorCode::Validation);
         let api: ApiError = err.into();
@@ -516,6 +522,7 @@ mod tests {
             transactions: 0,
             documents: 0,
             open_orders: 0,
+            open_sales_orders: 0,
         }
         .into();
         assert_eq!(
@@ -530,6 +537,7 @@ mod tests {
             transactions: 12,
             documents: 0,
             open_orders: 0,
+            open_sales_orders: 0,
         }
         .into();
         assert_eq!(
@@ -544,12 +552,14 @@ mod tests {
             transactions: 0,
             documents: 3,
             open_orders: 2,
+            open_sales_orders: 1,
         }
         .into();
         assert_eq!(
             api.details,
             Some(serde_json::json!({
                 "fields": [], "document_count": 3, "open_purchase_order_count": 2,
+                "open_sales_order_count": 1,
             }))
         );
     }

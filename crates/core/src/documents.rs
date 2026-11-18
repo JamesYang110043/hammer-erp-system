@@ -1,9 +1,10 @@
 //! 系統單據的過帳與作廢（docs/architecture.md §7.1「系統單據」、§8.2、§9、§10「單據動作」）。
 //!
 //! - [`post_document`]：`draft` → `posted`
-//! - [`void_document`]：`posted` → `void`（採購單：`confirmed` → `void`）
-//! - [`confirm_document`]（只有採購單）：`draft` → `confirmed`
-//! - [`close_document`]（只有採購單）：`confirmed` / `partially_received` → `closed`
+//! - [`void_document`]：`posted` → `void`（採購單、訂單：`confirmed` → `void`）
+//! - [`confirm_document`]（只有採購單、訂單）：`draft` → `confirmed`
+//! - [`close_document`]（只有採購單、訂單）：`confirmed` / `partially_received`（訂單為
+//!   `partially_shipped`）→ `closed`
 //!
 //! 各單據支援的動作與前後的狀態由處理函式決定（[`DocumentHandler::transition`]），不支援的動作 `404`。
 //!
@@ -54,6 +55,7 @@ use crate::records::{
     Detail, commit, detail_lines, document_status, fetch_record, invalid_status,
     load_details_for_write, load_target_for_write, lock_record, record_audit,
 };
+use crate::sales::{SALES_ORDER, SalesOrderHandler};
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version};
 use crate::stock_adjustments::StockAdjustmentHandler;
 
@@ -194,6 +196,7 @@ impl DocumentHandlers {
             .register(PURCHASE_ORDER, PurchaseOrderHandler)
             .register(GOODS_RECEIPT, GoodsReceiptHandler)
             .register(PURCHASE_RETURN, PurchaseReturnHandler)
+            .register(SALES_ORDER, SalesOrderHandler)
     }
 
     /// 註冊（或取代）資料類別 `entity_key` 的處理函式。
@@ -463,11 +466,13 @@ mod tests {
         assert!(handlers.get(PURCHASE_ORDER).is_some());
         assert!(handlers.get(GOODS_RECEIPT).is_some());
         assert!(handlers.get(PURCHASE_RETURN).is_some());
+        assert!(handlers.get(SALES_ORDER).is_some());
         assert!(handlers.get("customer").is_none());
         assert!(DocumentHandlers::empty().get(STOCK_ADJUSTMENT).is_none());
         assert_eq!(
             format!("{handlers:?}"),
-            "{\"goods_receipt\", \"purchase_order\", \"purchase_return\", \"stock_adjustment\"}"
+            "{\"goods_receipt\", \"purchase_order\", \"purchase_return\", \"sales_order\", \
+             \"stock_adjustment\"}"
         );
     }
 

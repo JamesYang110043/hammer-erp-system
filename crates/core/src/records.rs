@@ -271,6 +271,7 @@ pub async fn create_record(
     let formulas = formulas_of(&fields, &details);
     let mut input = document_input(&store, &fields, &req.data).into_owned();
     purchasing::save::prefill(&mut tx, &entity.key, &fields, &mut input).await?;
+    sales::save::prefill(&mut tx, &entity.key, &fields, &mut input, &req.lines).await?;
     let master = normalize_record_data(&fields, &input, WriteMode::Create);
     // 系統單據新增時一律是草稿（§7.1「系統單據」）
     let master = master.map(|mut data| {
@@ -429,7 +430,9 @@ pub async fn update_record(
     .await?;
     let mut line_errors = Vec::new();
     // 有公式時所有明細都要重算（主表的子表彙總也需要沒帶到的明細）；有金額計算的單據也是
-    let recompute_all = !formulas.is_empty() || purchasing::save::recalculates_lines(&entity.key);
+    let recompute_all = !formulas.is_empty()
+        || purchasing::save::recalculates_lines(&entity.key)
+        || sales::save::recalculates_lines(&entity.key);
     let mut lines = prepare_lines(
         &mut tx,
         &details,
@@ -1974,6 +1977,7 @@ async fn prepare_line(
             &detail.entity.key,
             &mut data,
         ));
+        errors.extend(sales::save::check_line_data(&detail.entity.key, &data));
         if !errors.is_empty() {
             return Ok(Err(errors));
         }
@@ -2114,24 +2118,31 @@ async fn receipt_rules(
     purchasing::receipts::check_save(tx, entity_key, master, &rows).await
 }
 
-/// 有金額計算的單據（[`purchasing::save::apply_amounts`]）：依所有明細重新計算明細金額與合計。修改時
-/// 所有明細都已列入 `lines`（[`purchasing::save::recalculates_lines`]）。
+/// 有金額計算的單據（[`purchasing::save::apply_amounts`]、[`sales::save::apply_amounts`]）：依所有明細
+/// 重新計算明細金額與合計。修改時所有明細都已列入 `lines`（`recalculates_lines`）。
 async fn apply_amounts(
     tx: &mut PgTransaction<'_>,
     entity_key: &str,
     data: &mut Map<String, Value>,
     lines: &mut [DetailWrite<'_>],
 ) -> Result<(), CoreError> {
-    let Some(doc) = purchasing::save::with_amounts(entity_key) else {
+    let purchase = purchasing::save::with_amounts(entity_key).map(|d| d.line_key);
+    let Some(line_key) =
+        purchase.or_else(|| sales::save::with_amounts(entity_key).map(|d| d.line_key))
+    else {
         return Ok(());
     };
     let rows: Vec<&mut Map<String, Value>> = lines
         .iter_mut()
-        .filter(|d| d.detail.entity.key == doc.line_key)
+        .filter(|d| d.detail.entity.key == line_key)
         .flat_map(|d| d.lines.iter_mut())
         .filter_map(|l| l.data.as_object_mut())
         .collect();
-    purchasing::save::apply_amounts(tx, entity_key, data, rows).await
+    if purchase.is_some() {
+        purchasing::save::apply_amounts(tx, entity_key, data, rows).await
+    } else {
+        sales::save::apply_amounts(tx, entity_key, data, rows).await
+    }
 }
 
 /// 主表與有效明細子表的公式欄位（[`Formulas`]）。

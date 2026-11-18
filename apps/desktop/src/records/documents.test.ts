@@ -55,6 +55,12 @@ describe('documents', () => {
     expect(availableActions('purchase_order', 'closed')).toEqual([]);
     expect(availableActions('purchase_order', 'void')).toEqual([]);
     expect(actionConfirmText('purchase_order', 'close')).toContain('不能再依這張採購單進貨');
+    // §8.9「訂單的狀態」：與採購單相同，部分出貨 → 結案
+    expect(availableActions('sales_order', 'draft')).toEqual(['confirm']);
+    expect(availableActions('sales_order', 'confirmed')).toEqual(['close', 'void']);
+    expect(availableActions('sales_order', 'partially_shipped')).toEqual(['close']);
+    expect(availableActions('sales_order', 'closed')).toEqual([]);
+    expect(actionConfirmText('sales_order', 'close')).toContain('不能再依這張訂單出貨');
     expect(actionConfirmText('goods_receipt', 'post')).toContain('異動庫存');
   });
 
@@ -70,6 +76,9 @@ describe('documents', () => {
     };
     expect(documentStatusNote('purchase_order', 'closed', doc, fmt)).toBe(
       '此單據已結案，不能修改。確認時間：[P]；結案時間：[C]',
+    );
+    expect(documentStatusNote('sales_order', 'partially_shipped', doc, fmt)).toBe(
+      '此單據部分出貨，不能修改。確認時間：[P]；結案時間：[C]',
     );
     expect(
       documentStatusNote('goods_receipt', 'void', { ...doc, closed_at: null, voided_at: 'V' }, fmt),
@@ -93,6 +102,13 @@ describe('documents', () => {
       'draft',
       'confirmed',
       'partially_received',
+      'closed',
+      'void',
+    ]);
+    expect(documentStatuses('sales_order')).toEqual([
+      'draft',
+      'confirmed',
+      'partially_shipped',
       'closed',
       'void',
     ]);

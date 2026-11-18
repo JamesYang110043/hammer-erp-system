@@ -1,9 +1,7 @@
-//! 銷貨模組（訂單、出貨單、銷貨退回，docs/architecture.md §8.9）存檔時的規則。
-//!
-//! 目前只有銷貨退回從出貨單帶入系統維護的欄位（[`derive_return`]）：表頭的 `customer_id`、`tax_type`、
+//! 銷貨退回存檔時從出貨單帶入系統維護的欄位（[`derive_return`]）：表頭的 `customer_id`、`tax_type`、
 //! `tax_included`，明細的 `product_id`、`unit_price`、`discount_rate`。這些欄位是唯讀的系統欄位（request
 //! 帶了一律忽略，§7.1），資料表上為 `NOT NULL`，所以存檔時一定要帶入。
-//! 金額計算、退回數量上限、退回日期、過帳與作廢在之後的 issue 加入（#147、#148、#150）。
+//! 退回數量上限、退回日期、過帳與作廢在之後的 issue 加入（#150）。
 
 use std::collections::HashMap;
 
@@ -13,18 +11,10 @@ use hammer_shared::Id;
 use hammer_shared::schema::{DataType, FieldValue, parse_value};
 use serde_json::{Map, Value};
 
+use super::{SALES_RETURN, SALES_RETURN_LINE};
 use crate::CoreError;
 use crate::record_data::FieldError;
 use crate::record_lines::LineError;
-
-/// 訂單的資料類別代碼。
-pub const SALES_ORDER: &str = "sales_order";
-/// 出貨單的資料類別代碼。
-pub const SHIPMENT: &str = "shipment";
-/// 銷貨退回的資料類別代碼。
-pub const SALES_RETURN: &str = "sales_return";
-/// 銷貨退回明細的明細子表代碼。
-pub const SALES_RETURN_LINE: &str = "sales_return_line";
 
 const SHIPMENT_ID: &str = "shipment_id";
 const SHIPMENT_LINE_ID: &str = "shipment_line_id";

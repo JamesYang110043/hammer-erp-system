@@ -8,6 +8,7 @@ import {
   STOCK_ADJUSTMENT_FIELDS,
   adjustment,
 } from '../src/test/documentFixtures';
+import { fieldDef } from '../src/test/schemaFixtures';
 import { CommandRejection, mockTauri } from './tauri-mock';
 import type { E2eCommandHandler } from './tauri-mock';
 
@@ -188,4 +189,133 @@ test('stock adjustment: viewer cannot post or void', async ({ page }) => {
   await expect(actions(page).getByRole('button', { name: VOID_BUTTON })).toHaveCount(0);
   await expect(actions(page).getByRole('button', { name: POST_BUTTON })).toHaveCount(0);
   await expect(page.getByLabel('備註')).toBeDisabled();
+});
+
+// ---------------------------------------------------------------------------
+// 訂單（§8.9「訂單的狀態」）：部分出貨只能結案；狀態篩選列出訂單的狀態
+// ---------------------------------------------------------------------------
+
+const SALES_ORDER = {
+  ...STOCK_ADJUSTMENT,
+  id: '01a1f9d2-7b30-7000-94a2-592b16d9d49a',
+  key: 'sales_order',
+  label: '訂單',
+  numbering_pattern: 'SO{yyyyMM}-{0000}',
+  sort_order: 200,
+};
+const salesField = { entity_id: SALES_ORDER.id, is_system: true, storage: 'column' } as const;
+const SALES_ORDER_FIELDS = [
+  fieldDef({
+    ...salesField,
+    field_key: 'order_date',
+    label: '訂單日期',
+    data_type: 'date',
+    is_required: true,
+    sort_order: 20,
+  }),
+  fieldDef({
+    ...salesField,
+    field_key: 'status',
+    label: '狀態',
+    data_type: 'select',
+    is_readonly: true,
+    options: [
+      { value: 'draft', label: '草稿', color: null },
+      { value: 'confirmed', label: '已確認', color: null },
+      { value: 'partially_shipped', label: '部分出貨', color: null },
+      { value: 'closed', label: '已結案', color: null },
+      { value: 'void', label: '已作廢', color: null },
+    ],
+    sort_order: 60,
+  }),
+  fieldDef({
+    ...salesField,
+    field_key: 'notes',
+    label: '備註',
+    data_type: 'long_text',
+    sort_order: 100,
+  }),
+];
+const CLOSE_BUTTON = /(^|\s)結\s?案$/;
+
+function salesOrder(status: string, closed = false): DataRecord {
+  return {
+    id: ADJUSTMENT_ID,
+    title: 'SO202611-0001 大華五金',
+    record_no: 'SO202611-0001',
+    data: { order_date: '2026-11-18', status, notes: '第一批已出貨' },
+    document: {
+      posted_at: '2026-11-18T02:00:00Z',
+      posted_by: null,
+      voided_at: null,
+      voided_by: null,
+      closed_at: closed ? '2026-11-18T05:00:00Z' : null,
+      closed_by: null,
+    },
+    created_at: '2026-11-18T01:00:00Z',
+    created_by: null,
+    updated_at: '2026-11-18T01:00:00Z',
+    updated_by: null,
+    version: closed ? 4 : 3,
+  };
+}
+
+test('sales order: partially shipped can only be closed', async ({ page }) => {
+  let current = salesOrder('partially_shipped');
+  await mockTauri(page, {
+    get_server_url: () => 'http://localhost:8080',
+    health_check: () => ({ status: 'ok', version: '0.1.0', database: 'ok' }),
+    setup_status: () => ({ needs_setup: false }),
+    current_user: () => ADMIN,
+    list_entities: () => [SALES_ORDER],
+    get_entity: () => ({ entity: SALES_ORDER, fields: SALES_ORDER_FIELDS }),
+    get_default_layout: () => ({
+      source: 'generated',
+      layout: null,
+      config: {
+        columns: ['order_date', 'status', 'notes'].map((k) => ({ field_key: k, width: null })),
+        sort: null,
+        filters: [],
+      },
+    }),
+    list_layouts: () => [],
+    list_records: () => ({ items: [current], total: 1, page: 1, page_size: 50 }),
+    get_record: () => current,
+    close_record: () => {
+      current = salesOrder('closed', true);
+      return current;
+    },
+  });
+
+  // 列表：部分出貨的標籤；狀態篩選是訂單的狀態
+  await page.goto('/#/entities/sales_order');
+  const row = page.getByRole('row', { name: /SO202611-0001/ });
+  await expect(row.locator('.ant-tag-gold', { hasText: '部分出貨' })).toBeVisible();
+  await page
+    .locator('.ant-select', { has: page.getByRole('combobox', { name: '狀態篩選' }) })
+    .click();
+  const options = page.locator('.ant-select-dropdown:visible .ant-select-item-option');
+  await expect(options).toHaveText(['全部狀態', '草稿', '已確認', '部分出貨', '已結案', '已作廢']);
+  await page.keyboard.press('Escape');
+
+  // 單據：部分出貨不可作廢、不可過帳，只能結案
+  await page.goto(`/#/entities/sales_order/${ADJUSTMENT_ID}`);
+  await expect(page.locator('.ant-card-head .ant-tag', { hasText: '部分出貨' })).toBeVisible();
+  await expect(page.getByText('此單據部分出貨，不能修改。')).toContainText(
+    '確認時間：2026-11-18 10:00:00',
+  );
+  await expect(actions(page).getByRole('button', { name: VOID_BUTTON })).toHaveCount(0);
+  await expect(actions(page).getByRole('button', { name: POST_BUTTON })).toHaveCount(0);
+
+  await actions(page).getByRole('button', { name: CLOSE_BUTTON }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('結案後不能再依這張訂單出貨');
+  await dialog.getByRole('button', { name: CLOSE_BUTTON }).click();
+
+  await expect(page.locator('.ant-card-head .ant-tag', { hasText: '已結案' })).toBeVisible();
+  await expect(page.getByText('此單據已結案，不能修改。')).toContainText(
+    '結案時間：2026-11-18 13:00:00',
+  );
+  await expect(actions(page).getByRole('button', { name: CLOSE_BUTTON })).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 });

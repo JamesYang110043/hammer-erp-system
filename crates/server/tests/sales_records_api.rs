@@ -155,12 +155,15 @@ async fn sales_order_draft(pool: PgPool) {
     );
     assert_eq!(so.data["status"], "draft");
     assert_eq!(so.data["tax_included"], false);
-    assert_eq!(so.data["subtotal"], "0.0000");
+    // 金額由伺服器計算（#147）：1020 + 50 = 1070；稅額 round(53.5) = 54
+    assert_eq!(so.data["subtotal"], "1070.0000");
+    assert_eq!(so.data["tax_amount"], "54.0000");
+    assert_eq!(so.data["total"], "1124.0000");
     let so_lines = lines(&so, "sales_order_line");
     assert_eq!(so_lines.len(), 2);
     assert_eq!(so_lines[0].data["qty"], "10.0000");
     assert_eq!(so_lines[0].data["discount_rate"], "0.1500");
-    assert_eq!(so_lines[0].data["amount"], "0.0000");
+    assert_eq!(so_lines[0].data["amount"], "1020.0000");
     assert_eq!(so_lines[0].data["shipped_qty"], "0.0000");
     assert_eq!(so_lines[0].title, "A001 商品 A001");
     assert_eq!(so_lines[1].data["discount_rate"], "0.0000");

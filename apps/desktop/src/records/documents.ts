@@ -26,6 +26,7 @@ export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
   posted: '已過帳',
   confirmed: '已確認',
   partially_received: '部分進貨',
+  partially_shipped: '部分出貨',
   closed: '已結案',
   void: '已作廢',
 };
@@ -36,6 +37,7 @@ export const DOCUMENT_STATUS_COLORS: Record<DocumentStatus, string> = {
   posted: 'green',
   confirmed: 'blue',
   partially_received: 'gold',
+  partially_shipped: 'gold',
   closed: 'green',
   void: 'red',
 };
@@ -46,6 +48,7 @@ export const DOCUMENT_STATUSES: readonly DocumentStatus[] = [
   'posted',
   'confirmed',
   'partially_received',
+  'partially_shipped',
   'closed',
   'void',
 ];
@@ -53,14 +56,28 @@ export const DOCUMENT_STATUSES: readonly DocumentStatus[] = [
 /** 採購單的資料類別代碼。 */
 export const PURCHASE_ORDER = 'purchase_order';
 
+/** 訂單的資料類別代碼。 */
+export const SALES_ORDER = 'sales_order';
+
+/** 是否為有確認、結案的訂單類單據（採購單、訂單）。 */
+function isOrder(entityKey: string): boolean {
+  return entityKey === PURCHASE_ORDER || entityKey === SALES_ORDER;
+}
+
 /**
  * 資料類別會出現的狀態（列表的狀態篩選）：採購單為草稿、已確認、部分進貨、已結案、已作廢
- * （docs/architecture.md §8.8「採購單的狀態」），其他單據為草稿、已過帳、已作廢。
+ * （docs/architecture.md §8.8「採購單的狀態」），訂單為草稿、已確認、部分出貨、已結案、已作廢
+ * （§8.9「訂單的狀態」），其他單據為草稿、已過帳、已作廢。
  */
 export function documentStatuses(entityKey: string): readonly DocumentStatus[] {
-  return entityKey === PURCHASE_ORDER
-    ? ['draft', 'confirmed', 'partially_received', 'closed', 'void']
-    : ['draft', 'posted', 'void'];
+  switch (entityKey) {
+    case PURCHASE_ORDER:
+      return ['draft', 'confirmed', 'partially_received', 'closed', 'void'];
+    case SALES_ORDER:
+      return ['draft', 'confirmed', 'partially_shipped', 'closed', 'void'];
+    default:
+      return ['draft', 'posted', 'void'];
+  }
 }
 
 /** 單據動作（`hammer_shared::document::DocumentAction`）。 */
@@ -102,20 +119,22 @@ export function isEditableDocument(entity: EntityDefinition, record?: DataRecord
 /**
  * 依目前狀態可以執行的動作（伺服器同樣檢查）：
  *
- * - 採購單（§8.8「採購單的狀態」）：草稿 → 確認；已確認 → 結案、作廢；部分進貨 → 結案
+ * - 採購單、訂單（§8.8「採購單的狀態」、§8.9「訂單的狀態」）：草稿 → 確認；已確認 → 結案、作廢；
+ *   部分進貨、部分出貨 → 結案
  * - 其他單據：草稿 → 過帳；已過帳 → 作廢
  */
 export function availableActions(
   entityKey: string,
   status: DocumentStatus | undefined,
 ): DocumentAction[] {
-  if (entityKey === PURCHASE_ORDER) {
+  if (isOrder(entityKey)) {
     switch (status) {
       case 'draft':
         return ['confirm'];
       case 'confirmed':
         return ['close', 'void'];
       case 'partially_received':
+      case 'partially_shipped':
         return ['close'];
       default:
         return [];
@@ -131,8 +150,20 @@ export function availableActions(
   }
 }
 
-/** 執行動作前確認對話框的說明（docs/architecture.md §8.2、§8.8）。 */
+/** 執行動作前確認對話框的說明（docs/architecture.md §8.2、§8.8、§8.9）。 */
 export function actionConfirmText(entityKey: string, action: DocumentAction): string {
+  if (entityKey === SALES_ORDER) {
+    switch (action) {
+      case 'confirm':
+        return '確認後金額即鎖定，訂單不能再修改或刪除，之後可以據以出貨。';
+      case 'close':
+        return '結案後不能再依這張訂單出貨，尚未出貨的數量視為取消。';
+      case 'void':
+        return '作廢後這張訂單不能再使用，作廢後不能再恢復。';
+      default:
+        break;
+    }
+  }
   if (entityKey === PURCHASE_ORDER) {
     switch (action) {
       case 'confirm':
@@ -157,7 +188,7 @@ export function actionConfirmText(entityKey: string, action: DocumentAction): st
 
 /**
  * 非草稿單據的說明文字：目前狀態與確認（過帳）、結案、作廢的時間。
- * 採購單的 `posted_at` 是確認時間（§8.8）。
+ * 採購單、訂單的 `posted_at` 是確認時間（§8.8、§8.9）。
  */
 export function documentStatusNote(
   entityKey: string,
@@ -168,9 +199,7 @@ export function documentStatusNote(
   const parts = [`此單據${DOCUMENT_STATUS_LABELS[status]}，不能修改。`];
   const times: string[] = [];
   if (document?.posted_at) {
-    times.push(
-      `${entityKey === PURCHASE_ORDER ? '確認' : '過帳'}時間：${format(document.posted_at)}`,
-    );
+    times.push(`${isOrder(entityKey) ? '確認' : '過帳'}時間：${format(document.posted_at)}`);
   }
   if (document?.closed_at) {
     times.push(`結案時間：${format(document.closed_at)}`);
