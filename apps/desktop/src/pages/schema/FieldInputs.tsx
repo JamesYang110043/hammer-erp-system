@@ -1,6 +1,7 @@
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, DatePicker, Form, Input, InputNumber, Select, Space } from 'antd';
 
+import { FULL_ROW } from '../../components/FormGrid';
 import { useEntities } from '../../api/schema';
 import type { DataType, EntityDefinition } from '../../bindings';
 import { MASTER_DATA_LABEL } from '../../schema/entities';
@@ -123,7 +124,7 @@ function relationTargetOptions(entities: readonly EntityDefinition[]) {
 /** 下拉選項的清單（值、名稱、顏色）。 */
 function OptionsField({ disabled }: { disabled: boolean }) {
   return (
-    <Form.Item label="選項" required>
+    <Form.Item className={FULL_ROW} label="選項" required>
       <Form.List
         name="options"
         rules={[

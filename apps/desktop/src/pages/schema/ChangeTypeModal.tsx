@@ -1,6 +1,7 @@
 import { Alert, Form, Modal, Select, Table, Tag, Typography } from 'antd';
 import { useState } from 'react';
 
+import { FORM_MODAL_WIDTH, FormGrid } from '../../components/FormGrid';
 import { useChangeFieldType } from '../../api/schema';
 import type { DataType, FieldDefinition } from '../../bindings';
 import { conversionFailures, formatValue } from '../../schema/errorDetails';
@@ -69,7 +70,7 @@ export function ChangeTypeModal({
       okText="變更"
       okButtonProps={{ loading: changeType.isPending }}
       destroyOnHidden
-      width={720}
+      width={FORM_MODAL_WIDTH}
     >
       {field && (
         <Form
@@ -81,31 +82,33 @@ export function ChangeTypeModal({
           onValuesChange={() => setFailures(undefined)}
           preserve={false}
         >
-          <Alert
-            showIcon
-            type="warning"
-            message="會轉換這個欄位的所有既有資料（含已刪除的資料）"
-            description="轉成文字、文字互轉、整數轉小數、單選轉多選一定成功；其他轉換只要有一筆資料無法轉換，就不會變更。"
-            style={{ marginBottom: 16 }}
-          />
-          <Form.Item label="目前型態">
-            <Typography.Text>{DATA_TYPE_LABELS[field.data_type]}</Typography.Text>
-          </Form.Item>
-          <Form.Item
-            label="新的型態"
-            name="data_type"
-            rules={[{ required: true, message: '請選擇新的型態' }]}
-          >
-            <Select
-              options={SUPPORTED_DATA_TYPES.filter((t) => t !== field.data_type).map((t) => ({
-                value: t,
-                label: DATA_TYPE_LABELS[t],
-              }))}
+          <FormGrid>
+            <Alert
+              showIcon
+              type="warning"
+              message="會轉換這個欄位的所有既有資料（含已刪除的資料）"
+              description="轉成文字、文字互轉、整數轉小數、單選轉多選一定成功；其他轉換只要有一筆資料無法轉換，就不會變更。"
+              style={{ marginBottom: 16 }}
             />
-          </Form.Item>
-          {dataType && <TypeSettingsFields dataType={dataType} />}
-          {failures && <ConversionFailures {...failures} />}
-          {error && <Alert showIcon type="error" message={error} />}
+            <Form.Item label="目前型態">
+              <Typography.Text>{DATA_TYPE_LABELS[field.data_type]}</Typography.Text>
+            </Form.Item>
+            <Form.Item
+              label="新的型態"
+              name="data_type"
+              rules={[{ required: true, message: '請選擇新的型態' }]}
+            >
+              <Select
+                options={SUPPORTED_DATA_TYPES.filter((t) => t !== field.data_type).map((t) => ({
+                  value: t,
+                  label: DATA_TYPE_LABELS[t],
+                }))}
+              />
+            </Form.Item>
+            {dataType && <TypeSettingsFields dataType={dataType} />}
+            {failures && <ConversionFailures {...failures} />}
+            {error && <Alert showIcon type="error" message={error} />}
+          </FormGrid>
         </Form>
       )}
     </Modal>

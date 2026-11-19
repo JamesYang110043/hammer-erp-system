@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { useState } from 'react';
 
+import { FORM_MODAL_WIDTH, FormGrid } from '../../components/FormGrid';
 import { apiErrorCode } from '../../api/client';
 import { useCreateExchangeRate, useUpdateExchangeRate } from '../../api/exchangeRates';
 import type { Currency, ExchangeRate } from '../../bindings';
@@ -112,6 +113,7 @@ export function ExchangeRateFormModal({
 
   return (
     <Modal
+      width={FORM_MODAL_WIDTH}
       title={rate ? '修改匯率' : '新增匯率'}
       open={open}
       onCancel={close}
@@ -145,43 +147,45 @@ export function ExchangeRateFormModal({
             : { rate_date: dayjs(taipeiToday()) }
         }
       >
-        <Form.Item
-          label="幣別"
-          name="currency_code"
-          rules={[{ required: true, message: '請選擇幣別' }]}
-        >
-          <Select
-            showSearch
-            optionFilterProp="label"
-            placeholder="選擇幣別"
-            options={currencyOptions}
-            disabled={rate !== null}
-          />
-        </Form.Item>
-        <Form.Item
-          label="日期"
-          name="rate_date"
-          extra={rate ? '要變更幣別或日期時，請刪除後重新新增' : undefined}
-          rules={[{ required: true, message: '請選擇日期' }]}
-        >
-          <DatePicker allowClear={false} disabled={rate !== null} />
-        </Form.Item>
-        <Form.Item
-          label="匯率"
-          name="rate"
-          extra="1 單位外幣兌換的新台幣金額，最多 6 位小數"
-          rules={[
-            {
-              validator: (_, value: string | undefined) => {
-                const msg = validateRateText(value);
-                return msg ? Promise.reject(new Error(msg)) : Promise.resolve();
+        <FormGrid>
+          <Form.Item
+            label="幣別"
+            name="currency_code"
+            rules={[{ required: true, message: '請選擇幣別' }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="選擇幣別"
+              options={currencyOptions}
+              disabled={rate !== null}
+            />
+          </Form.Item>
+          <Form.Item
+            label="日期"
+            name="rate_date"
+            extra={rate ? '要變更幣別或日期時，請刪除後重新新增' : undefined}
+            rules={[{ required: true, message: '請選擇日期' }]}
+          >
+            <DatePicker allowClear={false} disabled={rate !== null} />
+          </Form.Item>
+          <Form.Item
+            label="匯率"
+            name="rate"
+            extra="1 單位外幣兌換的新台幣金額，最多 6 位小數"
+            rules={[
+              {
+                validator: (_, value: string | undefined) => {
+                  const msg = validateRateText(value);
+                  return msg ? Promise.reject(new Error(msg)) : Promise.resolve();
+                },
               },
-            },
-          ]}
-        >
-          <Input autoComplete="off" inputMode="decimal" placeholder="例如 32.15" />
-        </Form.Item>
-        {error && <Alert showIcon type="error" message={error} />}
+            ]}
+          >
+            <Input autoComplete="off" inputMode="decimal" placeholder="例如 32.15" />
+          </Form.Item>
+          {error && <Alert showIcon type="error" message={error} />}
+        </FormGrid>
       </Form>
     </Modal>
   );
