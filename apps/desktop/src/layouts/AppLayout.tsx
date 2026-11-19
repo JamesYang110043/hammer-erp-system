@@ -175,18 +175,27 @@ export function AppLayout() {
   return (
     <Layout style={{ height: '100vh' }}>
       <Sider width={200} theme="light" style={{ borderRight: `1px solid ${token.colorSplit}` }}>
-        <div style={{ padding: '16px 24px' }}>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            Hammer ERP
-          </Typography.Title>
+        {/* 標題固定在上方，只有選單捲動；overscroll-behavior 讓捲到底時不帶動右側內容 */}
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          <div style={{ padding: '16px 24px', flexShrink: 0 }}>
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              Hammer ERP
+            </Typography.Title>
+          </div>
+          <nav
+            aria-label="主選單"
+            data-testid="app-nav"
+            style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain' }}
+          >
+            <Menu
+              mode="inline"
+              selectedKeys={[selected]}
+              items={menuItems}
+              onClick={({ key }) => navigate(`/${key}`)}
+              style={{ borderInlineEnd: 'none' }}
+            />
+          </nav>
         </div>
-        <Menu
-          mode="inline"
-          selectedKeys={[selected]}
-          items={menuItems}
-          onClick={({ key }) => navigate(`/${key}`)}
-          style={{ borderInlineEnd: 'none' }}
-        />
       </Sider>
       <Layout>
         <Header
@@ -235,7 +244,10 @@ export function AppLayout() {
             </Dropdown>
           </Space>
         </Header>
-        <Content style={{ padding: 24, overflow: 'auto' }}>
+        <Content
+          data-testid="app-content"
+          style={{ padding: 24, overflow: 'auto', overscrollBehavior: 'contain' }}
+        >
           <Outlet />
         </Content>
         <Footer
