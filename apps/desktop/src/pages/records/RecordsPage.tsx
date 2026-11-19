@@ -170,7 +170,7 @@ function RecordList({
         // 系統單據的狀態以固定的顏色標籤顯示
         const status = isDocument && field.field_key === STATUS_FIELD && documentStatus(record);
         return status ? (
-          <DocumentStatusTag status={status} />
+          <DocumentStatusTag status={status} entityKey={entityKey} />
         ) : (
           <FieldValue field={field} value={value} record={record} />
         );

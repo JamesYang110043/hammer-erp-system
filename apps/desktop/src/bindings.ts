@@ -178,6 +178,17 @@ export const commands = {
 	listProductLots: (productId: string, query: LotQuery_Deserialize) => typedError<Page<InventoryLot_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_product_lots", { productId, query })),
 	/**  庫存異動流水帳（需要 `record.read`），新到舊。 */
 	listInventoryTransactions: (query: TransactionQuery_Deserialize) => typedError<Page<InventoryTransaction_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_inventory_transactions", { query })),
+	/**  尚未開立發票的已過帳出貨單（需要 `record.read`，docs/architecture.md §8.11「查詢 API」）。 */
+	listUninvoicedShipments: (query: UninvoicedShipmentQuery_Deserialize) => typedError<Page<UninvoicedShipment_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_uninvoiced_shipments", { query })),
+	/**  尚未取得該類憑證的已過帳進貨單（需要 `record.read`，§8.11「查詢 API」）。 */
+	listUninvoicedReceipts: (query: UninvoicedReceiptQuery_Deserialize) => typedError<Page<UninvoicedReceipt_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_uninvoiced_receipts", { query })),
+	/**  關聯出貨單、進貨單、退回單的發票、憑證或折讓（需要 `record.read`，§8.11「查詢 API」）。 */
+	listInvoiceLinks: (query: InvoiceLinkQuery_Deserialize) => typedError<InvoiceLink_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_invoice_links", { query })),
+	/**
+	 *  發票模組的單據作廢（需要 `record.post`，§8.11「開立與作廢」）：帶作廢日期（`YYYY-MM-DD`，省略時為
+	 *  作廢當天）與原因（必填）。其他單據的作廢使用 [`void_record`]。
+	 */
+	voidInvoiceRecord: (key: string, id: string, version: number, voidDate: string | null, voidReason: string) => typedError<Record_Serialize, ClientError_Serialize>(__TAURI_INVOKE("void_invoice_record", { key, id, version, voidDate, voidReason })),
 	/**
 	 *  出貨的建議批號（需要 `record.read`，docs/architecture.md §8.9「建議批號 API」）：
 	 *  依過帳的分配順序試算，不鎖定、不寫入；庫存不足不是錯誤，回傳 `shortage`。
@@ -1798,6 +1809,52 @@ export type InventoryTransaction_Serialize = {
 	created_by_name: string | null,
 };
 
+/**  關聯某張單據的發票、憑證或折讓（含已作廢），依 `invoice_date, id` 排序。 */
+export type InvoiceLink = InvoiceLink_Serialize | InvoiceLink_Deserialize;
+
+/**  `GET /api/v1/invoicing/links` 的 query string。 */
+export type InvoiceLinkQuery = InvoiceLinkQuery_Serialize | InvoiceLinkQuery_Deserialize;
+
+/**  `GET /api/v1/invoicing/links` 的 query string。 */
+export type InvoiceLinkQuery_Deserialize = {
+	/**  `shipment`、`goods_receipt`、`sales_return`、`purchase_return`。 */
+	entity_key?: string | null,
+	record_id?: string | null,
+};
+
+/**  `GET /api/v1/invoicing/links` 的 query string。 */
+export type InvoiceLinkQuery_Serialize = {
+	/**  `shipment`、`goods_receipt`、`sales_return`、`purchase_return`。 */
+	entity_key: string | null,
+	record_id: string | null,
+};
+
+/**  關聯某張單據的發票、憑證或折讓（含已作廢），依 `invoice_date, id` 排序。 */
+export type InvoiceLink_Deserialize = {
+	/**  `sales_invoice`、`purchase_invoice`、`sales_allowance`、`purchase_allowance`。 */
+	entity_key: string,
+	record_id: string,
+	record_no: string,
+	/**  發票（憑證）號碼；折讓為 `null`。 */
+	invoice_no?: string | null,
+	/**  發票（憑證）日期；折讓為折讓日期。 */
+	invoice_date: string,
+	status: DocumentStatus,
+};
+
+/**  關聯某張單據的發票、憑證或折讓（含已作廢），依 `invoice_date, id` 排序。 */
+export type InvoiceLink_Serialize = {
+	/**  `sales_invoice`、`purchase_invoice`、`sales_allowance`、`purchase_allowance`。 */
+	entity_key: string,
+	record_id: string,
+	record_no: string,
+	/**  發票（憑證）號碼；折讓為 `null`。 */
+	invoice_no: string | null,
+	/**  發票（憑證）日期；折讓為折讓日期。 */
+	invoice_date: string,
+	status: DocumentStatus,
+};
+
 /**  列表的一個顯示欄位。 */
 export type LayoutColumn = LayoutColumn_Serialize | LayoutColumn_Deserialize;
 
@@ -2511,6 +2568,142 @@ export type TxnType =
 "adjustment" | 
 /**  作廢單據產生的反向異動。 */
 "void_reversal";
+
+/**  尚未取得該類憑證的已過帳進貨單，依 `receipt_date, id` 排序。金額為單據幣別。 */
+export type UninvoicedReceipt = UninvoicedReceipt_Serialize | UninvoicedReceipt_Deserialize;
+
+/**  `GET /api/v1/invoicing/uninvoiced-receipts` 的 query string。條件都可省略。 */
+export type UninvoicedReceiptQuery = UninvoicedReceiptQuery_Serialize | UninvoicedReceiptQuery_Deserialize;
+
+/**  `GET /api/v1/invoicing/uninvoiced-receipts` 的 query string。條件都可省略。 */
+export type UninvoicedReceiptQuery_Deserialize = {
+	supplier_id?: string | null,
+	/**  `receipt_date >= date_from`（含），`YYYY-MM-DD`。 */
+	date_from?: string | null,
+	/**  `receipt_date <= date_to`（含），`YYYY-MM-DD`。 */
+	date_to?: string | null,
+	/**  [`DocClass`]：`invoice`（預設，三聯式、電子發票）或 `customs`（海關繳納證）。 */
+	doc_class?: string | null,
+	page?: number | null,
+	page_size?: number | null,
+};
+
+/**  `GET /api/v1/invoicing/uninvoiced-receipts` 的 query string。條件都可省略。 */
+export type UninvoicedReceiptQuery_Serialize = {
+	supplier_id: string | null,
+	/**  `receipt_date >= date_from`（含），`YYYY-MM-DD`。 */
+	date_from: string | null,
+	/**  `receipt_date <= date_to`（含），`YYYY-MM-DD`。 */
+	date_to: string | null,
+	/**  [`DocClass`]：`invoice`（預設，三聯式、電子發票）或 `customs`（海關繳納證）。 */
+	doc_class: string | null,
+	page: number | null,
+	page_size: number | null,
+};
+
+/**  尚未取得該類憑證的已過帳進貨單，依 `receipt_date, id` 排序。金額為單據幣別。 */
+export type UninvoicedReceipt_Deserialize = {
+	id: string,
+	record_no: string,
+	receipt_date: string,
+	supplier_id: string,
+	supplier_code: string,
+	supplier_name: string,
+	currency_code: string,
+	exchange_rate: string | null,
+	tax_type: string,
+	total: string,
+	total_twd: string | null,
+	/**  指向此進貨單的已過帳進貨退回 `total` 合計（單據幣別）。 */
+	returned_total: string,
+	/**  `total − returned_total`。 */
+	net_total: string,
+};
+
+/**  尚未取得該類憑證的已過帳進貨單，依 `receipt_date, id` 排序。金額為單據幣別。 */
+export type UninvoicedReceipt_Serialize = {
+	id: string,
+	record_no: string,
+	receipt_date: string,
+	supplier_id: string,
+	supplier_code: string,
+	supplier_name: string,
+	currency_code: string,
+	exchange_rate: string | null,
+	tax_type: string,
+	total: string,
+	total_twd: string | null,
+	/**  指向此進貨單的已過帳進貨退回 `total` 合計（單據幣別）。 */
+	returned_total: string,
+	/**  `total − returned_total`。 */
+	net_total: string,
+};
+
+/**  尚未開立發票的已過帳出貨單（沒有被任何有效銷項發票關聯），依 `ship_date, id` 排序。 */
+export type UninvoicedShipment = UninvoicedShipment_Serialize | UninvoicedShipment_Deserialize;
+
+/**  `GET /api/v1/invoicing/uninvoiced-shipments` 的 query string。條件都可省略。 */
+export type UninvoicedShipmentQuery = UninvoicedShipmentQuery_Serialize | UninvoicedShipmentQuery_Deserialize;
+
+/**  `GET /api/v1/invoicing/uninvoiced-shipments` 的 query string。條件都可省略。 */
+export type UninvoicedShipmentQuery_Deserialize = {
+	customer_id?: string | null,
+	/**  `ship_date >= date_from`（含），`YYYY-MM-DD`。 */
+	date_from?: string | null,
+	/**  `ship_date <= date_to`（含），`YYYY-MM-DD`。 */
+	date_to?: string | null,
+	page?: number | null,
+	page_size?: number | null,
+};
+
+/**  `GET /api/v1/invoicing/uninvoiced-shipments` 的 query string。條件都可省略。 */
+export type UninvoicedShipmentQuery_Serialize = {
+	customer_id: string | null,
+	/**  `ship_date >= date_from`（含），`YYYY-MM-DD`。 */
+	date_from: string | null,
+	/**  `ship_date <= date_to`（含），`YYYY-MM-DD`。 */
+	date_to: string | null,
+	page: number | null,
+	page_size: number | null,
+};
+
+/**  尚未開立發票的已過帳出貨單（沒有被任何有效銷項發票關聯），依 `ship_date, id` 排序。 */
+export type UninvoicedShipment_Deserialize = {
+	id: string,
+	record_no: string,
+	ship_date: string,
+	customer_id: string,
+	customer_code: string,
+	customer_name: string,
+	tax_type: string,
+	tax_included: boolean,
+	subtotal: string,
+	tax_amount: string,
+	total: string,
+	/**  指向此出貨單的已過帳銷貨退回 `total` 合計。 */
+	returned_total: string,
+	/**  `total − returned_total`（參考用，發票金額仍由使用者決定）。 */
+	net_total: string,
+};
+
+/**  尚未開立發票的已過帳出貨單（沒有被任何有效銷項發票關聯），依 `ship_date, id` 排序。 */
+export type UninvoicedShipment_Serialize = {
+	id: string,
+	record_no: string,
+	ship_date: string,
+	customer_id: string,
+	customer_code: string,
+	customer_name: string,
+	tax_type: string,
+	tax_included: boolean,
+	subtotal: string,
+	tax_amount: string,
+	total: string,
+	/**  指向此出貨單的已過帳銷貨退回 `total` 合計。 */
+	returned_total: string,
+	/**  `total − returned_total`（參考用，發票金額仍由使用者決定）。 */
+	net_total: string,
+};
 
 /**
  *  `PATCH /api/v1/currencies/{code}` 的輸入。省略或 `null` 的欄位不修改。

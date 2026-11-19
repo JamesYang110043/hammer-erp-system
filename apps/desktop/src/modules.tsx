@@ -2,7 +2,6 @@ import {
   AuditOutlined,
   DatabaseOutlined,
   DollarOutlined,
-  FileTextOutlined,
   PayCircleOutlined,
   SettingOutlined,
   TransactionOutlined,
@@ -43,7 +42,6 @@ export interface ModuleEntry {
  */
 export const MODULES: readonly ModuleEntry[] = [
   { path: 'inventory', label: '進出貨', icon: <SwapOutlined /> },
-  { path: 'invoices', label: '發票', icon: <FileTextOutlined /> },
   { path: 'finance', label: '財務', icon: <DollarOutlined /> },
   {
     path: 'users',

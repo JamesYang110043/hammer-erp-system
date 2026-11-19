@@ -22,6 +22,10 @@ use hammer_shared::inventory::{
     AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
     StockBalance, StockBalanceQuery, TransactionQuery,
 };
+use hammer_shared::invoice::{
+    InvoiceLink, InvoiceLinkQuery, UninvoicedReceipt, UninvoicedReceiptQuery, UninvoicedShipment,
+    UninvoicedShipmentQuery,
+};
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
     ViewLayout,
@@ -664,6 +668,63 @@ pub async fn list_inventory_transactions(
     query: TransactionQuery,
 ) -> Result<Page<InventoryTransaction>, ClientError> {
     state.list_inventory_transactions(&query).await
+}
+
+/// 尚未開立發票的已過帳出貨單（需要 `record.read`，docs/architecture.md §8.11「查詢 API」）。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_uninvoiced_shipments(
+    state: State<'_, AppState>,
+    query: UninvoicedShipmentQuery,
+) -> Result<Page<UninvoicedShipment>, ClientError> {
+    state.list_uninvoiced_shipments(&query).await
+}
+
+/// 尚未取得該類憑證的已過帳進貨單（需要 `record.read`，§8.11「查詢 API」）。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_uninvoiced_receipts(
+    state: State<'_, AppState>,
+    query: UninvoicedReceiptQuery,
+) -> Result<Page<UninvoicedReceipt>, ClientError> {
+    state.list_uninvoiced_receipts(&query).await
+}
+
+/// 關聯出貨單、進貨單、退回單的發票、憑證或折讓（需要 `record.read`，§8.11「查詢 API」）。
+#[tauri::command]
+#[specta::specta]
+pub async fn list_invoice_links(
+    state: State<'_, AppState>,
+    query: InvoiceLinkQuery,
+) -> Result<Vec<InvoiceLink>, ClientError> {
+    state.list_invoice_links(&query).await
+}
+
+/// 發票模組的單據作廢（需要 `record.post`，§8.11「開立與作廢」）：帶作廢日期（`YYYY-MM-DD`，省略時為
+/// 作廢當天）與原因（必填）。其他單據的作廢使用 [`void_record`]。
+#[tauri::command]
+#[specta::specta]
+pub async fn void_invoice_record(
+    state: State<'_, AppState>,
+    key: String,
+    id: Id,
+    version: i32,
+    void_date: Option<String>,
+    void_reason: String,
+) -> Result<Record, ClientError> {
+    // 日期格式與伺服器相同（`YYYY-MM-DD`），以 request 型別的反序列化檢查
+    let void_date = void_date.filter(|s| !s.trim().is_empty());
+    let req: DocumentActionRequest = serde_json::from_value(serde_json::json!({
+        "version": version,
+        "void_date": void_date.as_deref().map(str::trim),
+        "void_reason": void_reason,
+    }))
+    .map_err(|_| ClientError::InvalidInput {
+        message: "作廢日期格式必須是 YYYY-MM-DD".into(),
+    })?;
+    state
+        .document_action(&key, id, DocumentAction::Void, &req)
+        .await
 }
 
 /// 出貨的建議批號（需要 `record.read`，docs/architecture.md §8.9「建議批號 API」）：
