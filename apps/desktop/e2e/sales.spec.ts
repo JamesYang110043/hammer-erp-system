@@ -240,7 +240,7 @@ test('sales order: product fills sale price, preview matches server, confirm', a
   await expect(p.getByText('銷貨', { exact: true })).toBeVisible();
   await expect(p.getByRole('menuitem', { name: /訂單/ })).toBeVisible();
   await expect(p.getByRole('menuitem', { name: /出貨單/ })).toBeVisible();
-  await expect(p.getByRole('menuitem', { name: /銷貨退回/ })).toHaveCount(0);
+  await expect(p.getByRole('menuitem', { name: /銷貨退回/ })).toBeVisible();
   await p.goto('/#/entities/sales_order/new');
 
   await expect(p.getByRole('textbox', { name: '訂單日期', exact: true })).toHaveValue(

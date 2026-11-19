@@ -102,6 +102,8 @@ const CARRIED_LINE_FIELDS: Record<string, readonly string[]> = {
   [PURCHASE_RETURN_LINE]: [PURCHASING_FIELDS.goodsReceiptLine],
   // 出貨明細的訂單明細（訂單轉出貨單時帶入，§8.9）
   shipment_line: ['sales_order_line_id'],
+  // 銷貨退回明細的出貨明細（選擇出貨單時帶入）
+  sales_return_line: ['shipment_line_id'],
 };
 
 /**

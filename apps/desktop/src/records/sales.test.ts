@@ -10,12 +10,15 @@ import {
   overShippedRows,
   previewInputs,
   previewRowErrors,
+  returnLinesFromShipment,
   rowAllocations,
   salePrice,
   salesEntities,
   salesLineAmount,
+  salesReturnableQty,
   salesTotals,
   shipmentLinesFromOrder,
+  shipmentNotReturnable,
   splitByLots,
   usedLots,
 } from './sales';
@@ -278,5 +281,79 @@ describe('shipment lots', () => {
       [0, 'L-02', '7.0000', '577.50'],
       [1, 'L-03', '1.0000', '90.00'],
     ]);
+  });
+});
+
+describe('sales return', () => {
+  const shipment = {
+    lines: {
+      shipment_line: [
+        {
+          id: 's1',
+          data: {
+            product_id: 'p1',
+            qty: '12.0000',
+            unit_price: '120.0000',
+            discount_rate: '0.1500',
+            lot_no: null,
+          },
+        },
+        { id: 's2', data: { product_id: 'p2', qty: '2.0000', unit_price: '33.3333' } },
+      ],
+    },
+  } as never;
+  const posted = (id: string, lines: [string, string][]) =>
+    ({
+      id,
+      lines: {
+        sales_return_line: lines.map(([line, qty]) => ({
+          id: `${id}-${line}`,
+          data: { shipment_line_id: line, qty },
+        })),
+      },
+    }) as never;
+
+  it('only posted shipments can be returned', () => {
+    expect(shipmentNotReturnable('posted')).toBeUndefined();
+    expect(shipmentNotReturnable('draft')).toBe('出貨單尚未過帳');
+    expect(shipmentNotReturnable('void')).toBe('出貨單已作廢');
+  });
+
+  it('returnable qty subtracts other posted returns (§8.9 example: 12 → 8 → 4)', () => {
+    const returns = [posted('r1', [['s1', '8.0000']]), posted('r2', [['s2', '2.0000']])];
+    const returnable = salesReturnableQty(shipment, returns);
+    expect([...returnable]).toEqual([
+      ['s1', '4.0000'],
+      ['s2', '0.0000'],
+    ]);
+    // 修改已過帳的退回本身時不計入自己
+    expect(salesReturnableQty(shipment, returns, 'r1').get('s1')).toBe('12.0000');
+    expect(returnLinesFromShipment(shipment, returnable)).toEqual([
+      {
+        shipment_line_id: 's1',
+        product_id: 'p1',
+        unit_price: '120.0000',
+        discount_rate: '0.1500',
+        qty: '4.0000',
+      },
+    ]);
+  });
+
+  it('lists the lots added back by a posted return', () => {
+    const txn = {
+      id: 't1',
+      txn_type: 'sales_return',
+      product_id: 'p1',
+      product_code: 'A001',
+      product_name: '螺絲',
+      lot_no: 'L-02',
+      qty_change: '7.0000',
+      unit_cost_twd: '82.5000',
+      ref_line_id: 'a',
+    } as InventoryTransaction;
+    expect(usedLots([txn], ['a'], 'sales_return')).toMatchObject([
+      { row: 0, lotNo: 'L-02', qty: '7.0000', costTwd: '577.50' },
+    ]);
+    expect(usedLots([txn], ['a'])).toEqual([]);
   });
 });

@@ -10,7 +10,12 @@ import { unwrap } from '../../api/client';
 import { useTaxRates } from '../../api/currencies';
 import { useProductLots } from '../../api/inventory';
 import { MAX_PAGE_SIZE, recordKey } from '../../api/records';
-import { salesOrderQuery, useShipmentTransactions } from '../../api/sales';
+import {
+  salesOrderQuery,
+  shipmentReturnableQuery,
+  useDocumentLotTransactions,
+  useShipmentReturnable,
+} from '../../api/sales';
 import { commands } from '../../bindings';
 import type { Record as DataRecord } from '../../bindings';
 import { documentStatus, formatQty } from '../../records/documents';
@@ -21,25 +26,31 @@ import type { DetailTable, LineFormValues } from '../../records/lines';
 import { groupThousands } from '../../records/display';
 import {
   SALES_FIELDS as F,
+  SALES_RETURN,
+  SALES_RETURN_LINE,
   SHIPMENT,
   SHIPMENT_LINE,
   lotPicksError,
   orderNotShippable,
+  returnLinesFromShipment,
   salePrice,
   salesLineKey,
   shipmentLinesFromOrder,
+  shipmentNotReturnable,
   splitByLots,
   usedLots,
 } from '../../records/sales';
 import type { LotPick, RowAllocation } from '../../records/sales';
 
 /**
- * 訂單、出貨單（docs/architecture.md §8.9）在動態表單中的專屬輸入與自動帶入：
+ * 訂單、出貨單、銷貨退回（docs/architecture.md §8.9）在動態表單中的專屬輸入與自動帶入：
  *
  * - {@link SalesAutofill}：明細選商品帶入售價；出貨單選客戶帶入送貨地址、選訂單帶入未出貨明細
  * - {@link useShipmentAllocation}、{@link ShipmentLotCell}：出貨明細每一列的建議批號（先進先出試算）
  *   與手動批號的可用數量，可以開啟 {@link LotPickerModal} 指定批號（拆成每個批號一列）
- * - {@link UsedLotsTable}：過帳後實際扣用的批號與成本
+ * - {@link UsedLotsTable}：出貨單過帳後實際扣用的批號、銷貨退回過帳後加回的批號與成本
+ * - {@link SalesReturnAutofill}、{@link ShipmentReturnableQty}：銷貨退回選擇出貨單後帶入可退的明細、
+ *   顯示每一列的可退數量
  */
 
 function textOf(value: unknown): string | undefined {
@@ -419,16 +430,39 @@ function trimZeros(raw: string): string {
   return raw.includes('.') ? raw.replace(/\.?0+$/, '') : raw;
 }
 
-// ---- 過帳後實際扣用的批號 ----
+// ---- 過帳後扣用（加回）的批號 ----
 
-/** 出貨單過帳後實際扣用的批號與成本（依明細順序）。 */
-export function UsedLotsTable({ record }: { record: DataRecord }) {
-  const txns = useShipmentTransactions(record.id);
-  const lineIds = (record.lines?.[SHIPMENT_LINE] ?? []).map((l) => l.id);
-  const items = usedLots(txns.data?.items ?? [], lineIds);
+const LOT_TABLE = {
+  [SHIPMENT]: {
+    lineKey: SHIPMENT_LINE,
+    title: '實際扣用的批號',
+    empty: '沒有扣用批號（服務類商品不扣庫存）',
+  },
+  [SALES_RETURN]: {
+    lineKey: SALES_RETURN_LINE,
+    title: '加回的批號',
+    empty: '沒有加回批號（服務類商品不處理庫存）',
+  },
+} as const;
+
+/**
+ * 出貨單過帳後實際扣用的批號、銷貨退回過帳後加回的批號（原出貨扣除的批號），
+ * 列出數量、單位成本與成本，依明細順序。
+ */
+export function UsedLotsTable({
+  record,
+  docType,
+}: {
+  record: DataRecord;
+  docType: typeof SHIPMENT | typeof SALES_RETURN;
+}) {
+  const config = LOT_TABLE[docType];
+  const txns = useDocumentLotTransactions(docType, record.id);
+  const lineIds = (record.lines?.[config.lineKey] ?? []).map((l) => l.id);
+  const items = usedLots(txns.data?.items ?? [], lineIds, docType);
   return (
-    <section aria-label="實際扣用的批號" style={{ marginBottom: 24 }}>
-      <Typography.Title level={5}>實際扣用的批號</Typography.Title>
+    <section aria-label={config.title} style={{ marginBottom: 24 }}>
+      <Typography.Title level={5}>{config.title}</Typography.Title>
       <Table
         size="small"
         bordered
@@ -436,7 +470,7 @@ export function UsedLotsTable({ record }: { record: DataRecord }) {
         loading={txns.isLoading}
         rowKey={(u) => `${u.lineId}:${u.lotNo}`}
         dataSource={items}
-        locale={{ emptyText: '沒有扣用批號（服務類商品不扣庫存）' }}
+        locale={{ emptyText: config.empty }}
         columns={[
           {
             key: 'row',
@@ -471,5 +505,108 @@ export function UsedLotsTable({ record }: { record: DataRecord }) {
         ]}
       />
     </section>
+  );
+}
+
+// ---- 銷貨退回 ----
+
+/**
+ * 銷貨退回選了出貨單：帶入客戶、稅別、單價含稅（系統維護，顯示與金額預覽用）與可退數量大於 0 的明細
+ * （§8.9「銷貨退回」）。已有明細時先詢問是否取代。只有新增中的草稿使用（存檔後不可更換出貨單）。
+ */
+export function SalesReturnAutofill({
+  details,
+  onChange,
+}: {
+  details: readonly DetailTable[];
+  onChange: () => void;
+}) {
+  const form = Form.useFormInstance();
+  const queryClient = useQueryClient();
+  const { message, modal } = App.useApp();
+  const shipmentId = textOf(Form.useWatch(F.shipment, form));
+  const prev = useRef(textOf(form.getFieldValue(F.shipment)));
+
+  const apply = async (id: string) => {
+    const table = details.find((d) => d.entity.key === SALES_RETURN_LINE);
+    if (!table) {
+      return;
+    }
+    const result = await queryClient
+      .fetchQuery({ ...shipmentReturnableQuery(id), staleTime: 0 })
+      .catch(() => undefined);
+    if (!result) {
+      message.error('無法讀取出貨單');
+      return;
+    }
+    const { shipment, returnable } = result;
+    const reason = shipmentNotReturnable(documentStatus(shipment));
+    if (reason) {
+      message.warning(`${reason}，無法退回`);
+      return;
+    }
+    const lines = returnLinesFromShipment(shipment, returnable);
+    const name = shipment.record_no ?? '出貨單';
+    const path = [LINES_FORM_KEY, SALES_RETURN_LINE];
+    const fill = () => {
+      form.setFieldsValue({
+        [F.customer]: shipment.data[F.customer] ?? undefined,
+        [F.taxType]: shipment.data[F.taxType] ?? undefined,
+        [F.taxIncluded]: shipment.data[F.taxIncluded] === true,
+      });
+      form.setFieldValue(
+        path,
+        lines.map((data) => initialFormValues(table.fields, data)),
+      );
+      onChange();
+      if (lines.length > 0) {
+        message.success(
+          `已帶入 ${name} 的 ${lines.length} 筆可退明細，請修改退回數量或刪除不退的列`,
+        );
+      } else {
+        message.warning(`${name} 已沒有可退的數量`);
+      }
+    };
+    const rows = (form.getFieldValue(path) ?? []) as unknown[];
+    if (rows.length > 0) {
+      modal.confirm({
+        title: '要以出貨單的明細取代目前的明細嗎？',
+        content: `會帶入 ${name} 可退的明細，目前的 ${rows.length} 筆明細會被取代。`,
+        okText: '取代',
+        cancelText: '保留目前的明細',
+        onOk: fill,
+      });
+      return;
+    }
+    fill();
+  };
+
+  useEffect(() => {
+    // Form.useWatch 第一次繪製可能是 undefined（欄位還沒註冊）：與表單目前的值相同才比較
+    if (shipmentId !== textOf(form.getFieldValue(F.shipment))) {
+      return;
+    }
+    const before = prev.current;
+    prev.current = shipmentId;
+    if (shipmentId && shipmentId !== before) {
+      void apply(shipmentId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipmentId]);
+
+  return null;
+}
+
+/** 銷貨退回明細的可退數量：出貨明細的數量減去其他已過帳退回的數量。 */
+export function ShipmentReturnableQty({ row }: { row: (string | number)[] }) {
+  const form = Form.useFormInstance();
+  const shipmentId = textOf(Form.useWatch(F.shipment, form));
+  const lineId = textOf(Form.useWatch([...row, F.shipmentLine], form));
+  const result = useShipmentReturnable(shipmentId);
+  const qty = lineId ? result.data?.returnable.get(lineId) : undefined;
+  return qty ? (
+    <Typography.Text strong>{formatQty(qty)}</Typography.Text>
+  ) : (
+    <Typography.Text type="secondary">—</Typography.Text>
   );
 }

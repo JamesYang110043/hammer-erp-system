@@ -62,6 +62,26 @@ export const SHIPMENT_LINE: EntityDefinition = documentEntity({
   sort_order: 0,
 });
 
+export const SALES_RETURN: EntityDefinition = documentEntity({
+  id: '01a1f9d2-7b30-7004-a2fd-f5fe1974d3b8',
+  key: 'sales_return',
+  label: '銷貨退回',
+  numbering_pattern: 'SR{yyyyMM}-{0000}',
+  title_template: '{record_no} {customer_id.name}',
+  sort_order: 220,
+});
+
+export const SALES_RETURN_LINE: EntityDefinition = documentEntity({
+  id: '01a1f9d2-7b30-7005-96eb-7d816fcd7344',
+  key: 'sales_return_line',
+  label: '銷貨退回明細',
+  kind: 'detail',
+  parent_entity_id: SALES_RETURN.id,
+  numbering_pattern: null,
+  title_template: '{product_id.code} {product_id.name}',
+  sort_order: 0,
+});
+
 const TAX_OPTIONS = [
   { value: 'taxable', label: '應稅', color: null },
   { value: 'zero_rated', label: '零稅率', color: null },
@@ -262,6 +282,105 @@ export const SHIPMENT_LINE_FIELDS = [
   sys(SHIPMENT_LINE, { field_key: 'notes', label: '備註', data_type: 'long_text', sort_order: 90 }),
 ];
 
+/** 銷貨退回：客戶、稅別、單價含稅由伺服器從出貨單帶入（唯讀）。 */
+export const SALES_RETURN_FIELDS = [
+  sys(SALES_RETURN, {
+    field_key: 'shipment_id',
+    label: '出貨單',
+    data_type: 'relation',
+    is_required: true,
+    relation_entity_id: SHIPMENT.id,
+    sort_order: 10,
+  }),
+  sys(SALES_RETURN, {
+    field_key: 'customer_id',
+    label: '客戶',
+    data_type: 'relation',
+    is_readonly: true,
+    relation_entity_id: CUSTOMER.id,
+    sort_order: 20,
+  }),
+  sys(SALES_RETURN, {
+    field_key: 'return_date',
+    label: '退回日期',
+    data_type: 'date',
+    is_required: true,
+    sort_order: 30,
+  }),
+  sys(SALES_RETURN, {
+    field_key: 'tax_type',
+    label: '稅別',
+    data_type: 'select',
+    is_readonly: true,
+    options: TAX_OPTIONS,
+    sort_order: 40,
+  }),
+  sys(SALES_RETURN, {
+    field_key: 'tax_included',
+    label: '單價含稅',
+    data_type: 'boolean',
+    is_readonly: true,
+    sort_order: 50,
+  }),
+  status(SALES_RETURN, [
+    ['draft', '草稿'],
+    ['posted', '已過帳'],
+    ['void', '已作廢'],
+  ]),
+  money(SALES_RETURN, 'subtotal', '未稅金額', 70),
+  money(SALES_RETURN, 'tax_amount', '稅額', 80),
+  money(SALES_RETURN, 'total', '總計', 90),
+  money(SALES_RETURN, 'cost_total_twd', '退回成本', 100, 2),
+  sys(SALES_RETURN, { field_key: 'reason', label: '退回原因', sort_order: 110 }),
+  sys(SALES_RETURN, { field_key: 'notes', label: '備註', data_type: 'long_text', sort_order: 120 }),
+];
+
+export const SALES_RETURN_LINE_FIELDS = [
+  sys(SALES_RETURN_LINE, {
+    field_key: 'shipment_line_id',
+    label: '出貨明細',
+    data_type: 'relation',
+    is_required: true,
+    is_visible: false,
+    relation_entity_id: SHIPMENT_LINE.id,
+    sort_order: 10,
+  }),
+  sys(SALES_RETURN_LINE, {
+    field_key: 'product_id',
+    label: '商品',
+    data_type: 'relation',
+    is_readonly: true,
+    relation_entity_id: PRODUCT.id,
+    sort_order: 20,
+  }),
+  sys(SALES_RETURN_LINE, {
+    field_key: 'qty',
+    label: '數量',
+    data_type: 'decimal',
+    is_required: true,
+    decimal_places: 4,
+    validation: MIN_ZERO,
+    sort_order: 30,
+  }),
+  money(SALES_RETURN_LINE, 'unit_price', '單價', 40),
+  sys(SALES_RETURN_LINE, {
+    field_key: 'discount_rate',
+    label: '折扣率',
+    data_type: 'decimal',
+    is_readonly: true,
+    decimal_places: 4,
+    sort_order: 50,
+  }),
+  money(SALES_RETURN_LINE, 'amount', '金額', 60),
+  money(SALES_RETURN_LINE, 'cost_amount_twd', '成本', 70, 2),
+  sys(SALES_RETURN_LINE, {
+    field_key: 'notes',
+    label: '備註',
+    data_type: 'long_text',
+    sort_order: 80,
+  }),
+];
+
 /** 銷貨相關的資料類別（`list_entities`）。 */
 export const SALES_ENTITIES = [
   PRODUCT,
@@ -270,6 +389,8 @@ export const SALES_ENTITIES = [
   SALES_ORDER_LINE,
   SHIPMENT,
   SHIPMENT_LINE,
+  SALES_RETURN,
+  SALES_RETURN_LINE,
 ];
 
 /** `get_entity` 的回應。 */
@@ -279,6 +400,8 @@ export function salesEntityDetail(key: string) {
     sales_order_line: SALES_ORDER_LINE_FIELDS,
     shipment: SHIPMENT_FIELDS,
     shipment_line: SHIPMENT_LINE_FIELDS,
+    sales_return: SALES_RETURN_FIELDS,
+    sales_return_line: SALES_RETURN_LINE_FIELDS,
   };
   const entity = SALES_ENTITIES.find((e) => e.key === key)!;
   return { entity, fields: fields[key] ?? [] };
@@ -288,3 +411,4 @@ export const CUSTOMER_ID = '0196f5a0-0000-7000-8000-000000000d01';
 export const CUSTOMER_TITLE = 'C001 大同五金行';
 export const SALES_ORDER_ID = '0196f5a0-0000-7000-8000-000000000d11';
 export const SHIPMENT_ID = '0196f5a0-0000-7000-8000-000000000d21';
+export const SALES_RETURN_ID = '0196f5a0-0000-7000-8000-000000000d31';
