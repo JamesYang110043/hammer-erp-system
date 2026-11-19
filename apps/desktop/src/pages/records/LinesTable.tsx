@@ -18,8 +18,8 @@ import {
 } from '../../records/purchasing';
 import { FormulaValue } from './FieldValue';
 import { ReceiptLotNoInput, ReturnableQty } from './PurchasingInputs';
-import { SHIPMENT_LINE } from '../../records/sales';
-import { ShipmentLotCell } from './SalesInputs';
+import { SALES_RETURN_LINE, SHIPMENT_LINE } from '../../records/sales';
+import { ShipmentLotCell, ShipmentReturnableQty } from './SalesInputs';
 import { RecordFieldInput } from './RecordFieldInput';
 import { CurrentQty, LotNoInput, UnitCostInput } from './StockAdjustmentLineInputs';
 
@@ -78,6 +78,8 @@ export function LinesTable({
   const isPurchaseReturn = entity.key === PURCHASE_RETURN_LINE;
   // 出貨明細：批號留空為先進先出；草稿顯示建議批號、可以指定批號
   const isShipment = entity.key === SHIPMENT_LINE;
+  // 銷貨退回明細：草稿顯示可退數量；明細只能從出貨單帶入
+  const isSalesReturn = entity.key === SALES_RETURN_LINE;
 
   return (
     <Form.List name={listName}>
@@ -215,6 +217,15 @@ export function LinesTable({
             ),
           });
         }
+        if (isSalesReturn && canWrite) {
+          const qtyIndex = columns.findIndex((c) => c.key === PURCHASING_FIELDS.qty);
+          columns.splice(qtyIndex < 0 ? columns.length : qtyIndex, 0, {
+            key: '__returnable_qty',
+            title: '可退數量',
+            align: 'right',
+            render: (_, row) => <ShipmentReturnableQty row={[...listName, row.name]} />,
+          });
+        }
         if (canWrite) {
           columns.push({
             title: '操作',
@@ -248,8 +259,8 @@ export function LinesTable({
               dataSource={rows.map((r) => ({ key: r.key, name: r.name }))}
               locale={{ emptyText: '沒有明細' }}
             />
-            {/* 進貨退回的明細只能從進貨單帶入 */}
-            {canWrite && !isPurchaseReturn && (
+            {/* 進貨退回、銷貨退回的明細只能從進貨單、出貨單帶入 */}
+            {canWrite && !isPurchaseReturn && !isSalesReturn && (
               <Button
                 type="dashed"
                 icon={<PlusOutlined />}

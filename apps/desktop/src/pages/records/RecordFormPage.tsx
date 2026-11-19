@@ -96,11 +96,12 @@ import { LinesTable } from './LinesTable';
 import type { LineRefs } from './LinesTable';
 import { ExchangeRateInput, PurchaseReturnAutofill, PurchasingAutofill } from './PurchasingInputs';
 import { useAmountPreview } from './useAmountPreview';
-import { SalesAutofill, UsedLotsTable } from './SalesInputs';
+import { SalesAutofill, SalesReturnAutofill, UsedLotsTable } from './SalesInputs';
 import { ShipmentAllocationContext, useShipmentAllocation } from './shipmentAllocation';
 import { unshippedByLine, useSalesOrder } from '../../api/sales';
 import {
   SALES_FIELDS,
+  SALES_RETURN,
   SHIPMENT,
   SHIPMENT_LINE,
   manualLotShortages,
@@ -261,7 +262,8 @@ function RecordForm({
   const preview = useFormulaPreview(previewRequest).data;
   useAmountPreview(form, entityKey, current, editable);
   // 訂單、出貨單（§8.9）：售價、訂單帶入；出貨單的建議批號與存檔前的數量檢查
-  const isSales = salesLineKey(entityKey) !== undefined;
+  // 銷貨退回的稅別、單價等由出貨單帶入，不使用 SalesAutofill
+  const isSales = salesLineKey(entityKey) !== undefined && entityKey !== SALES_RETURN;
   const isShipment = entityKey === SHIPMENT;
   const allocation = useShipmentAllocation(current, editable && isShipment);
   const shipmentOrderId = current[SALES_FIELDS.salesOrder];
@@ -567,6 +569,9 @@ function RecordForm({
           {editable && entityKey === PURCHASE_RETURN && !record && (
             <PurchaseReturnAutofill details={details} onChange={onValuesChange} />
           )}
+          {editable && entityKey === SALES_RETURN && !record && (
+            <SalesReturnAutofill details={details} onChange={onValuesChange} />
+          )}
           {editable && isSales && (
             <SalesAutofill entityKey={entityKey} details={details} onChange={onValuesChange} />
           )}
@@ -645,6 +650,10 @@ function RecordForm({
                         (entityKey === PURCHASE_RETURN &&
                           record !== undefined &&
                           field.field_key === PURCHASING_FIELDS.goodsReceipt) ||
+                        // 銷貨退回建立後不可更換出貨單（§8.9 `sales_returns`）
+                        (entityKey === SALES_RETURN &&
+                          record !== undefined &&
+                          field.field_key === SALES_FIELDS.shipment) ||
                         undefined
                       }
                       relation={record?.relations?.[field.field_key]}
@@ -674,9 +683,11 @@ function RecordForm({
               />
             ))}
           </ShipmentAllocationContext.Provider>
-          {isShipment && record && (status === 'posted' || status === 'void') && (
-            <UsedLotsTable record={record} />
-          )}
+          {(isShipment || entityKey === SALES_RETURN) &&
+            record &&
+            (status === 'posted' || status === 'void') && (
+              <UsedLotsTable record={record} docType={isShipment ? SHIPMENT : SALES_RETURN} />
+            )}
           {editable && (
             <Form.Item>
               <Button

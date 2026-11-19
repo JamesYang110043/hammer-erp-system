@@ -19,9 +19,9 @@ import type { RecordData } from './form';
 
 export { SALES_ORDER };
 export const SALES_ORDER_LINE = 'sales_order_line';
-export const SHIPMENT = 'shipment';
+export const SHIPMENT = 'shipment' as const;
 export const SHIPMENT_LINE = 'shipment_line';
-export const SALES_RETURN = 'sales_return';
+export const SALES_RETURN = 'sales_return' as const;
 export const SALES_RETURN_LINE = 'sales_return_line';
 
 /** 「銷貨」選單分組列出的系統單據，依此順序。 */
@@ -60,15 +60,19 @@ export const SALES_FIELDS = {
   lotNo: 'lot_no',
   costAmountTwd: 'cost_amount_twd',
   salesOrderLine: 'sales_order_line_id',
+  shipment: 'shipment_id',
+  shipmentLine: 'shipment_line_id',
 } as const;
 
-/** 有金額預覽的銷貨單據 → 明細子表代碼（訂單、出貨單）。 */
+/** 有金額預覽的銷貨單據 → 明細子表代碼（訂單、出貨單、銷貨退回）。 */
 const SALES_PRICED: Record<string, string> = {
   [SALES_ORDER]: SALES_ORDER_LINE,
   [SHIPMENT]: SHIPMENT_LINE,
+  // 稅別、單價含稅、單價、折扣率由伺服器從出貨單帶入，畫面只預覽金額
+  [SALES_RETURN]: SALES_RETURN_LINE,
 };
 
-/** 銷貨單據的金額預覽用的明細子表代碼；不是訂單、出貨單時回傳 `undefined`。 */
+/** 銷貨單據的金額預覽用的明細子表代碼；不是訂單、出貨單、銷貨退回時回傳 `undefined`。 */
 export function salesLineKey(entityKey: string): string | undefined {
   return SALES_PRICED[entityKey];
 }
@@ -454,16 +458,18 @@ export interface UsedLot {
 }
 
 /**
- * 庫存異動（`txn_type = shipment`、來源為此出貨單）→ 實際扣用的批號，依明細順序、扣除順序
- * （異動由新到舊排列，反轉後為扣除的順序）。`lineIds` 為明細 id，依表單順序。
+ * 庫存異動（`txn_type = shipment`、來源為此出貨單；或 `sales_return`、來源為此退回單）→
+ * 扣用（加回）的批號，依明細順序、處理順序（異動由新到舊排列，反轉後為處理的順序）。
+ * `lineIds` 為明細 id，依表單順序；數量一律為正數。
  */
 export function usedLots(
   txns: readonly InventoryTransaction[],
   lineIds: readonly string[],
+  txnType: InventoryTransaction['txn_type'] = 'shipment',
 ): UsedLot[] {
   const order = new Map(lineIds.map((id, i) => [id, i]));
   return txns
-    .filter((t) => t.txn_type === 'shipment')
+    .filter((t) => t.txn_type === txnType)
     .slice()
     .reverse()
     .map((t) => {
@@ -482,4 +488,77 @@ export function usedLots(
       };
     })
     .sort((a, b) => (a.row ?? Number.MAX_SAFE_INTEGER) - (b.row ?? Number.MAX_SAFE_INTEGER));
+}
+
+// ---- 銷貨退回 ----
+
+/** 出貨單不能退回的原因（§8.9「銷貨退回」）；可以退回時回傳 `undefined`。 */
+export function shipmentNotReturnable(status: DocumentStatus | undefined): string | undefined {
+  switch (status) {
+    case 'posted':
+      return undefined;
+    case 'void':
+      return '出貨單已作廢';
+    default:
+      return '出貨單尚未過帳';
+  }
+}
+
+/**
+ * 每一列出貨明細的可退數量（4 位小數），鍵為出貨明細 id：
+ * `出貨明細的 qty − 該出貨明細在其他「已過帳」銷貨退回中的 qty 合計`。
+ *
+ * `postedReturns` 為指向此出貨單、已過帳的銷貨退回（含明細）；`excludeId` 的退回不計入。
+ */
+export function salesReturnableQty(
+  shipment: Pick<DataRecord, 'lines'>,
+  postedReturns: readonly Pick<DataRecord, 'id' | 'lines'>[],
+  excludeId?: string,
+): Map<string, string> {
+  const returned = new Map<string, Dec>();
+  for (const r of postedReturns) {
+    if (r.id === excludeId) {
+      continue;
+    }
+    for (const line of r.lines?.[SALES_RETURN_LINE] ?? []) {
+      const id = line.data[SALES_FIELDS.shipmentLine];
+      const qty = parse(line.data[SALES_FIELDS.qty]);
+      if (typeof id === 'string' && qty) {
+        returned.set(id, add(returned.get(id) ?? ZERO, qty));
+      }
+    }
+  }
+  const result = new Map<string, string>();
+  for (const line of shipment.lines?.[SHIPMENT_LINE] ?? []) {
+    const qty = parse(line.data[SALES_FIELDS.qty]);
+    if (qty) {
+      result.set(line.id, format(sub(qty, returned.get(line.id) ?? ZERO), AMOUNT_SCALE));
+    }
+  }
+  return result;
+}
+
+/**
+ * 出貨單帶入銷貨退回的明細（JSON 存值）：可退數量大於 0 的每一列，帶入出貨明細、商品、單價、折扣率
+ * （商品、單價、折扣率為系統維護，只用於顯示與金額預覽，存檔時由伺服器帶入），數量為可退數量。
+ */
+export function returnLinesFromShipment(
+  shipment: Pick<DataRecord, 'lines'>,
+  returnable: ReadonlyMap<string, string>,
+): RecordData[] {
+  return (shipment.lines?.[SHIPMENT_LINE] ?? []).flatMap((line) => {
+    const qty = returnable.get(line.id);
+    if (!positive(qty)) {
+      return [];
+    }
+    return [
+      {
+        [SALES_FIELDS.shipmentLine]: line.id,
+        [SALES_FIELDS.product]: line.data[SALES_FIELDS.product] ?? null,
+        [SALES_FIELDS.unitPrice]: line.data[SALES_FIELDS.unitPrice] ?? null,
+        [SALES_FIELDS.discountRate]: line.data[SALES_FIELDS.discountRate] ?? '0',
+        [SALES_FIELDS.qty]: qty!,
+      },
+    ];
+  });
 }
