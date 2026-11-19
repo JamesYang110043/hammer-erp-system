@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COALESCE(sum(total), 0) AS \"total!\"\n        FROM sales_allowances\n        WHERE sales_invoice_id = $1 AND status = 'posted' AND deleted_at IS NULL\n          AND id IS DISTINCT FROM $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Numeric",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b0ad3968cacba3d3ff4b5e925d6f583d25111db441adc214c287c4e67b2e1f4b"
+}

@@ -26,6 +26,7 @@ use hammer_shared::schema::{DataType, FieldValue, parse_value};
 use serde_json::{Map, Value};
 use time::Date;
 
+use super::allowances;
 use super::amounts::apply_manual_tax;
 use super::number::{self, MSG_INVOICE_NO_FORMAT};
 use super::{
@@ -99,41 +100,19 @@ pub fn apply_tax_period(entity_key: &str, data: &mut Map<String, Value>) {
     }
 }
 
-/// 折讓的原發票欄位、帶入的對象欄位、更換時的訊息。
-struct AllowanceSource {
-    invoice_field: &'static str,
-    party_field: &'static str,
-    fixed_message: &'static str,
-}
-
-fn allowance_source(entity_key: &str) -> Option<AllowanceSource> {
-    match entity_key {
-        SALES_ALLOWANCE => Some(AllowanceSource {
-            invoice_field: "sales_invoice_id",
-            party_field: "customer_id",
-            fixed_message: MSG_INVOICE_FIXED,
-        }),
-        PURCHASE_ALLOWANCE => Some(AllowanceSource {
-            invoice_field: "purchase_invoice_id",
-            party_field: "supplier_id",
-            fixed_message: MSG_PURCHASE_INVOICE_FIXED,
-        }),
-        _ => None,
-    }
-}
-
 /// 折讓存檔時從原發票（憑證）帶入表頭（新增與修改都執行；不是折讓時不做事）。
 ///
 /// - `master`：主表正規化後的結果（修改時已與既有資料合併）；`existing`：修改前的資料。
 ///
 /// 原發票不存在或已刪除時不帶入，交給之後的關聯檢查回報；修改時更換了原發票 → 主表的原發票欄位錯誤。
+/// 帶入後檢查原發票已開立、折讓日期、關聯的退回單（[`allowances`]）。
 pub async fn derive_allowance(
     conn: &mut PgConnection,
     entity_key: &str,
     master: Result<Map<String, Value>, Vec<FieldError>>,
     existing: Option<&Map<String, Value>>,
 ) -> Result<Result<Map<String, Value>, Vec<FieldError>>, CoreError> {
-    let Some(source) = allowance_source(entity_key) else {
+    let Some(source) = allowances::source_of(entity_key) else {
         return Ok(master);
     };
     let Ok(mut data) = master else {
@@ -153,10 +132,23 @@ pub async fn derive_allowance(
     } else {
         db::find_purchase_invoice_for_allowance(&mut *conn, invoice_id).await?
     };
-    if let Some(invoice) = invoice {
-        apply_invoice(&mut data, source.party_field, &invoice);
+    let Some(invoice) = invoice else {
+        return Ok(Ok(data));
+    };
+    apply_invoice(&mut data, source.party_field, &invoice);
+    let mut errors = allowances::invoice_errors(
+        source,
+        &invoice,
+        date_of(data.get(allowances::ALLOWANCE_DATE)),
+    );
+    errors.extend(
+        allowances::check_return(conn, source, &data, Some(invoice.party_id), None, false).await?,
+    );
+    if errors.is_empty() {
+        Ok(Ok(data))
+    } else {
+        Ok(Err(errors))
     }
-    Ok(Ok(data))
 }
 
 /// 表頭帶入原發票的客戶（廠商）與稅別。
@@ -261,7 +253,10 @@ pub fn check_header(entity_key: &str, data: &mut Map<String, Value>) -> Vec<Fiel
 // ---------------------------------------------------------------------------
 
 /// 有明細金額的發票模組單據：`(資料類別, 明細子表)`。
-const PRICED: &[(&str, &str)] = &[(SALES_INVOICE, SALES_INVOICE_LINE)];
+const PRICED: &[(&str, &str)] = &[
+    (SALES_INVOICE, SALES_INVOICE_LINE),
+    (SALES_ALLOWANCE, SALES_ALLOWANCE_LINE),
+];
 
 /// 有金額計算時的明細子表代碼。
 pub fn amount_lines(entity_key: &str) -> Option<&'static str> {
@@ -285,7 +280,8 @@ pub fn check_line_data(detail_key: &str, data: &Map<String, Value>) -> Vec<Field
 }
 
 /// 依明細重新計算金額並寫入 `data` 與每一列明細（全部驗證通過之後），套用手動稅額。手動稅額不符合
-/// 規則時為 `tax_amount_manual` 的欄位錯誤。不是有金額計算的單據時不做事。
+/// 規則時為 `tax_amount_manual` 的欄位錯誤；銷貨折讓再檢查累計上限（`total` 的欄位錯誤）。不是有金額
+/// 計算的單據時不做事。
 pub(crate) async fn apply_amounts(
     conn: &mut PgConnection,
     entity_key: &str,
@@ -331,7 +327,7 @@ pub(crate) async fn apply_amounts(
         Value::String(result.tax_amount.to_string()),
     );
     data.insert("total".into(), Value::String(result.total.to_string()));
-    Ok(())
+    allowances::check_cap_on_save(conn, entity_key, data).await
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +453,7 @@ pub(crate) fn field_error(key: &str, message: impl Into<String>) -> FieldError {
     }
 }
 
-fn decimal_of(v: Option<&Value>) -> Option<Decimal> {
+pub(crate) fn decimal_of(v: Option<&Value>) -> Option<Decimal> {
     match v? {
         Value::String(s) => Decimal::from_str(s.trim()).ok(),
         _ => None,
@@ -516,6 +512,8 @@ mod tests {
             party_id: Uuid::from_u128(7),
             tax_type: "zero_rated".into(),
             doc_type: "triplicate".into(),
+            invoice_date: date!(2026 - 11 - 19),
+            total: Decimal::ZERO,
         };
         let mut data = json!({ "customer_id": "ignored" })
             .as_object()

@@ -204,6 +204,16 @@ async fn sales_invoice_and_allowance_drafts(pool: PgPool) {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"]["tax_period"], "202701");
 
+    // 折讓只能指向已開立的發票（#185）；以 SQL 模擬開立
+    sqlx::query(
+        "UPDATE sales_invoices SET status = 'posted', posted_at = now(), posted_by = $2 WHERE id = $1",
+    )
+    .bind(invoice.id)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let allowance = create(
         &pool,
         &token,
@@ -271,7 +281,7 @@ async fn sales_invoice_and_allowance_drafts(pool: PgPool) {
 /// 進項憑證（關聯進貨單）與進貨折讓。
 #[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
 async fn purchase_invoice_and_allowance_drafts(pool: PgPool) {
-    let (_, token) = editor(&pool).await;
+    let (user, token) = editor(&pool).await;
     let (_, supplier, product) = master_data(&pool, &token).await;
     let receipt = create(
         &pool,
@@ -312,6 +322,16 @@ async fn purchase_invoice_and_allowance_drafts(pool: PgPool) {
     let links = lines(&invoice, "purchase_invoice_receipt");
     assert_eq!(links.len(), 1);
     assert_eq!(links[0].data["goods_receipt_id"], json!(receipt.id));
+
+    // 折讓只能指向已開立的發票（#185）；以 SQL 模擬開立
+    sqlx::query(
+        "UPDATE purchase_invoices SET status = 'posted', posted_at = now(), posted_by = $2 WHERE id = $1",
+    )
+    .bind(invoice.id)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let allowance = create(
         &pool,

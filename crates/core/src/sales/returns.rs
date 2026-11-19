@@ -31,10 +31,12 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use hammer_db::invoicing as invoicing_db;
 use hammer_db::sales::{self as db, ReturnLineRow, ShipmentForReturn, ShipmentLineForReturn};
 use hammer_db::sqlx::PgConnection;
 use hammer_shared::Id;
 use hammer_shared::decimal::Decimal;
+use hammer_shared::document::DocumentRef;
 use hammer_shared::inventory::TxnType;
 use hammer_shared::schema::{DataType, FieldValue, parse_value};
 use serde_json::{Map, Value};
@@ -47,6 +49,7 @@ use crate::formulas::today_of;
 use crate::inventory::{
     Allocation, Inventory, Line, LockRequest, Source, allocations_of_line, qty4,
 };
+use crate::invoicing::SALES_ALLOWANCE;
 use crate::purchasing::amounts::{TWD_SCALE, with_scale};
 use crate::purchasing::save::line_errors;
 use crate::record_data::FieldError;
@@ -535,6 +538,23 @@ async fn post(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), 
 }
 
 async fn void(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), CoreError> {
+    // 被有效的銷貨折讓關聯時不可作廢（§8.11「其他單據的作廢限制」）；開立折讓時以 FOR UPDATE 鎖定
+    // 銷貨退回，這裡退回單已由框架鎖定，所以兩邊不會同時成功
+    let allowances =
+        invoicing_db::posted_allowances_of_sales_return(&mut *conn, doc.record_id, None).await?;
+    if let Some((_, first)) = allowances.first() {
+        return Err(CoreError::DocumentsInUse {
+            message: format!("此銷貨退回已有折讓單 {first}，請先作廢折讓單"),
+            documents: allowances
+                .iter()
+                .map(|(id, no)| DocumentRef {
+                    entity_key: SALES_ALLOWANCE.into(),
+                    record_id: *id,
+                    record_no: no.clone(),
+                })
+                .collect(),
+        });
+    }
     let rows = db::list_return_lines_for_update(&mut *conn, doc.record_id).await?;
     let txns = db::return_transactions(&mut *conn, doc.record_id).await?;
     let req = LockRequest {
