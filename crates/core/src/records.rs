@@ -96,6 +96,7 @@ use crate::documents::STOCK_ADJUSTMENT;
 use crate::formulas::{
     FormulaErrors, Formulas, errors_from_json, errors_to_json, load_targets, today_of, value_type,
 };
+use crate::invoicing;
 use crate::master_data;
 use crate::numbering::{NumberingPattern, numbering_date};
 use crate::purchasing;
@@ -292,6 +293,7 @@ pub async fn create_record(
         req.data.contains_key(EXCHANGE_RATE),
     )
     .await?;
+    let master = invoicing::save::derive_allowance(&mut tx, &entity.key, master, None).await?;
     let mut line_errors = Vec::new();
     let mut lines =
         prepare_lines(&mut tx, &details, &req.lines, None, false, &mut line_errors).await?;
@@ -430,6 +432,8 @@ pub async fn update_record(
         req.data.contains_key(EXCHANGE_RATE),
     )
     .await?;
+    let master =
+        invoicing::save::derive_allowance(&mut tx, &entity.key, master, Some(existing)).await?;
     let mut line_errors = Vec::new();
     // 有公式時所有明細都要重算（主表的子表彙總也需要沒帶到的明細）；有金額計算的單據也是
     let recompute_all = !formulas.is_empty()
@@ -1194,6 +1198,7 @@ fn system_rules(
     let mut data = master?;
     let errors = master_data::check_data(entity_key, &mut data, existing);
     if errors.is_empty() {
+        invoicing::save::apply_tax_period(entity_key, &mut data);
         Ok(data)
     } else {
         Err(errors)
