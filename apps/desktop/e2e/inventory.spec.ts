@@ -14,6 +14,7 @@ import {
   adjustment,
   lot,
 } from '../src/test/documentFixtures';
+import { openNavSection } from './nav';
 import { mockTauri } from './tauri-mock';
 
 const ADMIN = {
@@ -173,6 +174,7 @@ test('opening stock: enter, post and check inventory', async ({ page: p }) => {
 
   // 從選單「庫存」開啟盤點調整單，新增期初庫存
   await p.goto('/');
+  await openNavSection(p, '庫存');
   await p.getByRole('menuitem', { name: /盤點調整單/ }).click();
   await p.goto('/#/entities/stock_adjustment/new');
   await p.locator('.ant-select', { has: p.getByRole('combobox', { name: '類型' }) }).click();

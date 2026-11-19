@@ -12,6 +12,7 @@ import {
   SHIPMENT_ID,
   salesEntityDetail,
 } from '../src/test/salesFixtures';
+import { openNavSection } from './nav';
 import { mockTauri } from './tauri-mock';
 
 /**
@@ -268,6 +269,7 @@ test('sales return from posted shipment: returnable qty, preview, post, lots add
 
   // 從選單「銷貨」開啟銷貨退回
   await p.goto('/');
+  await openNavSection(p, '銷貨');
   await expect(p.getByRole('menuitem', { name: /銷貨退回/ })).toBeVisible();
   await p.goto('/#/entities/sales_return/new');
   await expect(p.getByRole('textbox', { name: '退回日期', exact: true })).toHaveValue(

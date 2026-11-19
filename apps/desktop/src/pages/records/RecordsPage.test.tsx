@@ -12,6 +12,7 @@ import type {
 import { ADMIN, VIEWER, startupCommands } from '../../test/fixtures';
 import { commandError, mockCommands } from '../../test/ipc';
 import type { CommandHandler } from '../../test/ipc';
+import { sideNav } from '../../test/nav';
 import { renderWithProviders } from '../../test/render';
 import { REPAIR, entityDetail, fieldDef } from '../../test/schemaFixtures';
 
@@ -201,7 +202,7 @@ describe('動態列表', () => {
     const user = userEvent.setup();
     await firstRow();
 
-    const menu = screen.getByRole('menu');
+    const menu = sideNav();
     expect(within(menu).getByRole('menuitem', { name: /維修單/ })).toHaveClass(
       'ant-menu-item-selected',
     );

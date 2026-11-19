@@ -14,6 +14,7 @@ import {
   purchasingEntityDetail,
   purchasingRecord,
 } from '../src/test/purchasingFixtures';
+import { openNavSection } from './nav';
 import { mockTauri } from './tauri-mock';
 import type { E2eCommandHandler } from './tauri-mock';
 
@@ -179,6 +180,7 @@ test('foreign purchase order: supplier fills currency and rate, preview matches 
 
   // 從選單「進貨」開啟採購單
   await p.goto('/');
+  await openNavSection(p, '進貨');
   await expect(p.getByRole('menuitem', { name: /採購單/ })).toBeVisible();
   await expect(p.getByRole('menuitem', { name: /進貨單/ })).toBeVisible();
   await p.goto('/#/entities/purchase_order/new');

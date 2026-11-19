@@ -14,6 +14,7 @@ import {
 } from '../../test/fixtures';
 import { commandError, mockCommands } from '../../test/ipc';
 import type { CommandHandler } from '../../test/ipc';
+import { navSectionItems, openNavSection } from '../../test/nav';
 import { renderWithProviders } from '../../test/render';
 import type { CurrentUser } from '../../bindings';
 
@@ -52,12 +53,9 @@ function save(dialog: ReturnType<typeof within>) {
 describe('幣別、匯率選單與權限', () => {
   it('admin_sees_currencies_and_rates_under_master_data', async () => {
     renderAt('#/connection');
-    const menu = await screen.findByRole('menu', undefined, { timeout: PAGE_LOAD_TIMEOUT });
-    const group = within(menu)
-      .getByText('基本資料', { selector: '.ant-menu-item-group-title' })
-      .closest('li')!;
-    expect(within(group).getByRole('menuitem', { name: /幣別/ })).toBeInTheDocument();
-    expect(within(group).getByRole('menuitem', { name: /匯率/ })).toBeInTheDocument();
+    await screen.findByRole('navigation', { name: '主選單' }, { timeout: PAGE_LOAD_TIMEOUT });
+    await openNavSection(userEvent.setup(), '基本資料');
+    expect(navSectionItems('基本資料')).toEqual(expect.arrayContaining(['幣別', '匯率']));
   });
 
   it.each([
@@ -65,9 +63,10 @@ describe('幣別、匯率選單與權限', () => {
     ['viewer', VIEWER],
   ])('%s_sees_rates_but_not_currencies', async (_, user) => {
     renderAt('#/connection', user);
-    const menu = await screen.findByRole('menu', undefined, { timeout: PAGE_LOAD_TIMEOUT });
-    expect(within(menu).getByRole('menuitem', { name: /匯率/ })).toBeInTheDocument();
-    expect(within(menu).queryByRole('menuitem', { name: /幣別/ })).not.toBeInTheDocument();
+    await screen.findByRole('navigation', { name: '主選單' }, { timeout: PAGE_LOAD_TIMEOUT });
+    await openNavSection(userEvent.setup(), '基本資料');
+    expect(navSectionItems('基本資料')).toContain('匯率');
+    expect(navSectionItems('基本資料')).not.toContain('幣別');
   });
 
   it('editor_opening_currencies_route_sees_forbidden', async () => {

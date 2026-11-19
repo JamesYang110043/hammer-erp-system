@@ -16,6 +16,7 @@ import {
   TAX_RATES,
   purchasingRecord,
 } from '../src/test/purchasingFixtures';
+import { openNavSection } from './nav';
 import { mockTauri } from './tauri-mock';
 import type { E2eCommandHandler } from './tauri-mock';
 
@@ -226,6 +227,7 @@ test('purchase invoice from goods receipts: seller, amounts, register, allowance
   });
 
   await p.goto('/');
+  await openNavSection(p, '發票');
   await expect(p.getByRole('menuitem', { name: /進項憑證/ })).toBeVisible();
   await expect(p.getByRole('menuitem', { name: /進貨折讓/ })).toBeVisible();
   await p.goto('/#/entities/purchase_invoice/new');

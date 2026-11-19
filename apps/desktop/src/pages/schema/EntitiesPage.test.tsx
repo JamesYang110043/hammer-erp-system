@@ -11,6 +11,7 @@ import { dragDownOneRow } from '../../test/dnd';
 import { ADMIN, VIEWER, startupCommands } from '../../test/fixtures';
 import { commandError, mockCommands } from '../../test/ipc';
 import type { CommandHandler } from '../../test/ipc';
+import { navSectionItems, openNavSection, sideNav } from '../../test/nav';
 import { renderWithProviders } from '../../test/render';
 import { REPAIR, entityDetail } from '../../test/schemaFixtures';
 import { TAIPEI_OFFSET_MINUTES } from '../../utils/time';
@@ -428,24 +429,19 @@ describe('左側選單', () => {
     });
     renderWithProviders(<App />);
 
-    const repair = await screen.findByRole(
-      'menuitem',
-      { name: /維修單/ },
-      { timeout: PAGE_LOAD_TIMEOUT },
-    );
-    expect(
-      screen.getByText('主檔', { selector: '.ant-menu-item-group-title' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('單據', { selector: '.ant-menu-item-group-title' }),
-    ).toBeInTheDocument();
+    const user = userEvent.setup();
+    await screen.findByRole('menuitem', { name: '主檔' }, { timeout: PAGE_LOAD_TIMEOUT });
+    await openNavSection(user, '主檔');
+    await openNavSection(user, '單據');
+    expect(navSectionItems('主檔')).toEqual(['維修單']);
+    // 單據組內依排序：報價單（-1）在訂單（0）前面；明細子表不列出
+    expect(navSectionItems('單據')).toEqual(['報價單', '訂單']);
     expect(screen.queryByRole('menuitem', { name: /訂單明細/ })).not.toBeInTheDocument();
-
-    // 單據組內依排序：報價單（-1）在訂單（0）前面
-    const items = screen.getAllByRole('menuitem').map((el) => el.textContent);
-    expect(items.indexOf('報價單')).toBeLessThan(items.indexOf('訂單'));
-    expect(items.indexOf('維修單')).toBeLessThan(items.indexOf('報價單'));
-    expect(repair).toBeInTheDocument();
+    // 主檔區塊在單據區塊前面
+    const titles = within(sideNav())
+      .getAllByRole('menuitem')
+      .map((el) => el.textContent);
+    expect(titles.indexOf('主檔')).toBeLessThan(titles.indexOf('單據'));
   });
 });
 

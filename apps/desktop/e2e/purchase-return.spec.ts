@@ -14,6 +14,7 @@ import {
   purchasingEntityDetail,
   purchasingRecord,
 } from '../src/test/purchasingFixtures';
+import { openNavSection } from './nav';
 import { mockTauri } from './tauri-mock';
 
 /**
@@ -269,6 +270,7 @@ test('purchase return: from posted receipt, returnable qty, post, stock, void', 
 
   // 選單「進貨」有進貨退回
   await p.goto('/');
+  await openNavSection(p, '進貨');
   await expect(p.getByRole('menuitem', { name: /進貨退回/ })).toBeVisible();
   await p.goto('/#/entities/purchase_return/new');
   await expect(p.getByRole('textbox', { name: '退回日期', exact: true })).toHaveValue(

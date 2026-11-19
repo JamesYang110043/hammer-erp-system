@@ -19,6 +19,7 @@ import {
 import { ADMIN, VIEWER, startupCommands } from '../../test/fixtures';
 import { mockCommands } from '../../test/ipc';
 import type { CommandHandler } from '../../test/ipc';
+import { navSectionItems } from '../../test/nav';
 import { renderWithProviders } from '../../test/render';
 import { taipeiToday } from '../../utils/time';
 
@@ -117,13 +118,9 @@ describe('庫存選單', () => {
       { name: /盤點調整單/ },
       { timeout: PAGE_LOAD_TIMEOUT },
     );
-    const group = adjustmentItem.closest<HTMLElement>('.ant-menu-item-group')!;
-    expect(within(group).getByText('庫存')).toBeInTheDocument();
-    expect(
-      within(group)
-        .getAllByRole('menuitem')
-        .map((el) => el.textContent),
-    ).toEqual(['盤點調整單', '庫存查詢']);
+    expect(adjustmentItem).toBeInTheDocument();
+    // 目前頁面（庫存查詢）所屬的區塊自動展開
+    expect(navSectionItems('庫存')).toEqual(['盤點調整單', '庫存查詢']);
   });
 });
 
