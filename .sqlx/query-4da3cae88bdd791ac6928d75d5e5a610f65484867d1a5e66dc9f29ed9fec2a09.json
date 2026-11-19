@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, product_id, unit_price, discount_rate\n        FROM shipment_lines\n        WHERE shipment_id = $1 AND id = ANY($2) AND deleted_at IS NULL\n        ORDER BY id\n        ",
+  "query": "\n        SELECT id, product_id, unit_price, discount_rate, qty\n        FROM shipment_lines\n        WHERE shipment_id = $1 AND id = ANY($2) AND deleted_at IS NULL\n        ORDER BY id\n        ",
   "describe": {
     "columns": [
       {
@@ -46,6 +46,17 @@
             "name": "discount_rate"
           }
         }
+      },
+      {
+        "ordinal": 4,
+        "name": "qty",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "shipment_lines",
+            "name": "qty"
+          }
+        }
       }
     ],
     "parameters": {
@@ -58,8 +69,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "20355ba15aeecd69c8149a2b237dbd1b94a42c91e53765fcdf5e4e38ad0cbb5c"
+  "hash": "4da3cae88bdd791ac6928d75d5e5a610f65484867d1a5e66dc9f29ed9fec2a09"
 }

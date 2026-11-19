@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT t.lot_id, sum(t.qty_change) AS \"qty!\"\n        FROM inventory_transactions t\n        JOIN sales_return_lines l ON l.id = t.ref_line_id\n        JOIN sales_returns r ON r.id = l.sales_return_id\n        WHERE l.shipment_line_id = $1\n          AND t.txn_type = 'sales_return'\n          AND l.deleted_at IS NULL AND r.deleted_at IS NULL AND r.status = 'posted'\n        GROUP BY t.lot_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lot_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "inventory_transactions",
+            "name": "lot_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "qty!",
+        "type_info": "Numeric",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "6e7ff7ce34cb6b8f9fd973975d6e17b6c477dcf0edf15035c5762f4fefe2d4ac"
+}

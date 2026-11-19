@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, status, customer_id, tax_type, tax_included\n        FROM shipments\n        WHERE id = $1 AND deleted_at IS NULL\n        FOR SHARE\n        ",
+  "query": "\n        SELECT id, status, customer_id, tax_type, tax_included, ship_date\n        FROM shipments\n        WHERE id = $1 AND deleted_at IS NULL\n        FOR UPDATE\n        ",
   "describe": {
     "columns": [
       {
@@ -57,6 +57,17 @@
             "name": "tax_included"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "ship_date",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "ship_date"
+          }
+        }
       }
     ],
     "parameters": {
@@ -69,8 +80,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "430b1b7a3dd73218191bfce23d3e84842f70f1e2a59a16b3fc2bd694123f8601"
+  "hash": "9b16c057e2e1164c8bd012fb742ddaef337f8cfa7ee6ce5137f03cce3317818e"
 }

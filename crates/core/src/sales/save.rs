@@ -11,7 +11,8 @@
 //! 修改時 [`crate::records`] 一律帶入所有明細（[`recalculates_lines`]），所以只改表頭（例如稅別、含稅）
 //! 時也會重新計算明細金額。
 //!
-//! 目前有訂單與出貨單；銷貨退回的金額計算在之後的 issue 加入（#150）。
+//! 訂單、出貨單、銷貨退回都有金額計算；銷貨退回的稅別、含稅、單價、折扣率由出貨單帶入
+//! （[`super::returns::derive_return`]），不帶入預設稅別。
 
 use std::collections::BTreeMap;
 
@@ -25,7 +26,9 @@ use hammer_shared::schema::FieldDefinition;
 use serde_json::{Map, Value};
 
 use super::amounts;
-use super::{SALES_ORDER, SALES_ORDER_LINE, SHIPMENT, SHIPMENT_LINE};
+use super::{
+    SALES_ORDER, SALES_ORDER_LINE, SALES_RETURN, SALES_RETURN_LINE, SHIPMENT, SHIPMENT_LINE,
+};
 use crate::CoreError;
 use crate::inventory::normalize_lot_no;
 use crate::purchasing::amounts::AMOUNT_SCALE;
@@ -61,16 +64,25 @@ pub struct SalesDocument {
     pub entity_key: &'static str,
     /// 明細子表代碼。
     pub line_key: &'static str,
+    /// 新增時是否由 [`prefill`] 帶入預設稅別（銷貨退回沿用出貨單的值，不帶入）。
+    pub prefills_tax: bool,
 }
 
 const PRICED: &[SalesDocument] = &[
     SalesDocument {
         entity_key: SALES_ORDER,
         line_key: SALES_ORDER_LINE,
+        prefills_tax: true,
     },
     SalesDocument {
         entity_key: SHIPMENT,
         line_key: SHIPMENT_LINE,
+        prefills_tax: true,
+    },
+    SalesDocument {
+        entity_key: SALES_RETURN,
+        line_key: SALES_RETURN_LINE,
+        prefills_tax: false,
     },
 ];
 
@@ -100,7 +112,7 @@ pub(crate) async fn prefill(
     input: &mut Map<String, Value>,
     lines: &BTreeMap<String, Vec<LineInput>>,
 ) -> Result<(), CoreError> {
-    let Some(doc) = with_amounts(entity_key) else {
+    let Some(doc) = with_amounts(entity_key).filter(|d| d.prefills_tax) else {
         return Ok(());
     };
     let missing = input.get(TAX_TYPE).is_none_or(Value::is_null);
@@ -315,6 +327,8 @@ mod tests {
         assert!(priced_line(SALES_ORDER_LINE));
         assert!(priced_line(SHIPMENT_LINE));
         assert!(!recalculates_lines("purchase_order"));
-        assert!(!recalculates_lines(super::super::SALES_RETURN));
+        assert!(recalculates_lines(SALES_RETURN));
+        assert!(priced_line(SALES_RETURN_LINE));
+        assert!(!with_amounts(SALES_RETURN).unwrap().prefills_tax);
     }
 }

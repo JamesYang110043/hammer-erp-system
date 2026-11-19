@@ -4,9 +4,7 @@
 //! - [`save`]：存檔時的稅別預設值、明細檢查與金額計算
 //! - [`orders`]：訂單的確認、手動結案、作廢（[`SalesOrderHandler`]）
 //! - [`shipments`]：出貨單存檔時的檢查、過帳與作廢（[`ShipmentHandler`]）
-//! - [`returns`]：銷貨退回存檔時從出貨單帶入（[`derive_return`]）
-//!
-//! 銷貨退回的過帳與作廢在之後的 issue 加入（#150）。
+//! - [`returns`]：銷貨退回存檔時從出貨單帶入與檢查、過帳與作廢（[`SalesReturnHandler`]）
 
 pub mod amounts;
 pub mod orders;
@@ -15,7 +13,7 @@ pub mod save;
 pub mod shipments;
 
 pub use orders::SalesOrderHandler;
-pub use returns::derive_return;
+pub use returns::{SalesReturnHandler, derive_return};
 pub use shipments::ShipmentHandler;
 
 /// 訂單的資料類別代碼。
