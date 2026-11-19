@@ -15,7 +15,7 @@ Hammer ERP 是給小型團隊（5 人以內）使用的桌面 ERP 系統，涵�
 | 進出貨管理 | 採購、進貨、訂單、出貨、退貨、批號庫存（先進先出） |
 | 客戶管理 | 客戶主檔、聯絡人 |
 | 廠商管理 | 廠商主檔、聯絡人 |
-| 發票管理 | 內部紀錄（⏳ 細節待討論） |
+| 發票管理 | 銷項發票、銷貨折讓、進項憑證、進貨折讓的內部紀錄（手開號碼，不上傳財政部，§8.11） |
 | 財務管理 | ⏳ 細節待討論 |
 | 系統管理 | 帳號、權限、欄位與資料類別客製化、操作紀錄 |
 
@@ -519,6 +519,12 @@ customers ─┬─< sales_orders ────< sales_order_lines               
            └─< sales_returns ──< sales_return_lines（加回原批號，記在 inventory_transactions）
                                                                   │
 products ─────────────────────────────────────< inventory_transactions
+
+customers ─< sales_invoices ─┬─< sales_invoice_lines
+                             ├─< sales_invoice_shipments >── shipments
+                             └─< sales_allowances ─< sales_allowance_lines（0..1 ── sales_returns）
+suppliers ─< purchase_invoices ─┬─< purchase_invoice_receipts >── goods_receipts
+                                └─< purchase_allowances（0..1 ── purchase_returns）
 
 stock_adjustments ─< stock_adjustment_lines ─┬─0..1── inventory_lots（盤盈：新批號）
                                              └─< lot_allocations（盤虧）
@@ -1305,6 +1311,7 @@ draft ──確認──▶ confirmed ──進貨過帳──▶ partially_rece
 
 1. 檢查 `version`、`status = posted`。
 2. 沒有**有效的進貨退回**（指向此進貨單、`status = posted` 的 `purchase_returns`）→ 否則 `422 VALIDATION`，`details` 為 `{ "fields": [], "documents": [ { "entity_key", "record_id", "record_no" } ] }`，訊息「此進貨單已有進貨退回 PR202611-0002，請先作廢退回單」。
+   接著檢查沒有被有效的進項憑證關聯（§8.11「其他單據的作廢限制」）→ 否則 `422 VALIDATION`，訊息「此進貨單已有進項憑證 AB12345678，請先作廢憑證」。
 3. `goods` 的每一列：與盤點調整單的 `gain_new` 相同（§8.10「作廢」）——批號沒有其他單據的有效異動時，新增 `void_reversal` 異動（`−qty`）、批號軟刪除；被使用時記下，全部檢查完回傳 `422 LOT_IN_USE`。
 4. 有 `purchase_order_line_id` 的每一列：`received_qty −= qty`；重新計算採購單的狀態（手動結案的維持 `closed`）。
 5. `status = void`、`voided_at`、`voided_by`，`version` + 1；寫入操作紀錄（`void`）。
@@ -1338,7 +1345,7 @@ draft ──確認──▶ confirmed ──進貨過帳──▶ partially_rece
 - 退回的**成本** = Σ 批號扣除的 `qty × unit_cost_twd`（等於原進貨的成本）；退回的**金額**是單據幣別的 `total`，台幣金額 `total_twd`。兩者都只是紀錄，應付帳款的沖銷在 M6。
 - 進貨退回**不影響**採購單的 `received_qty` 與狀態：需要廠商補貨時另開採購單或進貨單。
 
-**作廢**：隨時可以作廢已過帳的退回單（§9.3）。依各列的 `lot_allocations` 把數量加回原批號，新增 `void_reversal` 異動（`+qty`、扣除時的成本、`txn_date` 為作廢當天）。原批號不會已被刪除：進貨單有有效的退回時不可作廢（上方「進貨過帳與作廢」）。
+**作廢**：已過帳的退回單沒有被有效的進貨折讓關聯時可以作廢（§9.3、§8.11「其他單據的作廢限制」：「此進貨退回已有折讓單 PA202611-0001，請先作廢折讓單」）。依各列的 `lot_allocations` 把數量加回原批號，新增 `void_reversal` 異動（`+qty`、扣除時的成本、`txn_date` 為作廢當天）。原批號不會已被刪除：進貨單有有效的退回時不可作廢（上方「進貨過帳與作廢」）。
 
 #### 廠商、商品被進貨單據引用時的限制
 
@@ -1655,7 +1662,7 @@ request：
 4. 有 `sales_order_line_id` 的每一列：`shipped_qty −= qty`；重新計算訂單的狀態。
 5. `status = void`、`voided_at`、`voided_by`，`version` + 1；寫入操作紀錄（`void`）。`cost_amount_twd`、`cost_total_twd` 保留（紀錄）。
 
-- 已開發票時能否作廢等發票模組（§8.11、Q1）再定；M4c 不限制。
+- 被有效的銷項發票關聯時不可作廢（在步驟 2 之後檢查，§8.11「其他單據的作廢限制」）：`422 VALIDATION`，訊息「此出貨單已開立發票 AB12345678，請先作廢發票」。
 
 #### 銷貨退回
 
@@ -1688,9 +1695,9 @@ request：
 3. `cost_total_twd` = Σ 明細的 `cost_amount_twd`；`status = posted`、`posted_at`、`posted_by`，`version` + 1；寫入操作紀錄（`post`）。
 
 - 加回不會不足，所以過帳不會有 `STOCK_INSUFFICIENT`。原批號不會已被刪除（同出貨作廢）。
-- 退回的金額（`total`）只是紀錄，應收帳款的沖銷在 M6；發票折讓在 M5。
+- 退回的金額（`total`）只是紀錄，應收帳款的沖銷在 M6；發票折讓見 §8.11「銷貨折讓」。
 
-**作廢**：鎖定順序同過帳（批號為此退回單的 `sales_return` 異動的批號）。依此退回單的每一筆 `sales_return` 異動：該批號 `qty_remaining ≥ qty`，不足時記下短缺（加回的貨已再出貨或盤虧）；足夠時 `qty_remaining −= qty`、新增異動（`void_reversal`、`−qty`、同一個成本、`txn_date` 為作廢當天）。有短缺 → rollback，`422 STOCK_INSUFFICIENT`（指定批號的格式，一個批號一項）。`cost_amount_twd`、`cost_total_twd` 保留。
+**作廢**：被有效的銷貨折讓關聯時不可作廢（§8.11「其他單據的作廢限制」：「此銷貨退回已有折讓單 SA202611-0001，請先作廢折讓單」）。鎖定順序同過帳（批號為此退回單的 `sales_return` 異動的批號）。依此退回單的每一筆 `sales_return` 異動：該批號 `qty_remaining ≥ qty`，不足時記下短缺（加回的貨已再出貨或盤虧）；足夠時 `qty_remaining −= qty`、新增異動（`void_reversal`、`−qty`、同一個成本、`txn_date` 為作廢當天）。有短缺 → rollback，`422 STOCK_INSUFFICIENT`（指定批號的格式，一個批號一項）。`cost_amount_twd`、`cost_total_twd` 保留。
 
 #### 客戶、商品被銷貨單據引用時的限制
 
@@ -1702,6 +1709,7 @@ request：
 | 商品 | 刪除、`product_type` 由 `goods` 改為 `service`、修改 `unit_id` | 除了 §7.2 的庫存異動、§8.8 的未結案採購單，另外在有**未結案的訂單**（`confirmed`、`partially_shipped`，未刪除）的明細引用時不可：刪除的 `details` 為 `{ "fields": [], "open_sales_order_count": 2 }`，訊息「此商品有 2 張未結案的訂單，無法刪除」；修改時 `details.fields` 指出該欄位。同時有未結案的採購單時 `details` 兩個數量都列出，訊息為第一個 |
 
 - 鎖定、草稿與已結案訂單不限制、停用不受限制，都與 §8.8 相同。
+- 被銷項發票、銷貨折讓引用時的限制見 §8.11「客戶、廠商被引用時的限制」（廠商被進項憑證、進貨折讓引用時同）。
 - 信用額度不檢查（見「存檔時的檢查」）。
 
 ---
@@ -1940,12 +1948,391 @@ GROUP BY product_id;
 
 ---
 
-### 8.11 發票模組 ⏳ 待討論
+### 8.11 發票模組
 
-先保留以下方向，細節等實作到這個模組時再定：
-- `invoices` / `invoice_lines`：銷項與進項發票，只做內部紀錄
-- 字軌號碼管理、作廢、折讓
-- 與出貨單、進貨單的關聯
+> M5 定案（Q1，2026-11-19）。**只做內部紀錄**：發票在別處開立（手開或廠商開立），系統只登錄號碼與金額；不上傳財政部、不串接加值中心、**不做字軌配號**；401 申報媒體檔在 M7 再評估，應收應付沖帳在 M6。單號、明細、狀態限制、過帳與作廢的共通規則以 §7.1「系統單據」、§10「單據動作」為準。邏輯在 `hammer_core::invoicing`（金額、號碼、期別、銷項發票、銷貨折讓、進項憑證、進貨折讓），型別在 `hammer_shared::invoice`。
+
+**四種單據**（狀態都是 `draft` → `posted` → `void`，§8.2；畫面上 `posted` 顯示為「已開立」，進項憑證顯示為「已登錄」）：
+
+| 單據 | 用途 | 明細 | 關聯 |
+|---|---|---|---|
+| 銷項發票 | 手開的三聯式、二聯式發票 | 品名明細 | 0–多張已過帳出貨單（同客戶） |
+| 銷貨折讓 | 銷貨折讓證明單 | 品名明細 | 一張已開立的銷項發票；可選一張銷貨退回 |
+| 進項憑證 | 廠商開立的三聯式 / 電子發票、海關代徵營業稅繳納證 | **沒有品名明細**，只記表頭金額 | 0–多張已過帳進貨單（同廠商） |
+| 進貨折讓 | 對廠商的進貨退出或折讓證明單 | **沒有品名明細**，只記表頭金額 | 一張已登錄的進項憑證；可選一張進貨退回 |
+
+**金額一律是台幣**（沒有幣別、匯率欄位）。外幣進貨的進項憑證以憑證上的台幣金額登錄（海關繳納證本來就是台幣），與進貨單的外幣金額不比對。
+
+#### 資料類別
+
+M5 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`storage = table`、`is_active = true`、`icon` 為 `NULL`，id 為 migration 中固定的 UUID）：
+
+| key | label | kind | table_name | 主表 | numbering_pattern | title_template | sort_order |
+|---|---|---|---|---|---|---|---|
+| `sales_invoice` | 銷項發票 | document | `sales_invoices` | | `SI{yyyyMM}-{0000}` | `{invoice_no} {buyer_name}` | 300 |
+| `sales_invoice_line` | 發票明細 | detail | `sales_invoice_lines` | `sales_invoice` | | `{description}` | 0 |
+| `sales_invoice_shipment` | 發票出貨單 | detail | `sales_invoice_shipments` | `sales_invoice` | | `{shipment_id.record_no}` | 0 |
+| `sales_allowance` | 銷貨折讓 | document | `sales_allowances` | | `SA{yyyyMM}-{0000}` | `{record_no} {customer_id.name}` | 310 |
+| `sales_allowance_line` | 折讓明細 | detail | `sales_allowance_lines` | `sales_allowance` | | `{description}` | 0 |
+| `purchase_invoice` | 進項憑證 | document | `purchase_invoices` | | `PI{yyyyMM}-{0000}` | `{invoice_no} {supplier_id.name}` | 320 |
+| `purchase_invoice_receipt` | 憑證進貨單 | detail | `purchase_invoice_receipts` | `purchase_invoice` | | `{goods_receipt_id.record_no}` | 0 |
+| `purchase_allowance` | 進貨折讓 | document | `purchase_allowances` | | `PA{yyyyMM}-{0000}` | `{record_no} {supplier_id.name}` | 330 |
+
+- 系統單號 `record_no`（`SI202611-0001`，依 §7.1 取號）與**發票號碼** `invoice_no`（`AB12345678`，使用者輸入）是兩個欄位；選擇器與標題顯示發票號碼。
+- 關聯出貨單、進貨單以**明細子表**（`sales_invoice_shipment`、`purchase_invoice_receipt`）記錄，與其他明細一樣以 `lines.<明細子表代碼>` 整組取代（§10「主表與明細」），不另外提供端點。
+- 八張表的共同規則與 §8.8「資料類別」相同（§8.6「系統資料表的共同規則」、§7.1「系統單據」、`posted_at` / `posted_by`、`voided_at` / `voided_by` 與四個 CHECK、「系統維護」的欄位）。另外：
+  - 四張主表都有 `void_date` / `void_reason`（作廢日期、原因，系統維護的欄位，由作廢端點寫入，見「開立與作廢」），`CHECK ((status = 'void') = (void_date IS NOT NULL))`、`CHECK ((void_date IS NULL) = (void_reason IS NULL))`。
+  - 索引：`(<單據日期>, id)`、`(status)`、`(customer_id)` 或 `(supplier_id)`；明細 `(<主表單數>_id, sort_order, id) WHERE deleted_at IS NULL`；表中列出的外鍵索引。
+
+#### `sales_invoices`（銷項發票，系統單據 `sales_invoice`）
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| record_no | TEXT NOT NULL | （單號，不是欄位） | | §7.1 |
+| invoice_type | TEXT NOT NULL CHECK | `select` | 發票種類 | 必填、預設 `triplicate`；選項 `triplicate`（三聯式）/ `duplicate`（二聯式） |
+| invoice_no | TEXT NOT NULL | `text` | 發票號碼 | 必填、可搜尋；格式見「發票號碼」 |
+| invoice_date | DATE NOT NULL | `date` | 發票日期 | 必填。桌面程式新增時預設今天 |
+| tax_period | TEXT NOT NULL | `text` | 期別 | 系統維護；見「期別」 |
+| customer_id | UUID NOT NULL FK → customers | `relation` | 客戶 | 必填、→ `customer` |
+| buyer_tax_id | TEXT | `text` | 買受人統一編號 | 可搜尋；有填時必須是 8 位數字；三聯式開立時必填；見「買受人資訊」 |
+| buyer_name | TEXT | `text` | 買受人 | 發票抬頭；三聯式開立時必填 |
+| buyer_address | TEXT | `text` | 買受人地址 | |
+| tax_type | TEXT NOT NULL FK → tax_rates(code) | `select` | 稅別 | 必填；選項與商品的 `tax_type` 相同 |
+| tax_amount_manual | NUMERIC(18,4) CHECK (tax_amount_manual >= 0) | `money` | 稅額（手動） | 小數 4、`min 0`；留空 = 依系統計算；見「金額與稅額」 |
+| status | TEXT NOT NULL DEFAULT 'draft' CHECK | `select` | 狀態 | 系統維護；選項 `draft`（草稿）/ `posted`（已開立）/ `void`（已作廢） |
+| subtotal / tax_amount / total | NUMERIC(18,4) NOT NULL DEFAULT 0 | `money` | 未稅金額 / 稅額 / 總計 | 系統維護、小數 4 |
+| void_date | DATE | `date` | 作廢日期 | 系統維護 |
+| void_reason | TEXT | `text` | 作廢原因 | 系統維護 |
+| notes | TEXT | `long_text` | 備註 | |
+| posted_at / posted_by、voided_at / voided_by | | （不是欄位） | | |
+
+另外有索引 `(lower(invoice_no))`（可搜尋）與唯一索引 `uq_sales_invoices_invoice_no`（見「發票號碼」）。
+
+#### `sales_invoice_lines`（明細子表 `sales_invoice_line`）
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| sales_invoice_id | UUID NOT NULL FK → sales_invoices | （不是欄位） | | 所屬單據 |
+| sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序 |
+| product_id | UUID FK → products | `relation` | 商品 | → `product`；可以不填（合併的列、運費等） |
+| description | TEXT NOT NULL | `text` | 品名 | 必填、`max_length 200`；發票上印的品名 |
+| qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0 |
+| unit_price | NUMERIC(18,4) NOT NULL CHECK (unit_price >= 0) | `money` | 單價 | 必填、小數 4、`min 0`；三聯式**未稅**、二聯式**含稅** |
+| amount | NUMERIC(18,4) NOT NULL DEFAULT 0 | `money` | 金額 | 系統維護、小數 4 |
+| notes | TEXT | `long_text` | 備註 | |
+
+另外有索引 `(product_id)`。發票明細沒有折扣率，帶入時折算到單價（見「關聯出貨單」）。
+
+#### `sales_invoice_shipments`（明細子表 `sales_invoice_shipment`）
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| sales_invoice_id | UUID NOT NULL FK → sales_invoices | （不是欄位） | | 所屬發票 |
+| sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 順序 |
+| shipment_id | UUID NOT NULL FK → shipments | `relation` | 出貨單 | 必填、→ `shipment`；見「關聯出貨單」 |
+
+另外有索引 `(shipment_id)`。
+
+#### `sales_allowances`（銷貨折讓，系統單據 `sales_allowance`）
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| record_no | TEXT NOT NULL | （單號，不是欄位） | | §7.1；折讓證明單沒有發票號碼，以單號識別 |
+| sales_invoice_id | UUID NOT NULL FK → sales_invoices | `relation` | 原發票 | 必填、→ `sales_invoice`；新增後不可修改（`422`，「建立後不可更換發票」） |
+| customer_id | UUID NOT NULL FK → customers | `relation` | 客戶 | 系統維護；= 發票的客戶 |
+| allowance_date | DATE NOT NULL | `date` | 折讓日期 | 必填。桌面程式新增時預設今天；不可早於發票日期 |
+| tax_period | TEXT NOT NULL | `text` | 期別 | 系統維護；由 `allowance_date` 計算 |
+| tax_type | TEXT NOT NULL FK → tax_rates(code) | `select` | 稅別 | 系統維護；= 發票的稅別 |
+| sales_return_id | UUID FK → sales_returns | `relation` | 銷貨退回 | → `sales_return`；見「銷貨折讓」 |
+| tax_amount_manual | NUMERIC(18,4) CHECK (tax_amount_manual >= 0) | `money` | 稅額（手動） | 同銷項發票 |
+| status | TEXT NOT NULL DEFAULT 'draft' CHECK | `select` | 狀態 | 系統維護；選項 `draft` / `posted`（已開立）/ `void` |
+| subtotal / tax_amount / total | NUMERIC(18,4) NOT NULL DEFAULT 0 | `money` | 折讓未稅金額 / 折讓稅額 / 折讓總計 | 系統維護、小數 4 |
+| reason | TEXT | `text` | 折讓原因 | |
+| void_date / void_reason | | | 作廢日期 / 作廢原因 | 系統維護 |
+| notes | TEXT | `long_text` | 備註 | |
+| posted_at / posted_by、voided_at / voided_by | | （不是欄位） | | |
+
+另外有索引 `(sales_invoice_id)`、`(sales_return_id)`。
+
+#### `sales_allowance_lines`（明細子表 `sales_allowance_line`）
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| sales_allowance_id | UUID NOT NULL FK → sales_allowances | （不是欄位） | | 所屬單據 |
+| sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序 |
+| product_id | UUID FK → products | `relation` | 商品 | → `product`；可以不填 |
+| description | TEXT NOT NULL | `text` | 品名 | 必填、`max_length 200` |
+| qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0 |
+| unit_price | NUMERIC(18,4) NOT NULL CHECK (unit_price >= 0) | `money` | 單價 | 必填、小數 4、`min 0`；一律**未稅**（折讓證明單分列未稅金額與稅額） |
+| amount | NUMERIC(18,4) NOT NULL DEFAULT 0 | `money` | 金額 | 系統維護、小數 4 |
+| notes | TEXT | `long_text` | 備註 | |
+
+另外有索引 `(product_id)`。
+
+#### `purchase_invoices`（進項憑證，系統單據 `purchase_invoice`）
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| record_no | TEXT NOT NULL | （單號，不是欄位） | | §7.1 |
+| doc_type | TEXT NOT NULL CHECK | `select` | 憑證種類 | 必填、預設 `triplicate`；選項 `triplicate`（三聯式發票）/ `electronic`（電子發票）/ `customs`（海關代徵營業稅繳納證）；開立後不可修改（草稿以外本來就不可修改） |
+| invoice_no | TEXT NOT NULL | `text` | 憑證號碼 | 必填、可搜尋；格式見「發票號碼」 |
+| invoice_date | DATE NOT NULL | `date` | 憑證日期 | 必填 |
+| tax_period | TEXT NOT NULL | `text` | 期別 | 系統維護 |
+| supplier_id | UUID NOT NULL FK → suppliers | `relation` | 廠商 | 必填、→ `supplier`；海關繳納證填該批進口貨物的國外廠商 |
+| seller_tax_id | TEXT | `text` | 賣方統一編號 | 有填時必須是 8 位數字；新增時沒有帶時帶入廠商的 `tax_id`（快照）；海關繳納證可以不填 |
+| tax_type | TEXT NOT NULL FK → tax_rates(code) | `select` | 稅別 | 必填、預設 `taxable` |
+| subtotal | NUMERIC(18,4) NOT NULL CHECK (subtotal >= 0) | `money` | 未稅金額 | 必填、小數 4、`min 0`；海關繳納證為完稅價格 |
+| tax_amount | NUMERIC(18,4) NOT NULL CHECK (tax_amount >= 0) | `money` | 稅額 | 必填、小數 4、`min 0`；見「金額與稅額」 |
+| total | NUMERIC(18,4) NOT NULL DEFAULT 0 | `money` | 總計 | 系統維護、小數 4；`subtotal + tax_amount` |
+| deductible | BOOLEAN NOT NULL DEFAULT true | `boolean` | 可扣抵 | 必填、預設 `true`；進項稅額是否可扣抵（例如交際費不可扣抵），只是紀錄 |
+| status | TEXT NOT NULL DEFAULT 'draft' CHECK | `select` | 狀態 | 系統維護；選項 `draft` / `posted`（已登錄）/ `void` |
+| void_date / void_reason | | | 作廢日期 / 作廢原因 | 系統維護 |
+| notes | TEXT | `long_text` | 備註 | |
+| posted_at / posted_by、voided_at / voided_by | | （不是欄位） | | |
+
+另外有索引 `(lower(invoice_no))` 與唯一索引 `uq_purchase_invoices_invoice_no`（見「發票號碼」）。進項憑證的作廢通常代表登錄錯誤或廠商作廢重開。
+
+#### `purchase_invoice_receipts`（明細子表 `purchase_invoice_receipt`）
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| purchase_invoice_id | UUID NOT NULL FK → purchase_invoices | （不是欄位） | | 所屬憑證 |
+| sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 順序 |
+| goods_receipt_id | UUID NOT NULL FK → goods_receipts | `relation` | 進貨單 | 必填、→ `goods_receipt`；見「關聯出貨單、進貨單」 |
+
+另外有索引 `(goods_receipt_id)`。
+
+#### `purchase_allowances`（進貨折讓，系統單據 `purchase_allowance`）
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| record_no | TEXT NOT NULL | （單號，不是欄位） | | §7.1 |
+| purchase_invoice_id | UUID NOT NULL FK → purchase_invoices | `relation` | 原憑證 | 必填、→ `purchase_invoice`；不可是海關繳納證；新增後不可修改（`422`，「建立後不可更換憑證」） |
+| supplier_id | UUID NOT NULL FK → suppliers | `relation` | 廠商 | 系統維護；= 憑證的廠商 |
+| allowance_date | DATE NOT NULL | `date` | 折讓日期 | 必填；不可早於憑證日期 |
+| tax_period | TEXT NOT NULL | `text` | 期別 | 系統維護 |
+| tax_type | TEXT NOT NULL FK → tax_rates(code) | `select` | 稅別 | 系統維護；= 憑證的稅別 |
+| purchase_return_id | UUID FK → purchase_returns | `relation` | 進貨退回 | → `purchase_return`；見「進貨折讓」 |
+| subtotal | NUMERIC(18,4) NOT NULL CHECK (subtotal >= 0) | `money` | 折讓未稅金額 | 必填、小數 4、`min 0` |
+| tax_amount | NUMERIC(18,4) NOT NULL CHECK (tax_amount >= 0) | `money` | 折讓稅額 | 必填、小數 4、`min 0` |
+| total | NUMERIC(18,4) NOT NULL DEFAULT 0 | `money` | 折讓總計 | 系統維護；`subtotal + tax_amount` |
+| status | TEXT NOT NULL DEFAULT 'draft' CHECK | `select` | 狀態 | 系統維護；選項 `draft` / `posted`（已開立）/ `void` |
+| reason | TEXT | `text` | 折讓原因 | |
+| void_date / void_reason | | | 作廢日期 / 作廢原因 | 系統維護 |
+| notes | TEXT | `long_text` | 備註 | |
+| posted_at / posted_by、voided_at / voided_by | | （不是欄位） | | |
+
+另外有索引 `(purchase_invoice_id)`、`(purchase_return_id)`。
+
+#### 發票號碼
+
+存檔時去除前後空白、英文轉大寫後檢查格式（`hammer_core::invoicing::number`）：
+
+| 單據 | 格式 | 錯誤（`invoice_no`） |
+|---|---|---|
+| 銷項發票；進項憑證的 `triplicate`、`electronic` | `^[A-Z]{2}[0-9]{8}$`（2 碼英文 + 8 碼數字） | 「發票號碼格式應為 2 碼英文加 8 碼數字」 |
+| 進項憑證的 `customs` | `^[A-Z0-9]{1,20}$`（英數字，最長 20 碼） | 「繳納證號碼只能是英文與數字，最長 20 碼」 |
+
+**唯一規則**（草稿不檢查重複；**開立時**才檢查，見「開立與作廢」）：
+
+| 單據 | 唯一範圍 | 索引 |
+|---|---|---|
+| 銷項發票 | 全域唯一，**含已作廢**（作廢的紙本號碼不能再用） | `CREATE UNIQUE INDEX uq_sales_invoices_invoice_no ON sales_invoices (invoice_no) WHERE status <> 'draft'` |
+| 進項憑證 | 同一廠商 + 號碼唯一，**不含已作廢**（作廢通常是登錄錯誤，要能重新登錄） | `CREATE UNIQUE INDEX uq_purchase_invoices_invoice_no ON purchase_invoices (supplier_id, invoice_no) WHERE status = 'posted'` |
+
+- 已刪除的草稿 `status` 仍是 `draft`，不在索引內。
+- 開立時先以查詢檢查（給出清楚的訊息），並發時由唯一索引擋下；伺服器依索引名稱把違反唯一索引轉成相同的 `422`。
+- 重複 → `422 VALIDATION`，`invoice_no`「發票號碼 AB12345678 已使用（SI202611-0003）」；進項為「此廠商的憑證號碼 AB12345678 已登錄（PI202611-0003）」。
+
+#### 期別
+
+營業稅每兩個月一期。`tax_period` 由單據日期（發票、憑證為 `invoice_date`，折讓為 `allowance_date`）計算，每次存檔時重新寫入：
+
+```
+tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
+```
+
+例如 2026-11-19、2026-12-05 → `202611`；2026-02-28 → `202601`。桌面程式顯示為「2026 年 11–12 月」。`tax_period` 可以篩選（`eq`）、排序（文字）。
+
+#### 買受人資訊（銷項發票）
+
+- 新增時 `buyer_tax_id`、`buyer_name`、`buyer_address` **沒有帶到**的，由伺服器從客戶帶入：`buyer_tax_id` = `tax_id`、`buyer_name` = `invoice_title`（空白時用 `name`）、`buyer_address` = `invoice_address`（空白時用 `address`）。修改時 `customer_id` 有變動，且沒有帶到這三個欄位時，重新帶入。
+- 帶入後是**快照**：之後修改客戶資料不影響既有發票；草稿可以手動修改。
+- **三聯式**開立時 `buyer_tax_id`、`buyer_name` 必填（「三聯式發票必須填寫買受人統一編號」「三聯式發票必須填寫買受人」）；**二聯式**可以不填統編。
+- 進項憑證的 `seller_tax_id` 同樣在新增時沒有帶到時帶入廠商的 `tax_id`（快照）。
+
+#### 金額與稅額
+
+**銷項發票、銷貨折讓**與銷貨單據共用 `hammer_core::sales::amounts`（`d` = TWD 的 `decimal_places`、四捨五入 `MidpointAwayFromZero`、稅額以整張計算）。明細沒有折扣率（以 `discount_rate = 0` 呼叫）：
+
+| | 三聯式發票、銷貨折讓 | 二聯式發票 |
+|---|---|---|
+| 對應 `tax_included` | `false`（單價未稅） | `true`（單價含稅） |
+| 明細 `amount` | `round(qty × unit_price, d)` | 同左 |
+| 系統計算 | `subtotal = Σ amount`；`tax = round(subtotal × 稅率, d)`；`total = subtotal + tax` | `total = Σ amount`；`subtotal = round(total ÷ (1 + 稅率), d)`；`tax = total − subtotal` |
+
+**手動修正稅額**（`tax_amount_manual`，讓系統金額與紙本一致）：
+
+- 留空 → `tax_amount` = 系統計算的稅額。
+- 有值 → 必須是 `d` 位小數以內、`|tax_amount_manual − 系統計算的稅額| ≤ 1`（只用於吸收紙本與系統的四捨五入差異）；`tax_amount = tax_amount_manual`。
+  - 三聯式、折讓：`subtotal` 不變，`total = subtotal + tax_amount`（總計跟著變）。
+  - 二聯式：紙本上只有總計，`total`（= Σ amount）不變，`subtotal = total − tax_amount`。
+- 稅率為 0（`zero_rated`、`exempt`）時不可填（「零稅率、免稅的發票沒有稅額」）。
+- 超過 → `422 VALIDATION`，`tax_amount_manual`「稅額與系統計算相差超過 1 元（系統計算 48）」。
+- 每次存檔時重新計算並檢查（修改明細後系統稅額改變，原本的手動稅額可能超出範圍而存檔失敗，需要清空或重新輸入）。
+
+**範例一：三聯式、應稅**（`d = 0`、稅率 0.05）
+
+| 明細 | qty | unit_price | amount |
+|---|---|---|---|
+| 1 | 3 | 100.0000 | 300 |
+| 2 | 2 | 333.3333 | round(666.6666, 0) = 667 |
+
+系統計算：`subtotal` = 967；`tax_amount` = round(48.35, 0) = 48；`total` = 1015。
+紙本稅額為 49 → `tax_amount_manual` = 49（差 1，允許）→ `tax_amount` = 49、`total` = 1016。填 50 → `422`「稅額與系統計算相差超過 1 元（系統計算 48）」。
+
+**範例二：二聯式、應稅**（`d = 0`、稅率 0.05）
+
+| 明細 | qty | unit_price | amount |
+|---|---|---|---|
+| 1 | 4 | 200.0000 | 800 |
+| 2 | 1 | 200.0000 | 200 |
+
+系統計算：`total` = 1000；`subtotal` = round(952.3809…, 0) = 952；`tax_amount` = 48。
+`tax_amount_manual` = 47 → `tax_amount` = 47、`subtotal` = 953、`total` = 1000。
+
+**進項憑證、進貨折讓**沒有明細，`subtotal`、`tax_amount` 由使用者照憑證輸入（`d` 位小數以內），`total = subtotal + tax_amount`：
+
+- `triplicate`、`electronic`、進貨折讓：`|tax_amount − round(subtotal × 稅率, d)| ≤ 1`，超過 → `tax_amount`「稅額與未稅金額 × 稅率相差超過 1 元（應為 48）」；稅率為 0 時 `tax_amount` 必須是 0。
+- `customs`：海關依完稅價格（含關稅）計算，不檢查稅額與 `subtotal` 的關係。
+
+#### 關聯出貨單、進貨單
+
+銷項發票以 `lines.sales_invoice_shipment` 關聯 0–多張出貨單，進項憑證以 `lines.purchase_invoice_receipt` 關聯 0–多張進貨單。關聯**不強制**（可以開沒有出貨單的發票），發票明細也不必與出貨明細一致。
+
+**存檔時與開立時都檢查**（錯誤在該列的 `shipment_id` / `goods_receipt_id`）：
+
+| 檢查 | 訊息 |
+|---|---|
+| 出貨單（進貨單）未刪除、`status = posted` | 「出貨單尚未過帳」「出貨單已作廢」（進貨單同） |
+| 客戶（廠商）與發票（憑證）相同 | 「客戶與發票不同」「廠商與憑證不同」 |
+| 同一張發票中不重複 | 第二列「出貨單重複」「進貨單重複」 |
+| **一張出貨單只能在一張有效發票中**：沒有其他 `status = posted` 的銷項發票關聯它 | 「出貨單 SH202611-0005 已開立發票 AB12345678」 |
+| 進貨單：同一**類**憑證只能一張有效——發票類（`triplicate`、`electronic`）與海關繳納證（`customs`）各自計算 | 「進貨單 GR202611-0005 已有憑證 AB12345678」 |
+
+- 草稿不保留關聯（與退回數量相同，§8.8）：兩張草稿可以關聯同一張出貨單，先開立的成功，後開立的在開立時失敗。
+- 進口貨物同一張進貨單可以同時有一張發票類憑證與一張海關繳納證。
+
+**帶入明細**是桌面程式的功能（不另外提供伺服器端點）：使用者勾選出貨單後，桌面程式以單筆查詢讀取每張出貨單，依出貨日期、`sort_order` 把出貨明細加到發票明細：
+
+| 發票明細欄位 | 帶入的值 |
+|---|---|
+| `product_id` | 出貨明細的商品 |
+| `description` | 商品的 `name`（有 `spec` 時為 `name spec`） |
+| `qty` | 出貨明細的 `qty` |
+| `unit_price` | `p = 出貨明細的 unit_price × (1 − discount_rate)`，再依發票種類與出貨單的 `tax_included` 換算：相同基準 → `round(p, 4)`；三聯式但出貨單含稅 → `round(p ÷ (1 + 稅率), 4)`；二聯式但出貨單未稅 → `round(p × (1 + 稅率), 4)` |
+
+- 表頭的 `customer_id`、`tax_type` 帶入第一張出貨單的值（客戶已選時不變）；出貨單的稅別不同時桌面程式顯示提示，不檢查。
+- 帶入後可以自由修改、合併、刪除、新增列；取消勾選出貨單時，桌面程式詢問是否一併移除帶入的列（明細不記錄來源，所以由桌面程式在當次編輯中追蹤）。
+- 取消勾選不需要伺服器處理：整組取代 `lines.sales_invoice_shipment` 即可。
+
+#### 開立與作廢
+
+使用 §10「單據動作」的 `post`、`void` 端點（需要 `record.post`；檢查順序、回應、`INVALID_STATUS` 相同）。
+
+**作廢的 request**：這四種單據的 `void` 接受 `{ "version": 3, "void_date": "2026-11-20", "void_reason": "金額開錯" }`（`hammer_shared::invoice::InvoiceVoidRequest`）：
+
+- `void_reason` 必填（去除空白後不可為空，「請輸入作廢原因」，`details.fields` 指出 `void_reason`）；`void_date` 可省略，預設為作廢當天（Asia/Taipei），不可早於單據日期（「作廢日期不可早於發票日期」）。
+- 其他單據的 `void` 仍只接受 `{ "version" }`。
+- **跨期作廢不擋**：桌面程式在 `void_date` 的期別與單據的 `tax_period` 不同時顯示警告「作廢日期與發票不同期（發票 2026 年 9–10 月），請確認是否需要另外處理申報」，使用者確認後仍可作廢。
+
+**銷項發票開立**（鎖定順序：發票（`FOR UPDATE`）→ 客戶（`FOR SHARE`）→ 關聯的出貨單（依 id `FOR UPDATE`））：
+
+1. 檢查 `version`、`status = draft`；重新執行存檔時的檢查（號碼格式、金額與手動稅額、關聯出貨單）。
+2. 三聯式的買受人必填；至少一列明細（「至少要有一筆明細」）；客戶未刪除（「客戶已刪除」）。
+3. 鎖定出貨單後再檢查一次「一張出貨單只能在一張有效發票中」（並行開立時，後取得鎖的一方在這裡失敗）。
+4. 發票號碼不重複（「發票號碼」）。
+5. `status = posted`、`posted_at`、`posted_by`，`version` + 1；寫入操作紀錄（`post`）。
+
+**銷項發票作廢**：
+
+1. 檢查 `version`、`status = posted`；`void_reason`、`void_date`。
+2. 沒有**有效的銷貨折讓**（指向此發票、`status = posted`）→ 否則 `422 VALIDATION`，`details` 為 `{ "fields": [], "documents": [ … ] }`，訊息「此發票已有銷貨折讓 SA202611-0002，請先作廢折讓單」。
+3. `status = void`、`voided_at`、`voided_by`、`void_date`、`void_reason`，`version` + 1；寫入操作紀錄（`void`）。關聯的出貨單隨即解除鎖定（可以再開立在新發票，也可以作廢）。
+
+**進項憑證**的開立、作廢與銷項發票相同（廠商、進貨單、「此憑證已有進貨折讓 PA202611-0002，請先作廢折讓單」），差別：不檢查買受人；沒有明細，所以不檢查「至少一筆明細」；`subtotal` 為 0 時「未稅金額必須大於 0」（海關繳納證也相同）。
+
+#### 銷貨折讓
+
+由桌面程式從**已開立的發票**建立：表頭帶入發票，伺服器在存檔時帶入 `customer_id`、`tax_type`（系統維護）。
+
+- 存檔與開立時檢查發票 `status = posted`（`sales_invoice_id`「發票尚未開立」「發票已作廢」）；`allowance_date ≥ invoice_date`（「折讓日期不可早於發票日期」）。
+- `sales_return_id` 有值時：銷貨退回未刪除、`status = posted`（「銷貨退回尚未過帳」「銷貨退回已作廢」）、客戶與發票相同（「客戶與發票不同」）、**沒有其他有效的銷貨折讓**關聯它（「銷貨退回 SR202611-0002 已有折讓單 SA202611-0001」）。不檢查退回的出貨單是否在這張發票中（退貨可能沖別張發票）。
+- 桌面程式選擇銷貨退回時可以把退回明細帶入折讓明細（`description`、`qty`、`unit_price` 換算為未稅，同「帶入明細」），也可以手動輸入（單純降價）。
+
+**累計上限**（存檔時與開立時都檢查；開立時在鎖定發票後檢查）：
+
+```
+可折讓金額 = 發票的 total − 該發票其他「已開立」折讓的 total 合計
+```
+
+- 超過 → `422 VALIDATION`，`details.fields` 指出 `total`，訊息「超過可折讓金額 1,050（發票總計 2,100，已折讓 1,050）」（金額依 `d` 位顯示，千分位）。
+- 作廢折讓後額度恢復；草稿不佔額度。
+
+**開立**（鎖定順序：折讓（`FOR UPDATE`）→ 發票（`FOR UPDATE`，同一張發票的折讓依序開立）→ 銷貨退回（有值時，`FOR UPDATE`））：重新執行存檔時的檢查、至少一列明細、累計上限、銷貨退回只在一張有效折讓中；`status = posted`、操作紀錄。
+
+**作廢**：隨時可以作廢已開立的折讓（`void_reason` 必填，同發票）；作廢後發票的可折讓金額恢復、銷貨退回可以再關聯或作廢。
+
+#### 進貨折讓
+
+與銷貨折讓相同（指向**已登錄**的進項憑證、`supplier_id`、`tax_type` 由憑證帶入、累計上限、鎖定順序、作廢），差別：
+
+- 憑證不可是 `customs`（`purchase_invoice_id`「海關繳納證不可折讓」）。
+- 沒有明細，`subtotal`、`tax_amount` 由使用者輸入（「金額與稅額」）；`subtotal` 必須大於 0。
+- `purchase_return_id`：進貨退回已過帳、廠商相同、沒有其他有效的進貨折讓關聯它（「進貨退回 PR202611-0002 已有折讓單 PA202611-0001」）。
+- 訊息中的「發票」改為「憑證」，例如「超過可折讓金額 1,050（憑證總計 2,100，已折讓 1,050）」。
+
+#### 其他單據的作廢限制
+
+| 單據 | 限制 | 錯誤（`422 VALIDATION`，`details` 為 `{ "fields": [], "documents": [ { "entity_key", "record_id", "record_no" } ] }`） |
+|---|---|---|
+| 出貨單 | 被有效（`posted`）的銷項發票關聯時不可作廢 | 「此出貨單已開立發票 AB12345678，請先作廢發票」 |
+| 進貨單 | 被有效的進項憑證關聯時不可作廢 | 「此進貨單已有進項憑證 AB12345678，請先作廢憑證」 |
+| 銷貨退回 | 被有效的銷貨折讓關聯時不可作廢 | 「此銷貨退回已有折讓單 SA202611-0001，請先作廢折讓單」 |
+| 進貨退回 | 被有效的進貨折讓關聯時不可作廢 | 「此進貨退回已有折讓單 PA202611-0001，請先作廢折讓單」 |
+
+- `documents` 的 `record_no` 為發票、憑證的系統單號；訊息中發票、憑證顯示 `invoice_no`，折讓顯示 `record_no`。多張時訊息為第一張。
+- 檢查位置：在既有的「沒有有效的退回」檢查之後（§8.8、§8.9）。作廢時已先 `FOR UPDATE` 鎖定該單據，而開立發票（折讓）時也以 `FOR UPDATE` 鎖定出貨單（退回單），所以兩邊不會同時成功。
+
+#### 客戶、廠商被引用時的限制
+
+補充 §8.8、§8.9「被單據引用時的限制」：
+
+| 資料 | 規則 |
+|---|---|
+| 客戶 | 沒有銷貨單據、但有任何未刪除的銷項發票、銷貨折讓（不論狀態）指向它時不可刪除：`details` 為 `{ "fields": [], "invoice_document_count": 2 }`，訊息「此客戶已有 2 張發票或折讓單，無法刪除，請改為停用」。同時有銷貨單據時維持 §8.9 原本的錯誤 |
+| 廠商 | 同上（進項憑證、進貨折讓），訊息「此廠商已有 2 張進項憑證或折讓單，無法刪除，請改為停用」 |
+| 商品 | 發票、折讓明細的 `product_id` 只是參考，**不限制**刪除與修改（已刪除的商品在關聯欄位顯示 `deleted = true`，§7.3） |
+
+鎖定與 §8.8 相同（刪除時 `FOR UPDATE` 鎖定客戶、廠商再計數；單據存檔時 `FOR SHARE`）。
+
+#### 查詢 API
+
+`hammer_shared::invoice` 定義型別，需要 `record.read`，分頁依 §10。
+
+**尚未開立發票的出貨單** `GET /api/v1/invoicing/uninvoiced-shipments?customer_id=&date_from=&date_to=&page=&page_size=`：
+
+- 列出 `status = posted`、未刪除、**沒有被任何 `status = posted` 的銷項發票關聯**的出貨單；條件都可省略，日期為 `ship_date`，含開始、含結束；依 `ship_date, id` 排序。
+- 項目：`{ "id", "record_no", "ship_date", "customer_id", "customer_code", "customer_name", "tax_type", "tax_included", "subtotal", "tax_amount", "total", "returned_total", "net_total" }`；`returned_total` = 指向它的已過帳銷貨退回 `total` 合計，`net_total = total − returned_total`（參考用，發票金額仍由使用者決定）。
+
+**尚未取得憑證的進貨單** `GET /api/v1/invoicing/uninvoiced-receipts?supplier_id=&date_from=&date_to=&doc_class=invoice|customs&page=&page_size=`：
+
+- 列出已過帳、未刪除、沒有被該類（`doc_class` 預設 `invoice` = `triplicate`、`electronic`；`customs` = 海關繳納證）有效進項憑證關聯的進貨單；日期為 `receipt_date`。
+- 項目：`{ "id", "record_no", "receipt_date", "supplier_id", "supplier_code", "supplier_name", "currency_code", "exchange_rate", "tax_type", "total", "total_twd", "returned_total", "net_total" }`（退回、淨額為單據幣別）。
+
+**單據的發票** `GET /api/v1/invoicing/links?entity_key=shipment&record_id=…`（`entity_key` 為 `shipment`、`goods_receipt`、`sales_return`、`purchase_return`）：回傳關聯此單據的發票、憑證或折讓（**含已作廢**，不分頁），`[ { "entity_key", "record_id", "record_no", "invoice_no", "invoice_date", "status" } ]`，依 `invoice_date, id` 排序；折讓的 `invoice_no` 為 `null`、`invoice_date` 為折讓日期。出貨單、進貨單等畫面用來顯示「已開立的發票號碼」。單據不存在 → `404`。
+
+`entity_key`、`doc_class` 不是允許的值 → `422 VALIDATION`（`details.field` 為參數名稱）。
 
 ### 8.12 財務模組 ⏳ 待討論
 
@@ -2002,13 +2389,15 @@ GROUP BY product_id;
 
 | 單據 | 作廢條件 | 作廢動作 |
 |---|---|---|
-| 出貨單 | 沒有有效的銷貨退回（⏳ 已開發票時的限制，等發票模組再定） | 依 lot_allocations 把數量加回原批號，新增反向異動，扣回訂單的 `shipped_qty` 並重新計算狀態（§8.9） |
-| 進貨單 | 沒有有效的進貨退回；產生的批號沒有其他單據的有效異動（§8.10「作廢」；此時 qty_remaining = qty_in） | 刪除批號（軟刪除），新增反向異動，扣回採購單的 `received_qty` 並重新計算狀態；已被使用時拒絕（`LOT_IN_USE`），提示先作廢後續單據（§8.8） |
-| 進貨退回 | 隨時 | 依 lot_allocations 把數量加回原批號，新增反向異動（§8.8） |
+| 出貨單 | 沒有有效的銷貨退回；沒有被有效的銷項發票關聯（§8.11） | 依 lot_allocations 把數量加回原批號，新增反向異動，扣回訂單的 `shipped_qty` 並重新計算狀態（§8.9） |
+| 進貨單 | 沒有有效的進貨退回；沒有被有效的進項憑證關聯（§8.11）；產生的批號沒有其他單據的有效異動（§8.10「作廢」；此時 qty_remaining = qty_in） | 刪除批號（軟刪除），新增反向異動，扣回採購單的 `received_qty` 並重新計算狀態；已被使用時拒絕（`LOT_IN_USE`），提示先作廢後續單據（§8.8） |
+| 進貨退回 | 沒有被有效的進貨折讓關聯（§8.11） | 依 lot_allocations 把數量加回原批號，新增反向異動（§8.8） |
 | 採購單 | 只有 `confirmed`（沒有任何有效的進貨）；有進貨時改為手動結案 | 狀態改為 `void`，不影響庫存（§8.8「採購單的狀態」） |
 | 盤點調整單 | 新批號沒有其他單據的有效異動；加回既有批號的數量還在 | 依 §8.10「作廢」反向處理 |
+| 銷項發票、進項憑證 | 沒有有效的折讓；跨期作廢不擋（桌面程式警告） | 記錄作廢日期與原因，解除關聯的出貨單、進貨單（§8.11） |
+| 銷貨折讓、進貨折讓 | 隨時 | 記錄作廢日期與原因，恢復可折讓金額（§8.11） |
 | 訂單 | 只有 `confirmed`（沒有任何有效的出貨）；有出貨時改為手動結案 | 狀態改為 `void`，不影響庫存（§8.9「訂單的狀態」） |
-| 銷貨退回 | 加回的數量仍在原批號中（未被再出貨或盤虧） | 扣回加回的數量，新增反向異動；不足時拒絕（`STOCK_INSUFFICIENT`，§8.9） |
+| 銷貨退回 | 沒有被有效的銷貨折讓關聯（§8.11）；加回的數量仍在原批號中（未被再出貨或盤虧） | 扣回加回的數量，新增反向異動；不足時拒絕（`STOCK_INSUFFICIENT`，§8.9） |
 
 ### 9.4 樂觀鎖定
 
@@ -2081,7 +2470,7 @@ GROUP BY product_id;
   | 確認（只有採購單、訂單） | `POST /api/v1/entities/{purchase_order 或 sales_order}/records/{id}/confirm` | `draft` → `confirmed` |
   | 結案（只有採購單、訂單） | `POST /api/v1/entities/{purchase_order 或 sales_order}/records/{id}/close` | `confirmed` / `partially_received`（訂單：`partially_shipped`）→ `closed` |
   - 權限：`record.post`（管理者、可編輯者）。
-  - request：`{ "version": 3 }`（`DocumentActionRequest`；樂觀鎖定，§9.4）。不接受其他內容；要修改單據請先用通用資料 API 存檔再過帳。
+  - request：`{ "version": 3 }`（`DocumentActionRequest`；樂觀鎖定，§9.4）。不接受其他內容；要修改單據請先用通用資料 API 存檔再過帳。例外：發票模組四種單據的 `void` 另外帶 `void_date`、`void_reason`（§8.11「開立與作廢」）。
   - 回應：`200`，內容與單筆查詢相同（含 `lines`、`document`），`version` 已 + 1。
   - 不支援此動作的資料類別（主檔、自訂資料類別、明細子表、不存在的代碼；採購單、訂單的 `post`，採購單、訂單以外的 `confirm`、`close`）、資料不存在或已刪除 → `404 NOT_FOUND`。
   - 檢查順序：權限（`403`）→ 資料存在（`404`）→ `version`（`409 CONFLICT`）→ 狀態（`422 INVALID_STATUS`）→ 內容與庫存（`422 VALIDATION` / `STOCK_INSUFFICIENT` / `LOT_IN_USE`）。任何錯誤都整張 rollback，單據維持原狀態。
@@ -2127,7 +2516,7 @@ GROUP BY product_id;
 | M4a | 單據共通框架（系統單據、單號、狀態、過帳與作廢端點）、庫存基礎（批號、批號扣除、異動流水帳、庫存查詢）、盤點與調整單、期初庫存 |
 | M4b | 採購、進貨（含外幣）、進貨退回 |
 | M4c | 訂單、出貨（先進先出或手動指定批號）、銷貨退回 |
-| M5 | 發票（⏳） |
+| M5 | 發票：銷項發票、銷貨折讓、進項憑證、進貨折讓（內部紀錄，§8.11） |
 | M6 | 財務（⏳） |
 | M7 | 報表、Excel 匯出、列印、備份與還原介面 |
 
@@ -2137,7 +2526,7 @@ GROUP BY product_id;
 
 | # | 項目 | 何時決定 |
 |---|---|---|
-| Q1 | 發票模組細節（字軌、作廢、折讓、與出貨的關聯） | M5 開始前 |
+| Q1 | 發票模組細節（字軌、作廢、折讓、與出貨的關聯） | ✅ 已決定（2026-11-19）：只做內部紀錄，手開號碼不配字軌；銷項三聯式、二聯式，進項三聯式 / 電子發票、海關繳納證；關聯 0–多張出貨單（進貨單），一張出貨單只在一張有效發票中；稅額可在 ±1 元內手動修正；折讓為另一種單據，累計不超過發票總計（§8.11） |
 | Q2 | 財務模組深度（是否做複式記帳、匯兌損益） | M6 開始前 |
 | Q3 | 進口成本分攤（運費、關稅、報關費）到批號成本 | ✅ 已決定：第一版**不分攤**，批號成本 = `unit_price × exchange_rate`（§8.8）。之後要做時另加「費用分攤單」調整批號成本，不改變既有資料 |
 | Q4 | Tailscale 方案、伺服器主機、備份存放位置 | 開放多人使用前 |
