@@ -46,7 +46,9 @@ use time::OffsetDateTime;
 use crate::CoreError;
 use crate::audit::AuditDiff;
 use crate::auth::AuthContext;
-use crate::invoicing::{SALES_INVOICE, SalesInvoiceHandler};
+use crate::invoicing::{
+    SALES_ALLOWANCE, SALES_INVOICE, SalesAllowanceHandler, SalesInvoiceHandler,
+};
 use crate::purchasing::{
     GOODS_RECEIPT, GoodsReceiptHandler, PURCHASE_ORDER, PURCHASE_RETURN, PurchaseOrderHandler,
     PurchaseReturnHandler,
@@ -219,6 +221,7 @@ impl DocumentHandlers {
             .register(SHIPMENT, ShipmentHandler)
             .register(SALES_RETURN, SalesReturnHandler)
             .register(SALES_INVOICE, SalesInvoiceHandler)
+            .register(SALES_ALLOWANCE, SalesAllowanceHandler)
     }
 
     /// 註冊（或取代）資料類別 `entity_key` 的處理函式。
@@ -505,12 +508,14 @@ mod tests {
         assert!(handlers.get(SHIPMENT).is_some());
         assert!(handlers.get(SALES_RETURN).is_some());
         assert!(handlers.get(SALES_INVOICE).is_some());
+        assert!(handlers.get(SALES_ALLOWANCE).is_some());
         assert!(handlers.get("customer").is_none());
         assert!(DocumentHandlers::empty().get(STOCK_ADJUSTMENT).is_none());
         assert_eq!(
             format!("{handlers:?}"),
-            "{\"goods_receipt\", \"purchase_order\", \"purchase_return\", \"sales_invoice\", \
-             \"sales_order\", \"sales_return\", \"shipment\", \"stock_adjustment\"}"
+            "{\"goods_receipt\", \"purchase_order\", \"purchase_return\", \"sales_allowance\", \
+             \"sales_invoice\", \"sales_order\", \"sales_return\", \"shipment\", \
+             \"stock_adjustment\"}"
         );
     }
 
