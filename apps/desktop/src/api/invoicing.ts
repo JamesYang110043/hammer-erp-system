@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { commands } from '../bindings';
 import type { Record as DataRecord } from '../bindings';
-import { INVOICING_FIELDS as F, SALES_ALLOWANCE } from '../records/invoicing';
 import { auditLogsKey } from './auditLogs';
 import { unwrap } from './client';
 import { inventoryKey } from './inventory';
@@ -41,18 +40,48 @@ export function useInvoiceLinks(entityKey: string, id: string | undefined, enabl
   });
 }
 
-/** 發票已開立的銷貨折讓（計算可折讓金額）；沒有發票時不查詢。 */
-export function usePostedAllowances(invoiceId: string | undefined) {
+/** 尚未取得該類憑證的已過帳進貨單；沒有廠商時不查詢。`customs` 為海關繳納證，否則為發票類。 */
+export function useUninvoicedReceipts(
+  supplierId: string | undefined,
+  customs: boolean,
+  enabled = true,
+) {
   return useQuery({
-    queryKey: [...recordsKey(SALES_ALLOWANCE), 'posted-of', invoiceId ?? ''],
+    queryKey: [...invoicingKey, 'uninvoiced-receipts', supplierId ?? '', customs],
     queryFn: () =>
       unwrap(
-        commands.listRecords(SALES_ALLOWANCE, {
+        commands.listUninvoicedReceipts({
+          supplier_id: supplierId ?? null,
+          date_from: null,
+          date_to: null,
+          doc_class: customs ? 'customs' : 'invoice',
+          page: 1,
+          page_size: MAX_PAGE_SIZE,
+        }),
+      ),
+    enabled: enabled && Boolean(supplierId),
+  });
+}
+
+/**
+ * 原發票（憑證）已開立的折讓（計算可折讓金額）；沒有發票時不查詢。`allowanceEntity` 為銷貨折讓或
+ * 進貨折讓，`invoiceField` 為折讓指向原發票的欄位。
+ */
+export function usePostedAllowances(
+  allowanceEntity: string,
+  invoiceField: string,
+  invoiceId: string | undefined,
+) {
+  return useQuery({
+    queryKey: [...recordsKey(allowanceEntity), 'posted-of', invoiceId ?? ''],
+    queryFn: () =>
+      unwrap(
+        commands.listRecords(allowanceEntity, {
           page: 1,
           page_size: MAX_PAGE_SIZE,
           sort: null,
           filters: [
-            { field_key: F.salesInvoice, op: 'eq', value: invoiceId! },
+            { field_key: invoiceField, op: 'eq', value: invoiceId! },
             { field_key: 'status', op: 'eq', value: 'posted' },
           ],
         }),

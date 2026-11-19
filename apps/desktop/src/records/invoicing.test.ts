@@ -166,3 +166,35 @@ describe('顯示', () => {
     expect(invoicingStatusNote('shipment', '此單據已過帳')).toBe('此單據已過帳');
   });
 });
+
+describe('進項憑證、進貨折讓', () => {
+  it('總計 = 未稅 + 稅額', async () => {
+    const { enteredTotal, hasEnteredAmounts } = await import('./invoicing');
+    expect(enteredTotal('200', '10')).toBe('210.0000');
+    expect(enteredTotal('', '10')).toBeUndefined();
+    expect(hasEnteredAmounts('purchase_invoice')).toBe(true);
+    expect(hasEnteredAmounts('purchase_allowance')).toBe(true);
+    expect(hasEnteredAmounts('sales_invoice')).toBe(false);
+  });
+
+  it('依台幣進貨單建議金額，外幣不建議', async () => {
+    const { suggestedInvoiceAmounts } = await import('./invoicing');
+    expect(
+      suggestedInvoiceAmounts(
+        [
+          { currency_code: 'TWD', total_twd: '210.00' },
+          { currency_code: 'TWD', total_twd: '1050.00' },
+        ],
+        '0.05',
+      ),
+    ).toEqual({ subtotal: '1200', tax_amount: '60' });
+    // 1000 ÷ 1.05 = 952.38 → 952、稅 48
+    expect(
+      suggestedInvoiceAmounts([{ currency_code: 'TWD', total_twd: '1000.00' }], '0.05'),
+    ).toEqual({ subtotal: '952', tax_amount: '48' });
+    expect(
+      suggestedInvoiceAmounts([{ currency_code: 'USD', total_twd: '3215.00' }], '0'),
+    ).toBeUndefined();
+    expect(suggestedInvoiceAmounts([], '0.05')).toBeUndefined();
+  });
+});

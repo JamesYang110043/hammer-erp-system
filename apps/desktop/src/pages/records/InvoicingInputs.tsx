@@ -24,15 +24,25 @@ import {
   useInvoiceLinks,
   usePostedAllowances,
   useRecordById,
+  useUninvoicedReceipts,
   useUninvoicedShipments,
 } from '../../api/invoicing';
-import type { Record as DataRecord, UninvoicedShipment_Serialize } from '../../bindings';
+import type {
+  Record as DataRecord,
+  UninvoicedReceipt_Serialize,
+  UninvoicedShipment_Serialize,
+} from '../../bindings';
 import { recordPath } from '../../modules';
 import { DOCUMENT_STATUS_LABELS, documentStatus } from '../../records/documents';
 import { initialFormValues } from '../../records/form';
 import {
+  CUSTOMS,
   DUPLICATE,
   INVOICING_FIELDS as F,
+  PURCHASE_ALLOWANCE,
+  PURCHASE_INVOICE,
+  PURCHASE_INVOICE_RECEIPT,
+  SALES_ALLOWANCE,
   SALES_ALLOWANCE_LINE,
   SALES_INVOICE,
   SALES_INVOICE_LINE,
@@ -42,6 +52,7 @@ import {
   dateText,
   linesFromSource,
   moneyText,
+  suggestedInvoiceAmounts,
   postedLabel,
   sumAmounts,
   taxPeriodLabel,
@@ -262,6 +273,162 @@ export function ShipmentPicker({
   );
 }
 
+/** 進項憑證：選擇廠商（新增或更換）時帶入賣方統一編號（快照，§8.11「買受人資訊」）。 */
+export function PurchaseInvoiceAutofill({ onChange }: { onChange: () => void }) {
+  const form = Form.useFormInstance();
+  const queryClient = useQueryClient();
+  const supplierId = textOf(Form.useWatch(F.supplier, form));
+  const prev = useRef(textOf(form.getFieldValue(F.supplier)));
+
+  useEffect(() => {
+    if (supplierId !== textOf(form.getFieldValue(F.supplier))) {
+      return;
+    }
+    const before = prev.current;
+    prev.current = supplierId;
+    if (!supplierId || supplierId === before) {
+      return;
+    }
+    void queryClient
+      .fetchQuery(recordQuery('supplier', supplierId))
+      .then((supplier) => {
+        form.setFieldValue(F.sellerTaxId, textOf(supplier.data.tax_id));
+        onChange();
+      })
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supplierId]);
+
+  return null;
+}
+
+/**
+ * 進項憑證的「選擇進貨單」：列出廠商尚未取得該類憑證（發票類或海關繳納證）的已過帳進貨單，勾選後加入
+ * 關聯。還沒有輸入金額、且勾選的進貨單都是台幣時，依進貨單的台幣總計帶入未稅金額與稅額（請依憑證修改）。
+ */
+export function ReceiptPicker({
+  details,
+  onChange,
+}: {
+  details: readonly DetailTable[];
+  onChange: () => void;
+}) {
+  const form = Form.useFormInstance();
+  const { message } = App.useApp();
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const supplierId = textOf(Form.useWatch(F.supplier, form));
+  const customs = Form.useWatch(F.docType, form) === CUSTOMS;
+  const receipts = useUninvoicedReceipts(supplierId, customs, open);
+  const taxRates = useTaxRates();
+  const linkTable = details.find((d) => d.entity.key === PURCHASE_INVOICE_RECEIPT);
+  const linkPath = [LINES_FORM_KEY, PURCHASE_INVOICE_RECEIPT];
+
+  const linked = (): string[] =>
+    ((form.getFieldValue(linkPath) ?? []) as LineFormValues[]).flatMap((r) => {
+      const id = textOf(r[F.goodsReceipt]);
+      return id ? [id] : [];
+    });
+
+  const openPicker = () => {
+    if (!supplierId) {
+      message.warning('請先選擇廠商');
+      return;
+    }
+    setSelected(linked());
+    setOpen(true);
+  };
+
+  const apply = () => {
+    if (!linkTable) {
+      return;
+    }
+    const current = linked();
+    const added = selected.filter((id) => !current.includes(id));
+    const keptLinks = ((form.getFieldValue(linkPath) ?? []) as LineFormValues[]).filter((r) =>
+      selected.includes(textOf(r[F.goodsReceipt]) ?? ''),
+    );
+    form.setFieldValue(linkPath, [
+      ...keptLinks,
+      ...added.map((id) => initialFormValues(linkTable.fields, { [F.goodsReceipt]: id })),
+    ]);
+    setOpen(false);
+
+    const rows = (receipts.data?.items ?? []).filter((r) => selected.includes(r.id));
+    const hasAmounts =
+      textOf(form.getFieldValue(F.subtotal)) !== undefined ||
+      textOf(form.getFieldValue(F.taxAmount)) !== undefined;
+    const rate = taxRates.data?.find((t) => t.code === form.getFieldValue(F.taxType))?.rate;
+    const suggested =
+      !customs && !hasAmounts && rate !== undefined
+        ? suggestedInvoiceAmounts(rows, rate)
+        : undefined;
+    if (suggested) {
+      form.setFieldsValue({
+        [F.subtotal]: suggested.subtotal,
+        [F.taxAmount]: suggested.tax_amount,
+      });
+      message.success('已依進貨單的台幣總計帶入金額，請依憑證修改');
+    } else if (added.length > 0) {
+      message.success(`已加入 ${added.length} 張進貨單，請依憑證輸入金額`);
+    }
+    onChange();
+  };
+
+  return (
+    <>
+      <Space style={{ marginBottom: 16 }}>
+        <Button icon={<FileAddOutlined />} onClick={openPicker}>
+          選擇進貨單
+        </Button>
+        <Typography.Text type="secondary">
+          {customs ? '勾選尚未取得海關繳納證的進貨單' : '勾選尚未取得發票的進貨單'}
+        </Typography.Text>
+      </Space>
+      <Modal
+        open={open}
+        title="選擇進貨單"
+        okText="帶入"
+        cancelText="取消"
+        width={820}
+        onOk={apply}
+        onCancel={() => setOpen(false)}
+      >
+        <Table<UninvoicedReceipt_Serialize>
+          aria-label="尚未取得憑證的進貨單"
+          size="small"
+          rowKey="id"
+          loading={receipts.isLoading}
+          pagination={false}
+          dataSource={receipts.data?.items ?? []}
+          locale={{ emptyText: '這個廠商沒有尚未取得憑證的進貨單' }}
+          rowSelection={{
+            selectedRowKeys: selected,
+            onChange: (keys) => setSelected(keys as string[]),
+          }}
+          columns={[
+            { title: '單號', dataIndex: 'record_no' },
+            { title: '進貨日期', dataIndex: 'receipt_date' },
+            { title: '幣別', dataIndex: 'currency_code' },
+            {
+              title: '總計',
+              dataIndex: 'total',
+              align: 'right',
+              render: (v: string, r) => (r.currency_code === 'TWD' ? money(v) : v),
+            },
+            {
+              title: '台幣總計',
+              dataIndex: 'total_twd',
+              align: 'right',
+              render: (v: string | null) => (v ? money(v) : '—'),
+            },
+          ]}
+        />
+      </Modal>
+    </>
+  );
+}
+
 /** 期別的說明（發票、折讓的日期下方）。 */
 export function TaxPeriodNote() {
   const form = Form.useFormInstance();
@@ -290,20 +457,10 @@ export function SalesAllowanceAutofill({
   const form = Form.useFormInstance();
   const queryClient = useQueryClient();
   const { message } = App.useApp();
-  const [params] = useSearchParams();
   const taxRates = useTaxRates();
-  const invoiceId = textOf(Form.useWatch(F.salesInvoice, form));
+  const invoiceId = useAllowanceHeader(SALES_ALLOWANCE_KIND, F.customer, isNew, onChange);
   const returnId = textOf(Form.useWatch(F.salesReturn, form));
   const prevReturn = useRef(textOf(form.getFieldValue(F.salesReturn)));
-
-  useEffect(() => {
-    const fromUrl = params.get('invoice');
-    if (isNew && fromUrl && !textOf(form.getFieldValue(F.salesInvoice))) {
-      form.setFieldValue(F.salesInvoice, fromUrl);
-      onChange();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     if (returnId !== textOf(form.getFieldValue(F.salesReturn))) {
@@ -337,43 +494,107 @@ export function SalesAllowanceAutofill({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [returnId]);
 
-  // 原發票的客戶與稅別（伺服器存檔時也會帶入；先帶入讓金額預覽可以計算稅額）
-  const invoice = useRecordById(SALES_INVOICE, invoiceId);
-  useEffect(() => {
-    const d = invoice.data?.data;
-    if (!d) {
-      return;
-    }
-    if (
-      form.getFieldValue(F.customer) !== d.customer_id ||
-      form.getFieldValue(F.taxType) !== d.tax_type
-    ) {
-      form.setFieldsValue({ [F.customer]: d.customer_id, [F.taxType]: d.tax_type });
-      onChange();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoice.data]);
-
-  return <AllowanceAvailable invoiceId={invoiceId} />;
+  return <AllowanceAvailable kind={SALES_ALLOWANCE_KIND} invoiceId={invoiceId} />;
 }
 
-/** 原發票的可折讓金額（發票總計 − 已開立折讓的合計）。 */
-function AllowanceAvailable({ invoiceId }: { invoiceId: string | undefined }) {
-  const invoice = useRecordById(SALES_INVOICE, invoiceId);
-  const posted = usePostedAllowances(invoiceId);
+/**
+ * 進貨折讓：與銷貨折讓相同帶入原憑證、廠商、稅別並顯示可折讓金額；選擇進貨退回且還沒有輸入金額時，
+ * 台幣的退回單帶入未稅金額與稅額（外幣不帶入，依折讓證明單輸入）。
+ */
+export function PurchaseAllowanceAutofill({
+  isNew,
+  onChange,
+}: {
+  isNew: boolean;
+  onChange: () => void;
+}) {
+  const form = Form.useFormInstance();
+  const queryClient = useQueryClient();
+  const { message } = App.useApp();
+  const invoiceId = useAllowanceHeader(PURCHASE_ALLOWANCE_KIND, F.supplier, isNew, onChange);
+  const returnId = textOf(Form.useWatch(F.purchaseReturn, form));
+  const prevReturn = useRef(textOf(form.getFieldValue(F.purchaseReturn)));
+
+  useEffect(() => {
+    if (returnId !== textOf(form.getFieldValue(F.purchaseReturn))) {
+      return;
+    }
+    const before = prevReturn.current;
+    prevReturn.current = returnId;
+    if (!returnId || returnId === before) {
+      return;
+    }
+    if (textOf(form.getFieldValue(F.subtotal)) || textOf(form.getFieldValue(F.taxAmount))) {
+      return;
+    }
+    void queryClient
+      .fetchQuery(recordQuery('purchase_return', returnId))
+      .then((ret) => {
+        if (ret.data.currency_code !== 'TWD') {
+          message.info('外幣的進貨退回不帶入金額，請依折讓證明單輸入台幣金額');
+          return;
+        }
+        form.setFieldsValue({
+          [F.subtotal]: ret.data.subtotal,
+          [F.taxAmount]: ret.data.tax_amount,
+        });
+        onChange();
+        message.success(`已帶入 ${ret.record_no ?? '進貨退回'} 的金額，請依折讓證明單確認`);
+      })
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [returnId]);
+
+  return <AllowanceAvailable kind={PURCHASE_ALLOWANCE_KIND} invoiceId={invoiceId} />;
+}
+
+/** 折讓與原發票（憑證）的對應。 */
+interface AllowanceKind {
+  invoiceEntity: string;
+  allowanceEntity: string;
+  invoiceField: string;
+  /** 訊息中的「發票」或「憑證」。 */
+  word: string;
+}
+
+const SALES_ALLOWANCE_KIND: AllowanceKind = {
+  invoiceEntity: SALES_INVOICE,
+  allowanceEntity: SALES_ALLOWANCE,
+  invoiceField: F.salesInvoice,
+  word: '發票',
+};
+
+const PURCHASE_ALLOWANCE_KIND: AllowanceKind = {
+  invoiceEntity: PURCHASE_INVOICE,
+  allowanceEntity: PURCHASE_ALLOWANCE,
+  invoiceField: F.purchaseInvoice,
+  word: '憑證',
+};
+
+/** 原發票（憑證）的可折讓金額（總計 − 已開立折讓的合計）。 */
+function AllowanceAvailable({
+  kind,
+  invoiceId,
+}: {
+  kind: AllowanceKind;
+  invoiceId: string | undefined;
+}) {
+  const invoice = useRecordById(kind.invoiceEntity, invoiceId);
+  const posted = usePostedAllowances(kind.allowanceEntity, kind.invoiceField, invoiceId);
   if (!invoice.data || !posted.data) {
     return null;
   }
   const status = documentStatus(invoice.data);
-  if (status !== 'posted') {
-    return (
-      <Alert
-        showIcon
-        type="warning"
-        style={{ marginBottom: 16 }}
-        message={status === 'void' ? '原發票已作廢，不能開立折讓' : '原發票尚未開立，不能開立折讓'}
-      />
-    );
+  const warning =
+    status === 'void'
+      ? `原${kind.word}已作廢，不能開立折讓`
+      : status !== 'posted'
+        ? `原${kind.word}${kind.word === '憑證' ? '尚未登錄' : '尚未開立'}，不能開立折讓`
+        : invoice.data.data[F.docType] === CUSTOMS
+          ? '海關繳納證不可折讓'
+          : undefined;
+  if (warning) {
+    return <Alert showIcon type="warning" style={{ marginBottom: 16 }} message={warning} />;
   }
   const totals = posted.data.items.map((a) => a.data.total);
   const available = availableAllowance(invoice.data.data.total, totals) ?? '0';
@@ -384,27 +605,80 @@ function AllowanceAvailable({ invoiceId }: { invoiceId: string | undefined }) {
       type="info"
       style={{ marginBottom: 16 }}
       message={`可折讓金額 ${money(available)}`}
-      description={`發票 ${String(invoice.data.data.invoice_no ?? '')} 總計 ${money(
+      description={`${kind.word} ${String(invoice.data.data.invoice_no ?? '')} 總計 ${money(
         String(invoice.data.data.total ?? '0'),
       )}，已折讓 ${money(used)}`}
     />
   );
 }
 
-/** 出貨單（已過帳、已作廢）上的發票號碼：關聯的銷項發票，含已作廢。 */
-export function InvoiceLinksNote({ entityKey, record }: { entityKey: string; record: DataRecord }) {
+/**
+ * 折讓共通：從原發票開立時以網址的 `invoice` 帶入原發票；原發票的客戶（廠商）與稅別先帶入（伺服器存檔時
+ * 也會帶入），讓金額預覽可以計算稅額。回傳目前的原發票 id。
+ */
+function useAllowanceHeader(
+  kind: AllowanceKind,
+  partyField: string,
+  isNew: boolean,
+  onChange: () => void,
+): string | undefined {
+  const form = Form.useFormInstance();
+  const [params] = useSearchParams();
+  const invoiceId = textOf(Form.useWatch(kind.invoiceField, form));
+
+  useEffect(() => {
+    const fromUrl = params.get('invoice');
+    if (isNew && fromUrl && !textOf(form.getFieldValue(kind.invoiceField))) {
+      form.setFieldValue(kind.invoiceField, fromUrl);
+      onChange();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const invoice = useRecordById(kind.invoiceEntity, invoiceId);
+  useEffect(() => {
+    const d = invoice.data?.data;
+    if (!d) {
+      return;
+    }
+    if (
+      form.getFieldValue(partyField) !== d[partyField] ||
+      form.getFieldValue(F.taxType) !== d.tax_type
+    ) {
+      form.setFieldsValue({ [partyField]: d[partyField], [F.taxType]: d.tax_type });
+      onChange();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoice.data]);
+
+  return invoiceId;
+}
+
+/** 出貨單（進貨單）上的發票（進項憑證）號碼：關聯的發票、憑證，含已作廢。 */
+export function InvoiceLinksNote({
+  entityKey,
+  record,
+  label = '發票',
+}: {
+  entityKey: string;
+  record: DataRecord;
+  /** 「發票」或「進項憑證」。 */
+  label?: string;
+}) {
   const links = useInvoiceLinks(entityKey, record.id);
   const items = links.data ?? [];
   return (
     <Typography.Paragraph>
       <Space wrap>
         <span>
-          <LinkOutlined /> 發票：
+          <LinkOutlined /> {label}：
         </span>
         {links.isLoading ? (
           <Typography.Text type="secondary">讀取中</Typography.Text>
         ) : items.length === 0 ? (
-          <Typography.Text type="secondary">尚未開立發票</Typography.Text>
+          <Typography.Text type="secondary">
+            {label === '發票' ? '尚未開立發票' : `尚未取得${label}`}
+          </Typography.Text>
         ) : (
           items.map((link) => (
             <Link key={link.record_id} to={recordPath(link.entity_key, link.record_id)}>
