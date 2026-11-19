@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT shipment_id\n        FROM sales_invoice_shipments\n        WHERE sales_invoice_id = $1 AND deleted_at IS NULL\n        ORDER BY sort_order, id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "shipment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sales_invoice_shipments",
+            "name": "shipment_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cf3057d9ddeda0e9190b99ec4e111ec3821d9d2eda65afe6ef7891637e17245b"
+}

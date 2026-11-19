@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT (SELECT count(*) FROM purchase_invoices WHERE supplier_id = $1 AND deleted_at IS NULL)\n             + (SELECT count(*) FROM purchase_allowances WHERE supplier_id = $1 AND deleted_at IS NULL)\n             AS \"count!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9d8b15a7ef34555f598898b821efedb6000b213b85256e037c9f5a40219a3e84"
+}

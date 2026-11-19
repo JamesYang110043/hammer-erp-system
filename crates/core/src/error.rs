@@ -104,7 +104,8 @@ pub enum CoreError {
     /// `children`、`transactions`、`documents`、`open_orders` 為使用中的商品數、子分類數、庫存異動筆數、
     /// 採購或進貨單據張數、未結案的採購單張數（至少一個大於 0）。API 回應為 `VALIDATION`，`details` 為
     /// `{ "fields": [], "in_use_count": 3, "child_count": 1, "transaction_count": 12, "document_count": 3,
-    /// "open_purchase_order_count": 2, "open_sales_order_count": 1 }`（只列出大於 0 的數量）。
+    /// "open_purchase_order_count": 2, "open_sales_order_count": 1, "invoice_document_count": 2 }`（只列出大於 0
+    /// 的數量）。
     #[error("{message}")]
     RecordInUse {
         message: String,
@@ -114,6 +115,8 @@ pub enum CoreError {
         documents: i64,
         open_orders: i64,
         open_sales_orders: i64,
+        /// 客戶的銷項發票、銷貨折讓張數，或廠商的進項憑證、進貨折讓張數（§8.11）。
+        invoice_documents: i64,
     },
 
     /// 單據目前的狀態不允許此操作（§7.1「系統單據」、§10「單據動作」）：修改、刪除非草稿，過帳非草稿，
@@ -365,6 +368,7 @@ impl From<CoreError> for ApiError {
             documents,
             open_orders,
             open_sales_orders,
+            invoice_documents,
             ..
         } = &err
         {
@@ -386,6 +390,9 @@ impl From<CoreError> for ApiError {
             }
             if *open_sales_orders > 0 {
                 details["open_sales_order_count"] = serde_json::json!(open_sales_orders);
+            }
+            if *invoice_documents > 0 {
+                details["invoice_document_count"] = serde_json::json!(invoice_documents);
             }
             ApiError::new(code, err.to_string()).with_details(details)
         } else if let CoreError::InvalidStatus { status, .. } = &err {
@@ -507,6 +514,7 @@ mod tests {
             documents: 0,
             open_orders: 0,
             open_sales_orders: 0,
+            invoice_documents: 0,
         };
         assert_eq!(err.code(), ErrorCode::Validation);
         let api: ApiError = err.into();
@@ -524,6 +532,7 @@ mod tests {
             documents: 0,
             open_orders: 0,
             open_sales_orders: 0,
+            invoice_documents: 0,
         }
         .into();
         assert_eq!(
@@ -539,6 +548,7 @@ mod tests {
             documents: 0,
             open_orders: 0,
             open_sales_orders: 0,
+            invoice_documents: 0,
         }
         .into();
         assert_eq!(
@@ -554,6 +564,7 @@ mod tests {
             documents: 3,
             open_orders: 2,
             open_sales_orders: 1,
+            invoice_documents: 0,
         }
         .into();
         assert_eq!(

@@ -1981,7 +1981,7 @@ M5 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 - 系統單號 `record_no`（`SI202611-0001`，依 §7.1 取號）與**發票號碼** `invoice_no`（`AB12345678`，使用者輸入）是兩個欄位；選擇器與標題顯示發票號碼。
 - 關聯出貨單、進貨單以**明細子表**（`sales_invoice_shipment`、`purchase_invoice_receipt`）記錄，與其他明細一樣以 `lines.<明細子表代碼>` 整組取代（§10「主表與明細」），不另外提供端點。
 - 八張表的共同規則與 §8.8「資料類別」相同（§8.6「系統資料表的共同規則」、§7.1「系統單據」、`posted_at` / `posted_by`、`voided_at` / `voided_by` 與四個 CHECK、「系統維護」的欄位）。另外：
-  - 四張主表都有 `void_date` / `void_reason`（作廢日期、原因，系統維護的欄位，由作廢端點寫入，見「開立與作廢」），`CHECK ((status = 'void') = (void_date IS NOT NULL))`、`CHECK ((void_date IS NULL) = (void_reason IS NULL))`。
+  - 四張主表都有 `void_date` / `void_reason`（作廢日期、原因，系統維護的欄位，由作廢端點寫入，見「開立與作廢」），`CHECK (status <> 'draft' OR void_date IS NULL)`、`CHECK (status <> 'void' OR void_date IS NOT NULL)`、`CHECK ((void_date IS NULL) = (void_reason IS NULL))`（作廢時先寫入作廢日期與原因，框架再把狀態改為 `void`，同一個 transaction 內；0015 起）。
   - 索引：`(<單據日期>, id)`、`(status)`、`(customer_id)` 或 `(supplier_id)`；明細 `(<主表單數>_id, sort_order, id) WHERE deleted_at IS NULL`；表中列出的外鍵索引。
 
 #### `sales_invoices`（銷項發票，系統單據 `sales_invoice`）
@@ -2240,18 +2240,18 @@ tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
 
 使用 §10「單據動作」的 `post`、`void` 端點（需要 `record.post`；檢查順序、回應、`INVALID_STATUS` 相同）。
 
-**作廢的 request**：這四種單據的 `void` 接受 `{ "version": 3, "void_date": "2026-11-20", "void_reason": "金額開錯" }`（`hammer_shared::invoice::InvoiceVoidRequest`）：
+**作廢的 request**：這四種單據的 `void` 接受 `{ "version": 3, "void_date": "2026-11-20", "void_reason": "金額開錯" }`（`DocumentActionRequest` 的選填欄位 `void_date`、`void_reason`）：
 
 - `void_reason` 必填（去除空白後不可為空，「請輸入作廢原因」，`details.fields` 指出 `void_reason`）；`void_date` 可省略，預設為作廢當天（Asia/Taipei），不可早於單據日期（「作廢日期不可早於發票日期」）。
-- 其他單據的 `void` 仍只接受 `{ "version" }`。
+- 其他單據的 `void`、所有單據的其他動作帶了 `void_date` 或 `void_reason` → `422 VALIDATION`（「此動作不接受作廢日期與原因」）。
 - **跨期作廢不擋**：桌面程式在 `void_date` 的期別與單據的 `tax_period` 不同時顯示警告「作廢日期與發票不同期（發票 2026 年 9–10 月），請確認是否需要另外處理申報」，使用者確認後仍可作廢。
 
-**銷項發票開立**（鎖定順序：發票（`FOR UPDATE`）→ 客戶（`FOR SHARE`）→ 關聯的出貨單（依 id `FOR UPDATE`））：
+**銷項發票開立**（鎖定順序：發票（`FOR UPDATE`）→ 發票號碼（advisory lock）→ 客戶（`FOR SHARE`）→ 關聯的出貨單（依 id `FOR UPDATE`））：
 
 1. 檢查 `version`、`status = draft`；重新執行存檔時的檢查（號碼格式、金額與手動稅額、關聯出貨單）。
 2. 三聯式的買受人必填；至少一列明細（「至少要有一筆明細」）；客戶未刪除（「客戶已刪除」）。
 3. 鎖定出貨單後再檢查一次「一張出貨單只能在一張有效發票中」（並行開立時，後取得鎖的一方在這裡失敗）。
-4. 發票號碼不重複（「發票號碼」）。
+4. 發票號碼不重複（「發票號碼」）。查詢前以 advisory lock 鎖定號碼，並行開立同一個號碼時後者在查詢時就會看到前者（不會撞上唯一索引）。
 5. `status = posted`、`posted_at`、`posted_by`，`version` + 1；寫入操作紀錄（`post`）。
 
 **銷項發票作廢**：

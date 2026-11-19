@@ -37,7 +37,7 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use time::OffsetDateTime;
+use time::{Date, OffsetDateTime};
 
 use crate::Id;
 use crate::decimal::Decimal;
@@ -154,11 +154,40 @@ impl DocumentAction {
 }
 
 /// 過帳、作廢的 request。只有 `version`，其他內容一律拒絕（`deny_unknown_fields`）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+///
+/// 例外：發票模組四種單據的作廢另外帶 `void_date`、`void_reason`（§8.11「開立與作廢」）；其他單據、
+/// 其他動作帶了這兩個值時伺服器回傳 `422`。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(deny_unknown_fields)]
 pub struct DocumentActionRequest {
     /// 目前的版本號（樂觀鎖定，§9.4）。
     pub version: i32,
+    /// 作廢日期（`YYYY-MM-DD`，Asia/Taipei）；省略時為作廢當天。只有發票模組的作廢使用。
+    #[serde(
+        with = "crate::time::date_str::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[specta(type = Option<String>)]
+    pub void_date: Option<Date>,
+    /// 作廢原因（必填）。只有發票模組的作廢使用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub void_reason: Option<String>,
+}
+
+impl DocumentActionRequest {
+    /// 只有 `version` 的 request。
+    pub fn new(version: i32) -> Self {
+        Self {
+            version,
+            ..Self::default()
+        }
+    }
+
+    /// 是否帶了作廢日期或原因。
+    pub fn has_void_details(&self) -> bool {
+        self.void_date.is_some() || self.void_reason.is_some()
+    }
 }
 
 /// 單據主表的過帳、作廢資訊（[`Record::document`](crate::record::Record::document)）。
@@ -311,6 +340,28 @@ mod tests {
                 .is_err()
         );
         assert!(serde_json::from_value::<DocumentActionRequest>(json!({})).is_err());
+        assert!(!req.has_void_details());
+        assert_eq!(
+            serde_json::to_value(DocumentActionRequest::new(3)).unwrap(),
+            json!({ "version": 3 })
+        );
+    }
+
+    #[test]
+    fn action_request_accepts_void_details() {
+        let req: DocumentActionRequest = serde_json::from_value(
+            json!({ "version": 3, "void_date": "2026-11-20", "void_reason": "金額開錯" }),
+        )
+        .unwrap();
+        assert_eq!(req.void_date, Some(time::macros::date!(2026 - 11 - 20)));
+        assert_eq!(req.void_reason.as_deref(), Some("金額開錯"));
+        assert!(req.has_void_details());
+        assert!(
+            serde_json::from_value::<DocumentActionRequest>(
+                json!({ "version": 3, "void_date": "2026/11/20" })
+            )
+            .is_err()
+        );
     }
 
     #[test]

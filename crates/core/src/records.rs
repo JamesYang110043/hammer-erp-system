@@ -273,6 +273,7 @@ pub async fn create_record(
     let mut input = document_input(&store, &fields, &req.data).into_owned();
     purchasing::save::prefill(&mut tx, &entity.key, &fields, &mut input).await?;
     sales::save::prefill(&mut tx, &entity.key, &fields, &mut input, &req.lines).await?;
+    invoicing::save::prefill_buyer(&mut tx, &entity.key, &mut input, None).await?;
     let master = normalize_record_data(&fields, &input, WriteMode::Create);
     // 系統單據新增時一律是草稿（§7.1「系統單據」）
     let master = master.map(|mut data| {
@@ -311,6 +312,7 @@ pub async fn create_record(
     line_errors.extend(receipt_errors);
     let (master, shipment_errors) = shipment_rules(&mut tx, &entity.key, master, &lines).await?;
     line_errors.extend(shipment_errors);
+    line_errors.extend(invoice_link_rules(&mut tx, &entity.key, &master, &lines).await?);
     let mut data = validation_error(master, line_errors)?;
     apply_amounts(&mut tx, &entity.key, &mut data, &mut lines).await?;
     check_relations(&mut tx, &fields, &data, None).await?;
@@ -421,7 +423,8 @@ pub async fn update_record(
     let details = load_details_for_write(&mut tx, &entity).await?;
     let formulas = formulas_of(&fields, &details);
     let existing = data_object(&current.data)?;
-    let input = document_input(&store, &fields, &req.data);
+    let mut input = document_input(&store, &fields, &req.data).into_owned();
+    invoicing::save::prefill_buyer(&mut tx, &entity.key, &mut input, Some(existing)).await?;
     let master = normalize_record_data(&fields, &input, WriteMode::Update { existing });
     let master = system_rules(&store, &entity.key, master, Some(existing));
     let master = purchasing::save::derive_currency(
@@ -438,7 +441,8 @@ pub async fn update_record(
     // 有公式時所有明細都要重算（主表的子表彙總也需要沒帶到的明細）；有金額計算的單據也是
     let recompute_all = !formulas.is_empty()
         || purchasing::save::recalculates_lines(&entity.key)
-        || sales::save::recalculates_lines(&entity.key);
+        || sales::save::recalculates_lines(&entity.key)
+        || invoicing::save::recalculates_lines(&entity.key);
     let mut lines = prepare_lines(
         &mut tx,
         &details,
@@ -471,6 +475,7 @@ pub async fn update_record(
     line_errors.extend(receipt_errors);
     let (master, shipment_errors) = shipment_rules(&mut tx, &entity.key, master, &lines).await?;
     line_errors.extend(shipment_errors);
+    line_errors.extend(invoice_link_rules(&mut tx, &entity.key, &master, &lines).await?);
     let mut data = validation_error(master, line_errors)?;
     apply_amounts(&mut tx, &entity.key, &mut data, &mut lines).await?;
     let formula_errors = compute_formulas(&mut tx, &formulas, &mut data, &mut lines, now).await?;
@@ -1196,7 +1201,8 @@ fn system_rules(
         return master;
     };
     let mut data = master?;
-    let errors = master_data::check_data(entity_key, &mut data, existing);
+    let mut errors = master_data::check_data(entity_key, &mut data, existing);
+    errors.extend(invoicing::save::check_header(entity_key, &mut data));
     if errors.is_empty() {
         invoicing::save::apply_tax_period(entity_key, &mut data);
         Ok(data)
@@ -1987,6 +1993,7 @@ async fn prepare_line(
             &mut data,
         ));
         errors.extend(sales::save::check_line_data(&detail.entity.key, &mut data));
+        errors.extend(invoicing::save::check_line_data(&detail.entity.key, &data));
         if !errors.is_empty() {
             return Ok(Err(errors));
         }
@@ -2144,14 +2151,41 @@ async fn shipment_rules(
     sales::shipments::check_save(tx, entity_key, master, &rows).await
 }
 
-/// 有金額計算的單據（[`purchasing::save::apply_amounts`]、[`sales::save::apply_amounts`]）：依所有明細
-/// 重新計算明細金額與合計。修改時所有明細都已列入 `lines`（`recalculates_lines`）。
+/// 銷項發票關聯出貨單的檢查（[`invoicing::save::check_links`]）。只檢查通過欄位驗證的明細；修改時
+/// 所有明細都已列入 `lines`（[`invoicing::save::recalculates_lines`]）。
+async fn invoice_link_rules(
+    tx: &mut PgTransaction<'_>,
+    entity_key: &str,
+    master: &Result<Map<String, Value>, Vec<FieldError>>,
+    lines: &[DetailWrite<'_>],
+) -> Result<Vec<LineError>, CoreError> {
+    let rows: Vec<(usize, &Map<String, Value>)> = lines
+        .iter()
+        .filter(|d| d.detail.entity.key == invoicing::SALES_INVOICE_SHIPMENT)
+        .flat_map(|d| d.lines.iter())
+        .filter_map(|l| Some((l.index, l.data.as_object()?)))
+        .collect();
+    invoicing::save::check_links(tx, entity_key, master, &rows).await
+}
+
+/// 有金額計算的單據（[`purchasing::save::apply_amounts`]、[`sales::save::apply_amounts`]、
+/// [`invoicing::save::apply_amounts`]）：依所有明細重新計算明細金額與合計。修改時所有明細都已列入
+/// `lines`（`recalculates_lines`）。
 async fn apply_amounts(
     tx: &mut PgTransaction<'_>,
     entity_key: &str,
     data: &mut Map<String, Value>,
     lines: &mut [DetailWrite<'_>],
 ) -> Result<(), CoreError> {
+    if let Some(line_key) = invoicing::save::amount_lines(entity_key) {
+        let rows: Vec<&mut Map<String, Value>> = lines
+            .iter_mut()
+            .filter(|d| d.detail.entity.key == line_key)
+            .flat_map(|d| d.lines.iter_mut())
+            .filter_map(|l| l.data.as_object_mut())
+            .collect();
+        return invoicing::save::apply_amounts(tx, entity_key, data, rows).await;
+    }
     let purchase = purchasing::save::with_amounts(entity_key).map(|d| d.line_key);
     let Some(line_key) =
         purchase.or_else(|| sales::save::with_amounts(entity_key).map(|d| d.line_key))

@@ -38,6 +38,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use hammer_db::inventory as inventory_db;
+use hammer_db::invoicing as invoicing_db;
 use hammer_db::sales::{self as db, OrderForShipment, OrderLineRow, ShipmentLineRow};
 use hammer_db::sqlx::PgConnection;
 use hammer_shared::Id;
@@ -59,6 +60,7 @@ use crate::formulas::today_of;
 use crate::inventory::{
     Allocation, GOODS, Inventory, Line, LockRequest, Source, allocations_of_line, qty4,
 };
+use crate::invoicing::SALES_INVOICE;
 use crate::purchasing::amounts::{TWD_SCALE, round_to, with_scale};
 use crate::purchasing::save::{decimal_of, id_of};
 use crate::record_data::FieldError;
@@ -589,6 +591,24 @@ async fn void(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), 
                     entity_key: SALES_RETURN.into(),
                     record_id: *id,
                     record_no: no.clone(),
+                })
+                .collect(),
+        });
+    }
+
+    // 被有效的銷項發票關聯時不可作廢（§8.11「其他單據的作廢限制」）；開立發票時以 FOR UPDATE 鎖定出貨單，
+    // 這裡出貨單已由框架鎖定，所以兩邊不會同時成功
+    let invoices =
+        invoicing_db::posted_invoices_of_shipments(&mut *conn, &[doc.record_id], None).await?;
+    if let Some(first) = invoices.first() {
+        return Err(CoreError::DocumentsInUse {
+            message: format!("此出貨單已開立發票 {}，請先作廢發票", first.invoice_no),
+            documents: invoices
+                .iter()
+                .map(|i| DocumentRef {
+                    entity_key: SALES_INVOICE.into(),
+                    record_id: i.invoice_id,
+                    record_no: i.invoice_record_no.clone(),
                 })
                 .collect(),
         });

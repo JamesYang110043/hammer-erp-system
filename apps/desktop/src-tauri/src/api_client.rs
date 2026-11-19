@@ -2261,7 +2261,7 @@ mod tests {
                 "stock_adjustment",
                 record_id,
                 DocumentAction::Post,
-                &DocumentActionRequest { version: 2 },
+                &DocumentActionRequest::new(2),
             )
             .await
             .unwrap();
@@ -2274,7 +2274,7 @@ mod tests {
                 "stock_adjustment",
                 record_id,
                 DocumentAction::Void,
-                &DocumentActionRequest { version: 3 },
+                &DocumentActionRequest::new(3),
             )
             .await
             .unwrap_err();
@@ -2933,7 +2933,7 @@ mod tests {
                     "purchase_order",
                     record_id,
                     action,
-                    &DocumentActionRequest { version },
+                    &DocumentActionRequest::new(version),
                 )
                 .await
                 .unwrap();

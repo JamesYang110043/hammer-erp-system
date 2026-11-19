@@ -122,7 +122,7 @@ fn lines<'a>(record: &'a Record, detail: &str) -> &'a [Record] {
 /// 銷項發票（含明細、關聯出貨單）與銷貨折讓。
 #[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
 async fn sales_invoice_and_allowance_drafts(pool: PgPool) {
-    let (_, token) = editor(&pool).await;
+    let (user, token) = editor(&pool).await;
     let (customer, _, product) = master_data(&pool, &token).await;
     let shipment = create(
         &pool,
@@ -136,6 +136,15 @@ async fn sales_invoice_and_allowance_drafts(pool: PgPool) {
         }),
     )
     .await;
+    // 發票只能關聯已過帳的出貨單（#184）；以 SQL 模擬過帳，不需要庫存
+    sqlx::query(
+        "UPDATE shipments SET status = 'posted', posted_at = now(), posted_by = $2 WHERE id = $1",
+    )
+    .bind(shipment.id)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let invoice = create(
         &pool,
