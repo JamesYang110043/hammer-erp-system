@@ -26,11 +26,12 @@ async function box(l: Locator) {
   return b!;
 }
 
-/** 高度為 {@link CONTROL_HEIGHT}，且與 `ref` 上緣對齊（同一列）。 */
+/** 高度為 {@link CONTROL_HEIGHT}，且與 `ref` 上緣對齊（同一列，容許 1px）。 */
 async function expectAligned(l: Locator, ref: Locator) {
   const [a, r] = [await box(l), await box(ref)];
   expect(Math.round(a.height)).toBe(CONTROL_HEIGHT);
-  expect(Math.abs(a.y - r.y)).toBeLessThan(1);
+  // inline-block 按鈕依文字基線排列，中英文混排（例如「Cancel」與「儲 存」）可能相差 1px
+  expect(Math.abs(a.y - r.y)).toBeLessThanOrEqual(1);
 }
 
 test('buttons and inputs share the taller control height', async ({ page }) => {
