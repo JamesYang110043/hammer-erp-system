@@ -865,7 +865,7 @@ async fn document_checks(pool: PgPool) {
     .unwrap_err();
     assert_eq!(
         sqlstate(&err).1.as_deref(),
-        Some("sales_invoices_void_date_check")
+        Some("sales_invoices_void_date_required_check")
     );
 
     let pi = insert_purchase_invoice(&pool, supplier, "PI-1", "CD12345678").await;

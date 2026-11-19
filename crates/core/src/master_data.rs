@@ -30,6 +30,7 @@
 
 use std::str::FromStr;
 
+use hammer_db::invoicing as invoicing_db;
 use hammer_db::lock::advisory_xact_lock;
 use hammer_db::master_data as db;
 use hammer_db::purchasing as purchasing_db;
@@ -366,6 +367,8 @@ pub struct Usage {
     pub open_orders: i64,
     /// 明細引用商品的未結案訂單張數。
     pub open_sales_orders: i64,
+    /// 客戶的銷項發票、銷貨折讓張數，或廠商的進項憑證、進貨折讓張數（不論狀態，§8.11）。
+    pub invoice_documents: i64,
 }
 
 /// 依使用狀況決定能否刪除：都沒有使用時為 `None`，否則為 [`CoreError::RecordInUse`]。
@@ -378,6 +381,7 @@ pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
         documents: usage.documents,
         open_orders: usage.open_orders,
         open_sales_orders: usage.open_sales_orders,
+        invoice_documents: usage.invoice_documents,
     };
     if usage.transactions > 0 {
         return Some(blocked(
@@ -427,6 +431,26 @@ pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
             },
         ));
     }
+    if usage.invoice_documents > 0 {
+        let message = if entity_key == CUSTOMER {
+            format!(
+                "此客戶已有 {} 張發票或折讓單，無法刪除，請改為停用",
+                usage.invoice_documents
+            )
+        } else {
+            format!(
+                "此廠商已有 {} 張進項憑證或折讓單，無法刪除，請改為停用",
+                usage.invoice_documents
+            )
+        };
+        return Some(blocked(
+            message,
+            Usage {
+                invoice_documents: usage.invoice_documents,
+                ..Usage::default()
+            },
+        ));
+    }
     if usage.products <= 0 && usage.children <= 0 {
         return None;
     }
@@ -454,7 +478,7 @@ pub fn delete_blocked(entity_key: &str, usage: Usage) -> Option<CoreError> {
 
 /// 刪除單位、商品分類前，檢查是否還有未刪除的商品使用它，或分類還有子分類；刪除商品前檢查是否已有
 /// 庫存異動、未結案的採購單或訂單；刪除廠商前檢查是否已有採購、進貨單據，刪除客戶前檢查是否已有訂單、
-/// 出貨單據 → [`CoreError::RecordInUse`]。
+/// 出貨單據；有銷貨單據時以銷貨單據的錯誤為準，沒有時再檢查發票、折讓（§8.11）→ [`CoreError::RecordInUse`]。
 /// 其他資料類別不檢查。
 ///
 /// 必須在已鎖定（`FOR UPDATE`）要刪除的資料之後呼叫：新增、修改商品或分類時，關聯檢查會以 `FOR SHARE`
@@ -482,10 +506,14 @@ pub(crate) async fn check_delete(
         },
         CUSTOMER => Usage {
             documents: sales_db::count_customer_documents(&mut **tx, id).await?,
+            invoice_documents: invoicing_db::count_customer_invoice_documents(&mut **tx, id)
+                .await?,
             ..Usage::default()
         },
         SUPPLIER => Usage {
             documents: purchasing_db::count_supplier_documents(&mut **tx, id).await?,
+            invoice_documents: invoicing_db::count_supplier_invoice_documents(&mut **tx, id)
+                .await?,
             ..Usage::default()
         },
         _ => return Ok(()),
@@ -918,6 +946,53 @@ mod tests {
             Some(json!({
                 "fields": [], "open_purchase_order_count": 1, "open_sales_order_count": 2
             }))
+        );
+    }
+
+    #[test]
+    fn invoice_documents_block_delete_after_sales_documents() {
+        let message = |entity: &str, usage: Usage| {
+            let api: ApiError = delete_blocked(entity, usage).unwrap().into();
+            (api.message, api.details)
+        };
+        assert_eq!(
+            message(
+                CUSTOMER,
+                Usage {
+                    invoice_documents: 2,
+                    ..Usage::default()
+                }
+            ),
+            (
+                "此客戶已有 2 張發票或折讓單，無法刪除，請改為停用".to_owned(),
+                Some(json!({ "fields": [], "invoice_document_count": 2 }))
+            )
+        );
+        assert_eq!(
+            message(
+                SUPPLIER,
+                Usage {
+                    invoice_documents: 1,
+                    ..Usage::default()
+                }
+            )
+            .0,
+            "此廠商已有 1 張進項憑證或折讓單，無法刪除，請改為停用"
+        );
+        // 同時有銷貨單據時維持原本的錯誤
+        assert_eq!(
+            message(
+                CUSTOMER,
+                Usage {
+                    documents: 3,
+                    invoice_documents: 2,
+                    ..Usage::default()
+                }
+            ),
+            (
+                "此客戶已有 3 張訂單或出貨單據，無法刪除，請改為停用".to_owned(),
+                Some(json!({ "fields": [], "document_count": 3 }))
+            )
         );
     }
 

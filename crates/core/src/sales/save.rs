@@ -194,7 +194,7 @@ pub fn line_errors(
 }
 
 /// 金額的小數位數：台幣在存檔當下的 `decimal_places`（找不到時為 0）。
-async fn sales_places(conn: &mut PgConnection) -> Result<u32, CoreError> {
+pub(crate) async fn sales_places(conn: &mut PgConnection) -> Result<u32, CoreError> {
     match currency_db::find_currency(&mut *conn, SALES_CURRENCY).await? {
         Some(c) => u32::try_from(c.decimal_places)
             .map_err(|_| CoreError::Internal("台幣的小數位數不正確".into())),

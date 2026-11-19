@@ -2,10 +2,19 @@
 //!
 //! 只做內部紀錄：發票在別處開立，系統登錄號碼與金額，不上傳財政部、不做字軌配號。
 //!
-//! - [`save`]：存檔時由伺服器寫入的期別（[`save::tax_period`]）與折讓從原發票帶入的表頭
-//!   （[`save::derive_allowance`]）
+//! - [`number`]：發票號碼的正規化與格式
+//! - [`amounts`]：手動修正稅額、輸入的稅額檢查（明細金額與合計共用 [`crate::sales::amounts`]）
+//! - [`save`]：存檔時的買受人帶入、號碼與統一編號、期別、折讓從原發票帶入、明細檢查、關聯出貨單、金額
+//! - [`sales_invoices`]：銷項發票的開立與作廢（[`SalesInvoiceHandler`]）
+//! - [`voiding`]：作廢日期與原因（四種單據共用）
 
+pub mod amounts;
+pub mod number;
+pub mod sales_invoices;
 pub mod save;
+pub mod voiding;
+
+pub use sales_invoices::SalesInvoiceHandler;
 
 /// 銷項發票的資料類別代碼。
 pub const SALES_INVOICE: &str = "sales_invoice";

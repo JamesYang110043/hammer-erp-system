@@ -565,7 +565,7 @@ pub async fn post_record(
             &key,
             id,
             DocumentAction::Post,
-            &DocumentActionRequest { version },
+            &DocumentActionRequest::new(version),
         )
         .await
 }
@@ -587,7 +587,7 @@ pub async fn void_record(
             &key,
             id,
             DocumentAction::Void,
-            &DocumentActionRequest { version },
+            &DocumentActionRequest::new(version),
         )
         .await
 }
@@ -609,7 +609,7 @@ pub async fn confirm_record(
             &key,
             id,
             DocumentAction::Confirm,
-            &DocumentActionRequest { version },
+            &DocumentActionRequest::new(version),
         )
         .await
 }
@@ -630,7 +630,7 @@ pub async fn close_record(
             &key,
             id,
             DocumentAction::Close,
-            &DocumentActionRequest { version },
+            &DocumentActionRequest::new(version),
         )
         .await
 }

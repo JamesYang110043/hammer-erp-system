@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, record_no\n        FROM sales_allowances\n        WHERE sales_invoice_id = $1 AND status = 'posted' AND deleted_at IS NULL\n        ORDER BY id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sales_allowances",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "record_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sales_allowances",
+            "name": "record_no"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c0cfa90508e55602b55e8b7a56d1f78757a8cd60f0187b3cabd1096f9a34b035"
+}

@@ -46,10 +46,12 @@ use time::OffsetDateTime;
 use crate::CoreError;
 use crate::audit::AuditDiff;
 use crate::auth::AuthContext;
+use crate::invoicing::{SALES_INVOICE, SalesInvoiceHandler};
 use crate::purchasing::{
     GOODS_RECEIPT, GoodsReceiptHandler, PURCHASE_ORDER, PURCHASE_RETURN, PurchaseOrderHandler,
     PurchaseReturnHandler,
 };
+use crate::record_data::FieldError;
 use crate::record_lines::{audit_key, audit_value};
 use crate::records::{
     Detail, commit, detail_lines, document_status, fetch_record, invalid_status,
@@ -60,6 +62,13 @@ use crate::sales::{
 };
 use crate::schema::{ENTITY_NOT_FOUND, ensure_version};
 use crate::stock_adjustments::StockAdjustmentHandler;
+
+/// 作廢日期（發票模組的作廢 request 與主表欄位，§8.11）。
+pub const VOID_DATE: &str = "void_date";
+/// 作廢原因（發票模組的作廢 request 與主表欄位，§8.11）。
+pub const VOID_REASON: &str = "void_reason";
+/// 不是發票模組的作廢卻帶了作廢日期或原因。
+pub const MSG_NO_VOID_DETAILS: &str = "此動作不接受作廢日期與原因";
 
 /// 盤點調整單的資料類別代碼（§8.10）。
 pub const STOCK_ADJUSTMENT: &str = "stock_adjustment";
@@ -84,6 +93,8 @@ pub struct DocumentContext<'a> {
     pub now: OffsetDateTime,
     /// 用戶端資訊（處理函式寫入其他資料的操作紀錄時使用）。
     pub client_info: Option<&'a str>,
+    /// 動作的 request（發票模組的作廢讀取 `void_date`、`void_reason`）。
+    pub request: &'a DocumentActionRequest,
 }
 
 /// 一個動作的狀態轉換。
@@ -137,6 +148,12 @@ pub trait DocumentHandler: Send + Sync {
         conn: &'a mut PgConnection,
         doc: &'a DocumentContext<'a>,
     ) -> HandlerFuture<'a>;
+
+    /// 作廢時是否接受 request 的 `void_date`、`void_reason`（發票模組，§8.11）。預設不接受：帶了時
+    /// `422`。
+    fn accepts_void_details(&self) -> bool {
+        false
+    }
 
     /// 確認（[`Self::transition`] 支援時才會呼叫）。預設不做任何處理。
     fn confirm<'a>(
@@ -201,6 +218,7 @@ impl DocumentHandlers {
             .register(SALES_ORDER, SalesOrderHandler)
             .register(SHIPMENT, ShipmentHandler)
             .register(SALES_RETURN, SalesReturnHandler)
+            .register(SALES_INVOICE, SalesInvoiceHandler)
     }
 
     /// 註冊（或取代）資料類別 `entity_key` 的處理函式。
@@ -361,6 +379,18 @@ async fn run(
     if !transition.from.contains(&status) {
         return Err(invalid_status(status, action.label()));
     }
+    if req.has_void_details() && !(action == DocumentAction::Void && handler.accepts_void_details())
+    {
+        let field = if req.void_date.is_some() {
+            VOID_DATE
+        } else {
+            VOID_REASON
+        };
+        return Err(CoreError::InvalidFields(vec![FieldError {
+            field_key: field.into(),
+            message: MSG_NO_VOID_DETAILS.into(),
+        }]));
+    }
     let record_no = current
         .record_no
         .clone()
@@ -382,6 +412,7 @@ async fn run(
         actor: ctx.user_id,
         now,
         client_info,
+        request: req,
     };
     match action {
         DocumentAction::Post => handler.post(&mut tx, &doc).await?,
@@ -473,12 +504,13 @@ mod tests {
         assert!(handlers.get(SALES_ORDER).is_some());
         assert!(handlers.get(SHIPMENT).is_some());
         assert!(handlers.get(SALES_RETURN).is_some());
+        assert!(handlers.get(SALES_INVOICE).is_some());
         assert!(handlers.get("customer").is_none());
         assert!(DocumentHandlers::empty().get(STOCK_ADJUSTMENT).is_none());
         assert_eq!(
             format!("{handlers:?}"),
-            "{\"goods_receipt\", \"purchase_order\", \"purchase_return\", \"sales_order\", \
-             \"sales_return\", \"shipment\", \"stock_adjustment\"}"
+            "{\"goods_receipt\", \"purchase_order\", \"purchase_return\", \"sales_invoice\", \
+             \"sales_order\", \"sales_return\", \"shipment\", \"stock_adjustment\"}"
         );
     }
 
