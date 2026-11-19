@@ -1,0 +1,159 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.id, s.record_no, s.ship_date, s.customer_id, c.code AS customer_code,\n               c.name AS customer_name, s.tax_type, s.tax_included, s.subtotal, s.tax_amount,\n               s.total,\n               COALESCE((SELECT sum(r.total) FROM sales_returns r\n                         WHERE r.shipment_id = s.id AND r.status = 'posted'\n                           AND r.deleted_at IS NULL), 0) AS \"returned_total!\"\n        FROM shipments s\n        JOIN customers c ON c.id = s.customer_id\n        WHERE s.status = 'posted' AND s.deleted_at IS NULL\n          AND ($1::uuid IS NULL OR s.customer_id = $1)\n          AND ($2::date IS NULL OR s.ship_date >= $2)\n          AND ($3::date IS NULL OR s.ship_date <= $3)\n          AND NOT EXISTS (\n              SELECT 1 FROM sales_invoice_shipments l\n              JOIN sales_invoices i ON i.id = l.sales_invoice_id\n              WHERE l.shipment_id = s.id AND l.deleted_at IS NULL\n                AND i.status = 'posted' AND i.deleted_at IS NULL)\n        ORDER BY s.ship_date, s.id\n        LIMIT $4 OFFSET $5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "record_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "record_no"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "ship_date",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "ship_date"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "customer_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "customers",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "customer_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "customers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "tax_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "tax_type"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "tax_included",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "tax_included"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "subtotal",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "subtotal"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "tax_amount",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "tax_amount"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "total",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "shipments",
+            "name": "total"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "returned_total!",
+        "type_info": "Numeric",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "23917a31f3283ea4306f43641d34e4f7c0c08d2d06feb8fbce5aecbd74e7b8a7"
+}

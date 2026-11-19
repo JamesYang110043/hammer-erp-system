@@ -48,7 +48,7 @@ pub fn money2(value: Decimal) -> Decimal {
     v
 }
 
-fn invalid(field: &'static str, message: impl Into<String>) -> CoreError {
+pub(crate) fn invalid(field: &'static str, message: impl Into<String>) -> CoreError {
     CoreError::InvalidField {
         field,
         message: message.into(),
@@ -56,7 +56,7 @@ fn invalid(field: &'static str, message: impl Into<String>) -> CoreError {
 }
 
 /// 去除前後空白；空字串視為未指定。
-fn non_empty(value: Option<&str>) -> Option<&str> {
+pub(crate) fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|s| !s.is_empty())
 }
 
@@ -69,13 +69,16 @@ fn parse_bool(field: &'static str, value: Option<&str>) -> Result<Option<bool>, 
     }
 }
 
-fn parse_id(field: &'static str, value: Option<&str>) -> Result<Option<Id>, CoreError> {
+pub(crate) fn parse_id(field: &'static str, value: Option<&str>) -> Result<Option<Id>, CoreError> {
     non_empty(value)
         .map(|s| Id::from_str(s).map_err(|_| invalid(field, "不是有效的 id")))
         .transpose()
 }
 
-fn parse_date(field: &'static str, value: Option<&str>) -> Result<Option<Date>, CoreError> {
+pub(crate) fn parse_date(
+    field: &'static str,
+    value: Option<&str>,
+) -> Result<Option<Date>, CoreError> {
     non_empty(value)
         .map(|s| {
             Date::parse(s, format_description!("[year]-[month]-[day]"))
@@ -84,11 +87,11 @@ fn parse_date(field: &'static str, value: Option<&str>) -> Result<Option<Date>, 
         .transpose()
 }
 
-fn page_of(page: Option<u32>, page_size: Option<u32>) -> Result<PageRequest, CoreError> {
+pub(crate) fn page_of(page: Option<u32>, page_size: Option<u32>) -> Result<PageRequest, CoreError> {
     PageRequest::new(page, page_size).map_err(|err| invalid(err.field, err.message()))
 }
 
-fn total_of(n: i64) -> u32 {
+pub(crate) fn total_of(n: i64) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 

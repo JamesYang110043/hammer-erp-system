@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(*) AS \"count!\"\n        FROM goods_receipts g\n        WHERE g.status = 'posted' AND g.deleted_at IS NULL\n          AND ($1::uuid IS NULL OR g.supplier_id = $1)\n          AND ($2::date IS NULL OR g.receipt_date >= $2)\n          AND ($3::date IS NULL OR g.receipt_date <= $3)\n          AND NOT EXISTS (\n              SELECT 1 FROM purchase_invoice_receipts l\n              JOIN purchase_invoices i ON i.id = l.purchase_invoice_id\n              WHERE l.goods_receipt_id = g.id AND l.deleted_at IS NULL\n                AND i.status = 'posted' AND i.deleted_at IS NULL\n                AND (i.doc_type = 'customs') = $4)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e5da573bbe4cabe6d3bc0b20883ed223dd60fcaca8a987a5f5094fbad0336edf"
+}

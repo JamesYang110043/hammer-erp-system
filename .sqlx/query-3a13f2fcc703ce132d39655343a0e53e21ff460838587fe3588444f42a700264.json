@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT CASE $1\n            WHEN 'shipment' THEN EXISTS (SELECT 1 FROM shipments WHERE id = $2 AND deleted_at IS NULL)\n            WHEN 'goods_receipt' THEN EXISTS (SELECT 1 FROM goods_receipts WHERE id = $2 AND deleted_at IS NULL)\n            WHEN 'sales_return' THEN EXISTS (SELECT 1 FROM sales_returns WHERE id = $2 AND deleted_at IS NULL)\n            WHEN 'purchase_return' THEN EXISTS (SELECT 1 FROM purchase_returns WHERE id = $2 AND deleted_at IS NULL)\n            ELSE false\n        END AS \"exists!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3a13f2fcc703ce132d39655343a0e53e21ff460838587fe3588444f42a700264"
+}

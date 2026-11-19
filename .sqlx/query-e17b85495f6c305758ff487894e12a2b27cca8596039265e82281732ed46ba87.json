@@ -1,0 +1,160 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT g.id, g.record_no, g.receipt_date, g.supplier_id, s.code AS supplier_code,\n               s.name AS supplier_name, g.currency_code, g.exchange_rate, g.tax_type, g.total,\n               g.total_twd,\n               COALESCE((SELECT sum(r.total) FROM purchase_returns r\n                         WHERE r.goods_receipt_id = g.id AND r.status = 'posted'\n                           AND r.deleted_at IS NULL), 0) AS \"returned_total!\"\n        FROM goods_receipts g\n        JOIN suppliers s ON s.id = g.supplier_id\n        WHERE g.status = 'posted' AND g.deleted_at IS NULL\n          AND ($1::uuid IS NULL OR g.supplier_id = $1)\n          AND ($2::date IS NULL OR g.receipt_date >= $2)\n          AND ($3::date IS NULL OR g.receipt_date <= $3)\n          AND NOT EXISTS (\n              SELECT 1 FROM purchase_invoice_receipts l\n              JOIN purchase_invoices i ON i.id = l.purchase_invoice_id\n              WHERE l.goods_receipt_id = g.id AND l.deleted_at IS NULL\n                AND i.status = 'posted' AND i.deleted_at IS NULL\n                AND (i.doc_type = 'customs') = $4)\n        ORDER BY g.receipt_date, g.id\n        LIMIT $5 OFFSET $6\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "record_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "record_no"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "receipt_date",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "receipt_date"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "supplier_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "supplier_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "supplier_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "suppliers",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "supplier_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "suppliers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "currency_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "currency_code"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "exchange_rate",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "exchange_rate"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "tax_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "tax_type"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "total",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "total"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "total_twd",
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "total_twd"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "returned_total!",
+        "type_info": "Numeric",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date",
+        "Bool",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "e17b85495f6c305758ff487894e12a2b27cca8596039265e82281732ed46ba87"
+}

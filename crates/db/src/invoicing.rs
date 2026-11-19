@@ -754,3 +754,314 @@ pub async fn posted_allowance_total_of_purchase_invoice<'e>(
     .await?;
     Ok(total)
 }
+
+// ---------------------------------------------------------------------------
+// 查詢 API（#187）
+// ---------------------------------------------------------------------------
+
+/// 尚未開立發票的出貨單的條件（都可省略；日期含開始、含結束）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UninvoicedFilter {
+    /// 客戶（出貨單）或廠商（進貨單）。
+    pub party_id: Option<Uuid>,
+    pub date_from: Option<Date>,
+    pub date_to: Option<Date>,
+    /// 進貨單：是否找海關繳納證（否則為發票類）。出貨單不使用。
+    pub customs: bool,
+}
+
+/// 尚未開立發票的出貨單一列。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UninvoicedShipmentRow {
+    pub id: Uuid,
+    pub record_no: String,
+    pub ship_date: Date,
+    pub customer_id: Uuid,
+    pub customer_code: String,
+    pub customer_name: String,
+    pub tax_type: String,
+    pub tax_included: bool,
+    pub subtotal: Decimal,
+    pub tax_amount: Decimal,
+    pub total: Decimal,
+    pub returned_total: Decimal,
+}
+
+/// 已過帳、未刪除、沒有被有效銷項發票關聯的出貨單筆數。
+pub async fn count_uninvoiced_shipments<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &UninvoicedFilter,
+) -> Result<i64, DbError> {
+    let count = sqlx::query_scalar!(
+        r#"
+        SELECT count(*) AS "count!"
+        FROM shipments s
+        WHERE s.status = 'posted' AND s.deleted_at IS NULL
+          AND ($1::uuid IS NULL OR s.customer_id = $1)
+          AND ($2::date IS NULL OR s.ship_date >= $2)
+          AND ($3::date IS NULL OR s.ship_date <= $3)
+          AND NOT EXISTS (
+              SELECT 1 FROM sales_invoice_shipments l
+              JOIN sales_invoices i ON i.id = l.sales_invoice_id
+              WHERE l.shipment_id = s.id AND l.deleted_at IS NULL
+                AND i.status = 'posted' AND i.deleted_at IS NULL)
+        "#,
+        filter.party_id,
+        filter.date_from,
+        filter.date_to,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(count)
+}
+
+/// 同 [`count_uninvoiced_shipments`] 的一頁，依 `ship_date, id` 排序。
+pub async fn list_uninvoiced_shipments<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &UninvoicedFilter,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<UninvoicedShipmentRow>, DbError> {
+    let rows = sqlx::query_as!(
+        UninvoicedShipmentRow,
+        r#"
+        SELECT s.id, s.record_no, s.ship_date, s.customer_id, c.code AS customer_code,
+               c.name AS customer_name, s.tax_type, s.tax_included, s.subtotal, s.tax_amount,
+               s.total,
+               COALESCE((SELECT sum(r.total) FROM sales_returns r
+                         WHERE r.shipment_id = s.id AND r.status = 'posted'
+                           AND r.deleted_at IS NULL), 0) AS "returned_total!"
+        FROM shipments s
+        JOIN customers c ON c.id = s.customer_id
+        WHERE s.status = 'posted' AND s.deleted_at IS NULL
+          AND ($1::uuid IS NULL OR s.customer_id = $1)
+          AND ($2::date IS NULL OR s.ship_date >= $2)
+          AND ($3::date IS NULL OR s.ship_date <= $3)
+          AND NOT EXISTS (
+              SELECT 1 FROM sales_invoice_shipments l
+              JOIN sales_invoices i ON i.id = l.sales_invoice_id
+              WHERE l.shipment_id = s.id AND l.deleted_at IS NULL
+                AND i.status = 'posted' AND i.deleted_at IS NULL)
+        ORDER BY s.ship_date, s.id
+        LIMIT $4 OFFSET $5
+        "#,
+        filter.party_id,
+        filter.date_from,
+        filter.date_to,
+        limit,
+        offset,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 尚未取得憑證的進貨單一列。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UninvoicedReceiptRow {
+    pub id: Uuid,
+    pub record_no: String,
+    pub receipt_date: Date,
+    pub supplier_id: Uuid,
+    pub supplier_code: String,
+    pub supplier_name: String,
+    pub currency_code: String,
+    pub exchange_rate: Option<Decimal>,
+    pub tax_type: String,
+    pub total: Decimal,
+    pub total_twd: Option<Decimal>,
+    pub returned_total: Decimal,
+}
+
+/// 已過帳、未刪除、沒有被該類（發票類或海關繳納證）有效進項憑證關聯的進貨單筆數。
+pub async fn count_uninvoiced_receipts<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &UninvoicedFilter,
+) -> Result<i64, DbError> {
+    let count = sqlx::query_scalar!(
+        r#"
+        SELECT count(*) AS "count!"
+        FROM goods_receipts g
+        WHERE g.status = 'posted' AND g.deleted_at IS NULL
+          AND ($1::uuid IS NULL OR g.supplier_id = $1)
+          AND ($2::date IS NULL OR g.receipt_date >= $2)
+          AND ($3::date IS NULL OR g.receipt_date <= $3)
+          AND NOT EXISTS (
+              SELECT 1 FROM purchase_invoice_receipts l
+              JOIN purchase_invoices i ON i.id = l.purchase_invoice_id
+              WHERE l.goods_receipt_id = g.id AND l.deleted_at IS NULL
+                AND i.status = 'posted' AND i.deleted_at IS NULL
+                AND (i.doc_type = 'customs') = $4)
+        "#,
+        filter.party_id,
+        filter.date_from,
+        filter.date_to,
+        filter.customs,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(count)
+}
+
+/// 同 [`count_uninvoiced_receipts`] 的一頁，依 `receipt_date, id` 排序。
+pub async fn list_uninvoiced_receipts<'e>(
+    executor: impl PgExecutor<'e>,
+    filter: &UninvoicedFilter,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<UninvoicedReceiptRow>, DbError> {
+    let rows = sqlx::query_as!(
+        UninvoicedReceiptRow,
+        r#"
+        SELECT g.id, g.record_no, g.receipt_date, g.supplier_id, s.code AS supplier_code,
+               s.name AS supplier_name, g.currency_code, g.exchange_rate, g.tax_type, g.total,
+               g.total_twd,
+               COALESCE((SELECT sum(r.total) FROM purchase_returns r
+                         WHERE r.goods_receipt_id = g.id AND r.status = 'posted'
+                           AND r.deleted_at IS NULL), 0) AS "returned_total!"
+        FROM goods_receipts g
+        JOIN suppliers s ON s.id = g.supplier_id
+        WHERE g.status = 'posted' AND g.deleted_at IS NULL
+          AND ($1::uuid IS NULL OR g.supplier_id = $1)
+          AND ($2::date IS NULL OR g.receipt_date >= $2)
+          AND ($3::date IS NULL OR g.receipt_date <= $3)
+          AND NOT EXISTS (
+              SELECT 1 FROM purchase_invoice_receipts l
+              JOIN purchase_invoices i ON i.id = l.purchase_invoice_id
+              WHERE l.goods_receipt_id = g.id AND l.deleted_at IS NULL
+                AND i.status = 'posted' AND i.deleted_at IS NULL
+                AND (i.doc_type = 'customs') = $4)
+        ORDER BY g.receipt_date, g.id
+        LIMIT $5 OFFSET $6
+        "#,
+        filter.party_id,
+        filter.date_from,
+        filter.date_to,
+        filter.customs,
+        limit,
+        offset,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 單據的發票、憑證或折讓一列。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvoiceLinkRow {
+    pub record_id: Uuid,
+    pub record_no: String,
+    pub invoice_no: Option<String>,
+    pub invoice_date: Date,
+    pub status: String,
+}
+
+/// 單據（出貨單、進貨單、銷貨退回、進貨退回）是否存在且未刪除。
+pub async fn linkable_document_exists<'e>(
+    executor: impl PgExecutor<'e>,
+    entity_key: &str,
+    id: Uuid,
+) -> Result<bool, DbError> {
+    let exists = sqlx::query_scalar!(
+        r#"
+        SELECT CASE $1
+            WHEN 'shipment' THEN EXISTS (SELECT 1 FROM shipments WHERE id = $2 AND deleted_at IS NULL)
+            WHEN 'goods_receipt' THEN EXISTS (SELECT 1 FROM goods_receipts WHERE id = $2 AND deleted_at IS NULL)
+            WHEN 'sales_return' THEN EXISTS (SELECT 1 FROM sales_returns WHERE id = $2 AND deleted_at IS NULL)
+            WHEN 'purchase_return' THEN EXISTS (SELECT 1 FROM purchase_returns WHERE id = $2 AND deleted_at IS NULL)
+            ELSE false
+        END AS "exists!"
+        "#,
+        entity_key,
+        id,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(exists)
+}
+
+/// 關聯出貨單的銷項發票（未刪除，含已作廢；同一張發票只列一次），依 `invoice_date, id` 排序。
+pub async fn invoices_of_shipment<'e>(
+    executor: impl PgExecutor<'e>,
+    shipment_id: Uuid,
+) -> Result<Vec<InvoiceLinkRow>, DbError> {
+    let rows = sqlx::query_as!(
+        InvoiceLinkRow,
+        r#"
+        SELECT DISTINCT i.id AS record_id, i.record_no, i.invoice_no AS "invoice_no?",
+               i.invoice_date, i.status
+        FROM sales_invoice_shipments l
+        JOIN sales_invoices i ON i.id = l.sales_invoice_id
+        WHERE l.shipment_id = $1 AND l.deleted_at IS NULL AND i.deleted_at IS NULL
+        ORDER BY i.invoice_date, i.id
+        "#,
+        shipment_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 關聯進貨單的進項憑證（同上）。
+pub async fn invoices_of_receipt<'e>(
+    executor: impl PgExecutor<'e>,
+    receipt_id: Uuid,
+) -> Result<Vec<InvoiceLinkRow>, DbError> {
+    let rows = sqlx::query_as!(
+        InvoiceLinkRow,
+        r#"
+        SELECT DISTINCT i.id AS record_id, i.record_no, i.invoice_no AS "invoice_no?",
+               i.invoice_date, i.status
+        FROM purchase_invoice_receipts l
+        JOIN purchase_invoices i ON i.id = l.purchase_invoice_id
+        WHERE l.goods_receipt_id = $1 AND l.deleted_at IS NULL AND i.deleted_at IS NULL
+        ORDER BY i.invoice_date, i.id
+        "#,
+        receipt_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 關聯銷貨退回的銷貨折讓（未刪除，含已作廢），依 `allowance_date, id` 排序。
+pub async fn allowances_of_sales_return<'e>(
+    executor: impl PgExecutor<'e>,
+    return_id: Uuid,
+) -> Result<Vec<InvoiceLinkRow>, DbError> {
+    let rows = sqlx::query_as!(
+        InvoiceLinkRow,
+        r#"
+        SELECT id AS record_id, record_no, NULL::text AS "invoice_no?",
+               allowance_date AS invoice_date, status
+        FROM sales_allowances
+        WHERE sales_return_id = $1 AND deleted_at IS NULL
+        ORDER BY allowance_date, id
+        "#,
+        return_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 關聯進貨退回的進貨折讓（同上）。
+pub async fn allowances_of_purchase_return<'e>(
+    executor: impl PgExecutor<'e>,
+    return_id: Uuid,
+) -> Result<Vec<InvoiceLinkRow>, DbError> {
+    let rows = sqlx::query_as!(
+        InvoiceLinkRow,
+        r#"
+        SELECT id AS record_id, record_no, NULL::text AS "invoice_no?",
+               allowance_date AS invoice_date, status
+        FROM purchase_allowances
+        WHERE purchase_return_id = $1 AND deleted_at IS NULL
+        ORDER BY allowance_date, id
+        "#,
+        return_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
