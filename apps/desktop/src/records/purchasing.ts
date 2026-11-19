@@ -6,6 +6,8 @@ import type {
   Record as DataRecord,
 } from '../bindings';
 import { PURCHASE_ORDER } from './documents';
+import { add, format, mul, parse, round, sub } from './decimal';
+import type { Dec } from './decimal';
 import { formFields } from './form';
 import type { RecordData } from './form';
 
@@ -92,11 +94,14 @@ export function amountLineKey(entityKey: string): string | undefined {
 
 /**
  * 明細中不顯示（`is_visible = false`）、但由桌面程式帶入並送出的欄位：
- * 進貨明細的採購明細（採購單轉進貨單時帶入）、進貨退回明細的進貨明細（選擇進貨單時帶入）。
+ * 進貨明細的採購明細（採購單轉進貨單時帶入）、進貨退回明細的進貨明細（選擇進貨單時帶入）、
+ * 出貨明細的訂單明細（訂單轉出貨單時帶入）。
  */
 const CARRIED_LINE_FIELDS: Record<string, readonly string[]> = {
   [GOODS_RECEIPT_LINE]: [PURCHASING_FIELDS.purchaseOrderLine],
   [PURCHASE_RETURN_LINE]: [PURCHASING_FIELDS.goodsReceiptLine],
+  // 出貨明細的訂單明細（訂單轉出貨單時帶入，§8.9）
+  shipment_line: ['sales_order_line_id'],
 };
 
 /**
@@ -113,77 +118,6 @@ export function lineFormFields(
     (f) => f.is_active && !f.is_visible && carried.includes(f.field_key),
   );
   return [...shown, ...hidden];
-}
-
-// ---- 十進位運算（bigint，不經過浮點數） ----
-
-interface Dec {
-  /** 去掉小數點的整數值。 */
-  units: bigint;
-  /** 小數位數。 */
-  scale: number;
-}
-
-const DEC_RE = /^([-+]?)(\d*)(?:\.(\d*))?$/;
-
-function parse(raw: unknown): Dec | undefined {
-  if (typeof raw !== 'string') {
-    return undefined;
-  }
-  const m = DEC_RE.exec(raw.trim());
-  if (!m) {
-    return undefined;
-  }
-  const [, sign = '', int = '', frac = ''] = m;
-  if (int === '' && frac === '') {
-    return undefined;
-  }
-  const units = BigInt(`${int || '0'}${frac}`);
-  return { units: sign === '-' ? -units : units, scale: frac.length };
-}
-
-const pow10 = (n: number) => 10n ** BigInt(n);
-
-function rescale(d: Dec, scale: number): Dec {
-  return scale >= d.scale ? { units: d.units * pow10(scale - d.scale), scale } : round(d, scale);
-}
-
-/** 四捨五入到 `dp` 位（`MidpointAwayFromZero`）。 */
-function round(d: Dec, dp: number): Dec {
-  if (d.scale <= dp) {
-    return rescale(d, dp);
-  }
-  const divisor = pow10(d.scale - dp);
-  const negative = d.units < 0n;
-  const abs = negative ? -d.units : d.units;
-  let q = abs / divisor;
-  if ((abs % divisor) * 2n >= divisor) {
-    q += 1n;
-  }
-  return { units: negative ? -q : q, scale: dp };
-}
-
-function mul(a: Dec, b: Dec): Dec {
-  return { units: a.units * b.units, scale: a.scale + b.scale };
-}
-
-function add(a: Dec, b: Dec): Dec {
-  const scale = Math.max(a.scale, b.scale);
-  return { units: rescale(a, scale).units + rescale(b, scale).units, scale };
-}
-
-function sub(a: Dec, b: Dec): Dec {
-  return add(a, { units: -b.units, scale: b.scale });
-}
-
-/** 補齊（或四捨五入）到 `scale` 位小數的字串，與資料庫讀出的格式相同。 */
-function format(d: Dec, scale: number): string {
-  const v = rescale(d, scale);
-  const negative = v.units < 0n;
-  const digits = (negative ? -v.units : v.units).toString().padStart(scale + 1, '0');
-  const int = digits.slice(0, digits.length - scale);
-  const frac = digits.slice(digits.length - scale);
-  return `${negative ? '-' : ''}${int}${scale > 0 ? `.${frac}` : ''}`;
 }
 
 /** 單據幣別金額的小數位數（`NUMERIC(18,4)`）。 */

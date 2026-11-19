@@ -24,7 +24,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
-import { apiErrorCode, errorMessage } from '../../api/client';
+import { CommandError, apiErrorCode, errorMessage } from '../../api/client';
 import {
   useCreateRecord,
   useDocumentAction,
@@ -40,6 +40,7 @@ import type {
   EntityDetail,
   FieldDefinition,
   Record as DataRecord,
+  StockInsufficientDetails_Serialize as StockInsufficientDetails,
 } from '../../bindings';
 import { recordListPath, recordPath } from '../../modules';
 import {
@@ -95,6 +96,18 @@ import { LinesTable } from './LinesTable';
 import type { LineRefs } from './LinesTable';
 import { ExchangeRateInput, PurchaseReturnAutofill, PurchasingAutofill } from './PurchasingInputs';
 import { useAmountPreview } from './useAmountPreview';
+import { SalesAutofill, UsedLotsTable } from './SalesInputs';
+import { ShipmentAllocationContext, useShipmentAllocation } from './shipmentAllocation';
+import { unshippedByLine, useSalesOrder } from '../../api/sales';
+import {
+  SALES_FIELDS,
+  SHIPMENT,
+  SHIPMENT_LINE,
+  manualLotShortages,
+  overShippedRows,
+  salesLineKey,
+} from '../../records/sales';
+import { formatQty } from '../../records/documents';
 import { RecordFieldInput } from './RecordFieldInput';
 
 /** 樂觀鎖定衝突（409）的提示（docs/architecture.md §9.4）。 */
@@ -115,6 +128,21 @@ const ACTION_ICONS: Record<DocumentAction, ReactNode> = {
 export const SAVE_BEFORE_ACTION = '請先儲存目前的修改';
 
 type FormValues = RecordFormValues & { [LINES_FORM_KEY]?: Record<string, LineFormValues[]> };
+
+/** 過帳時庫存不足（`STOCK_INSUFFICIENT`）：每一列不足的明細在數量欄位標示錯誤。 */
+function shortageCells(err: unknown): { name: (string | number)[]; errors: string[] }[] {
+  if (apiErrorCode(err) !== 'STOCK_INSUFFICIENT' || !(err instanceof CommandError)) {
+    return [];
+  }
+  const details = err.error.kind === 'api' ? err.error.details : undefined;
+  const items = (details as Partial<StockInsufficientDetails> | undefined)?.items ?? [];
+  return items.flatMap((item) =>
+    item.lines.map((line) => ({
+      name: [LINES_FORM_KEY, line.detail_key, line.index, 'qty'],
+      errors: [`庫存不足，還差 ${formatQty(item.shortage)}`],
+    })),
+  );
+}
 
 /** 明細列目前的關聯與附件，鍵為明細 id。 */
 function lineRefs(record?: DataRecord): LineRefs {
@@ -232,6 +260,16 @@ function RecordForm({
   );
   const preview = useFormulaPreview(previewRequest).data;
   useAmountPreview(form, entityKey, current, editable);
+  // 訂單、出貨單（§8.9）：售價、訂單帶入；出貨單的建議批號與存檔前的數量檢查
+  const isSales = salesLineKey(entityKey) !== undefined;
+  const isShipment = entityKey === SHIPMENT;
+  const allocation = useShipmentAllocation(current, editable && isShipment);
+  const shipmentOrderId = current[SALES_FIELDS.salesOrder];
+  const shipmentOrder = useSalesOrder(
+    editable && isShipment && typeof shipmentOrderId === 'string' && shipmentOrderId !== ''
+      ? shipmentOrderId
+      : undefined,
+  );
 
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -329,18 +367,79 @@ function RecordForm({
               const fieldErrors = (recordFieldErrors(err) ?? []).filter((e) =>
                 visible.some((f) => f.field_key === e.field_key),
               );
-              form.setFields(
-                fieldErrors.map((e) => ({ name: [e.field_key], errors: [e.message] })),
-              );
+              form.setFields([
+                ...fieldErrors.map((e) => ({ name: [e.field_key], errors: [e.message] })),
+                // 庫存不足：標示是哪幾列（數量欄位）
+                ...shortageCells(err),
+              ]);
             }
           },
         ),
     });
   };
 
+  /**
+   * 出貨單存檔前的檢查（§8.9）：超過訂單的未出貨數量、找不到批號 → 標示在儲存格並停止；
+   * 手動指定批號的數量超過可用數量 → 標示並詢問是否仍要存檔（草稿不檢查庫存，過帳時才檢查）。
+   */
+  const checkShipment = (values: FormValues): boolean => {
+    const rows = values[LINES_FORM_KEY]?.[SHIPMENT_LINE] ?? [];
+    const cell = (i: number, key: string, text: string) => ({
+      name: [LINES_FORM_KEY, SHIPMENT_LINE, i, key],
+      errors: [text],
+    });
+    const blocking = [
+      ...[
+        ...overShippedRows(
+          rows.map((r) => ({ salesOrderLineId: r[SALES_FIELDS.salesOrderLine], qty: r.qty })),
+          unshippedByLine(shipmentOrder.data),
+        ),
+      ].map(([i, limit]) => cell(i, SALES_FIELDS.qty, `超過未出貨數量 ${formatQty(limit)}`)),
+      ...allocation.errors.map((e) => cell(e.row, e.field_key ?? SALES_FIELDS.lotNo, e.message)),
+    ];
+    if (blocking.length > 0) {
+      form.setFields(blocking);
+      message.error('明細的數量或批號有誤，請檢查標示的欄位');
+      return false;
+    }
+    const lotNos = new Map(
+      rows.map((r, i) => [i, typeof r[SALES_FIELDS.lotNo] === 'string' ? String(r.lot_no) : '']),
+    );
+    const shortages = allocation.current
+      ? manualLotShortages(allocation.allocations, lotNos)
+      : new Map<number, string>();
+    if (shortages.size === 0) {
+      return true;
+    }
+    form.setFields([...shortages].map(([i, text]) => cell(i, SALES_FIELDS.lotNo, text)));
+    modal.confirm({
+      title: '手動指定的批號數量不足',
+      content: (
+        <ul style={{ margin: 0, paddingInlineStart: 20 }}>
+          {[...shortages].map(([i, text]) => (
+            <li key={i}>
+              第 {i + 1} 列：{text}
+            </li>
+          ))}
+        </ul>
+      ),
+      okText: '仍要存檔',
+      cancelText: '返回修改',
+      onOk: () => save(values),
+    });
+    return false;
+  };
+
   const onFinish = () => {
     // 包含 Form.List 內的明細列（onFinish 的參數只有註冊過的欄位，明細的 __id 不在其中）
     const values = form.getFieldsValue(true) as FormValues;
+    if (isShipment && !checkShipment(values)) {
+      return;
+    }
+    save(values);
+  };
+
+  const save = (values: FormValues) => {
     const lineValues = values[LINES_FORM_KEY];
     if (!record) {
       const lines = buildCreateLines(details, lineValues);
@@ -468,6 +567,9 @@ function RecordForm({
           {editable && entityKey === PURCHASE_RETURN && !record && (
             <PurchaseReturnAutofill details={details} onChange={onValuesChange} />
           )}
+          {editable && isSales && (
+            <SalesAutofill entityKey={entityKey} details={details} onChange={onValuesChange} />
+          )}
           {editable && priced && (
             <PurchasingAutofill
               entityKey={entityKey}
@@ -553,23 +655,28 @@ function RecordForm({
               );
             })}
           </div>
-          {details.map((table) => (
-            <LinesTable
-              key={table.entity.key}
-              table={table}
-              canWrite={editable}
-              refs={refs}
-              onRowsChange={onValuesChange}
-              showPending={dirty || !record}
-              formulaCell={(index, lineId, fieldKey) => {
-                const saved = lineId ? savedLineById.get(lineId) : undefined;
-                return formulaCell(preview, table.entity.key, index, fieldKey, {
-                  data: saved?.data,
-                  errors: saved?.formula_errors,
-                });
-              }}
-            />
-          ))}
+          <ShipmentAllocationContext.Provider value={allocation}>
+            {details.map((table) => (
+              <LinesTable
+                key={table.entity.key}
+                table={table}
+                canWrite={editable}
+                refs={refs}
+                onRowsChange={onValuesChange}
+                showPending={dirty || !record}
+                formulaCell={(index, lineId, fieldKey) => {
+                  const saved = lineId ? savedLineById.get(lineId) : undefined;
+                  return formulaCell(preview, table.entity.key, index, fieldKey, {
+                    data: saved?.data,
+                    errors: saved?.formula_errors,
+                  });
+                }}
+              />
+            ))}
+          </ShipmentAllocationContext.Provider>
+          {isShipment && record && (status === 'posted' || status === 'void') && (
+            <UsedLotsTable record={record} />
+          )}
           {editable && (
             <Form.Item>
               <Button

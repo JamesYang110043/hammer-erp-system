@@ -31,6 +31,7 @@ import { INVENTORY_MODULES } from '../inventoryModules';
 import { entityIcon } from '../pages/schema/entityIcons';
 import { INVENTORY_GROUP_LABEL, inventoryEntities } from '../records/inventory';
 import { PURCHASING_GROUP_LABEL, purchasingEntities } from '../records/purchasing';
+import { SALES_GROUP_LABEL, salesEntities } from '../records/sales';
 import { MASTER_DATA_LABEL } from '../schema/entities';
 
 const { Header, Sider, Content, Footer } = Layout;
@@ -104,6 +105,16 @@ export function AppLayout() {
         ]
       : [];
 
+  // 銷貨：訂單、出貨單、銷貨退回（docs/architecture.md §8.9）
+  const sales = (canReadRecords ? salesEntities(entities.data ?? []) : []).map(entityItem);
+  const salesItems: MenuItem[] =
+    sales.length > 0
+      ? [
+          { type: 'group', key: 'sales-group', label: SALES_GROUP_LABEL, children: sales },
+          { type: 'divider', key: 'sales-group-divider' },
+        ]
+      : [];
+
   // 庫存：盤點調整單與庫存查詢（docs/architecture.md §8.10）
   const inventory: MenuItem[] = [
     ...(canReadRecords ? inventoryEntities(entities.data ?? []) : []).map(entityItem),
@@ -130,6 +141,7 @@ export function AppLayout() {
   const menuItems: MenuItem[] = [
     ...masterDataItems,
     ...purchasingItems,
+    ...salesItems,
     ...inventoryItems,
     ...MODULES.filter((m) => !m.permission || can(m.permission)).flatMap((m) => {
       const item: MenuItem = { key: m.path, icon: m.icon, label: m.label };

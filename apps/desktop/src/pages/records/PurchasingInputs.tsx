@@ -341,11 +341,15 @@ export function PurchasingAutofill({
   return null;
 }
 
-/** 進貨明細的批號：草稿可以輸入（留空時過帳自動產生）；過帳後連到該商品的庫存查詢。 */
+/**
+ * 進貨明細、出貨明細的批號：草稿可以輸入（進貨留空時過帳自動產生；出貨留空為先進先出）；
+ * 過帳後連到該商品的庫存查詢。
+ */
 export function ReceiptLotNoInput({
   row,
   label,
   disabled,
+  placeholder = '留空則過帳時自動產生',
   value,
   onChange,
   id,
@@ -353,6 +357,8 @@ export function ReceiptLotNoInput({
   row: (string | number)[];
   label: string;
   disabled?: boolean;
+  /** 草稿時的提示。 */
+  placeholder?: string;
   value?: unknown;
   onChange?: (value: string) => void;
   id?: string;
@@ -373,7 +379,7 @@ export function ReceiptLotNoInput({
       aria-label={label}
       disabled={disabled}
       value={text}
-      placeholder={disabled ? undefined : '留空則過帳時自動產生'}
+      placeholder={disabled ? undefined : placeholder}
       style={{ minWidth: 180 }}
       onChange={(e) => onChange?.(e.target.value)}
     />

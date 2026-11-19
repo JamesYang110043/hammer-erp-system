@@ -16,7 +16,8 @@ use hammer_shared::exchange_rate::{
     ExchangeRate, ExchangeRateQuery, UpdateExchangeRateRequest,
 };
 use hammer_shared::inventory::{
-    InventoryLot, InventoryTransaction, LotQuery, StockBalance, StockBalanceQuery, TransactionQuery,
+    AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
+    StockBalance, StockBalanceQuery, TransactionQuery,
 };
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
@@ -532,6 +533,15 @@ impl AppState {
             client.list_inventory_transactions(url, token, query).await
         })
         .await
+    }
+
+    /// 出貨的建議批號（只試算）。
+    pub async fn allocation_preview(
+        &self,
+        req: &AllocationPreviewRequest,
+    ) -> Result<AllocationPreview, ClientError> {
+        self.with_token(async |client, url, token| client.allocation_preview(url, token, req).await)
+            .await
     }
 
     /// 列表版面（全域版面與自己的版面）。
