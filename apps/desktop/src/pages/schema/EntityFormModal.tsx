@@ -2,6 +2,7 @@ import { Alert, Form, Input, Modal, Radio, Select, Space, Typography } from 'ant
 import type { FormRule } from 'antd';
 import { useState } from 'react';
 
+import { FORM_MODAL_WIDTH, FULL_ROW, FormGrid } from '../../components/FormGrid';
 import { useCreateEntity, useUpdateEntity } from '../../api/schema';
 import type { EntityDefinition, EntityDetail, EntityKind } from '../../bindings';
 import { KIND_LABELS, blankToNull, toUpdateEntityRequest } from '../../schema/entities';
@@ -147,6 +148,7 @@ export function EntityFormModal({
 
   return (
     <Modal
+      width={FORM_MODAL_WIDTH}
       title={title}
       open={target !== undefined}
       onCancel={close}
@@ -163,93 +165,96 @@ export function EntityFormModal({
         preserve={false}
         initialValues={initialValues}
       >
-        {editing ? (
-          <Form.Item label="代碼">
-            <Input value={editing.key} disabled />
-          </Form.Item>
-        ) : (
+        <FormGrid>
+          {editing ? (
+            <Form.Item label="代碼">
+              <Input value={editing.key} disabled />
+            </Form.Item>
+          ) : (
+            <Form.Item
+              label="代碼"
+              name="key"
+              rules={[keyRule]}
+              extra="小寫英文字母開頭，只能使用小寫英文字母、數字與底線；建立後不可修改"
+            >
+              <Input
+                autoComplete="off"
+                placeholder={parent ? '例如 repair_line' : '例如 repair_order'}
+              />
+            </Form.Item>
+          )}
           <Form.Item
-            label="代碼"
-            name="key"
-            rules={[keyRule]}
-            extra="小寫英文字母開頭，只能使用小寫英文字母、數字與底線；建立後不可修改"
+            label="名稱"
+            name="label"
+            rules={[{ required: true, whitespace: true, message: '請輸入名稱' }]}
           >
-            <Input
-              autoComplete="off"
-              placeholder={parent ? '例如 repair_line' : '例如 repair_order'}
+            <Input autoComplete="off" placeholder={parent ? '例如 維修明細' : '例如 維修單'} />
+          </Form.Item>
+          <Form.Item label="圖示" name="icon">
+            <Select
+              allowClear
+              placeholder="預設圖示"
+              options={Object.entries(ENTITY_ICONS).map(([name, icon]) => ({
+                value: name,
+                label: (
+                  <Space>
+                    {icon}
+                    {name}
+                  </Space>
+                ),
+              }))}
             />
           </Form.Item>
-        )}
-        <Form.Item
-          label="名稱"
-          name="label"
-          rules={[{ required: true, whitespace: true, message: '請輸入名稱' }]}
-        >
-          <Input autoComplete="off" placeholder={parent ? '例如 維修明細' : '例如 維修單'} />
-        </Form.Item>
-        <Form.Item label="圖示" name="icon">
-          <Select
-            allowClear
-            placeholder="預設圖示"
-            options={Object.entries(ENTITY_ICONS).map(([name, icon]) => ({
-              value: name,
-              label: (
-                <Space>
-                  {icon}
-                  {name}
-                </Space>
-              ),
-            }))}
-          />
-        </Form.Item>
-        {editing || parent ? (
-          <Form.Item label="種類">
-            <Input
-              value={
-                parent
-                  ? `${KIND_LABELS.detail}（屬於「${parent.label}」）`
-                  : KIND_LABELS[editing!.kind]
-              }
-              disabled
-            />
-          </Form.Item>
-        ) : (
+          {editing || parent ? (
+            <Form.Item label="種類">
+              <Input
+                value={
+                  parent
+                    ? `${KIND_LABELS.detail}（屬於「${parent.label}」）`
+                    : KIND_LABELS[editing!.kind]
+                }
+                disabled
+              />
+            </Form.Item>
+          ) : (
+            <Form.Item
+              label="種類"
+              name="kind"
+              extra="單據與主檔的功能相同，差別在選單中分組顯示；建立後不可修改"
+            >
+              <Radio.Group
+                optionType="button"
+                options={[
+                  { value: 'master', label: KIND_LABELS.master },
+                  { value: 'document', label: KIND_LABELS.document },
+                ]}
+              />
+            </Form.Item>
+          )}
+          {!isDetail && !editing?.is_system && (
+            <Form.Item
+              label="單號規則"
+              name="numbering_pattern"
+              rules={[numberingRule]}
+              extra={<NumberingHint pattern={pattern} />}
+            >
+              <Input autoComplete="off" placeholder="例如 SO{yyyyMM}-{0000}" />
+            </Form.Item>
+          )}
           <Form.Item
-            label="種類"
-            name="kind"
-            extra="單據與主檔的功能相同，差別在選單中分組顯示；建立後不可修改"
+            className={FULL_ROW}
+            label="標題範本"
+            name="title_template"
+            extra={
+              editing
+                ? '關聯欄位與選擇器顯示的文字，{} 內可寫 record_no（單號）、欄位代碼，或「關聯欄位.目標欄位」引用關聯資料的欄位，例如 {record_no} {customer_id.name}；空白使用預設規則'
+                : '關聯欄位與選擇器顯示的文字；新的資料類別只能引用 {record_no}（單號），新增欄位後再回來設定；空白使用預設規則'
+            }
           >
-            <Radio.Group
-              optionType="button"
-              options={[
-                { value: 'master', label: KIND_LABELS.master },
-                { value: 'document', label: KIND_LABELS.document },
-              ]}
-            />
+            <Input autoComplete="off" placeholder="例如 {record_no} {name}" />
           </Form.Item>
-        )}
-        {!isDetail && !editing?.is_system && (
-          <Form.Item
-            label="單號規則"
-            name="numbering_pattern"
-            rules={[numberingRule]}
-            extra={<NumberingHint pattern={pattern} />}
-          >
-            <Input autoComplete="off" placeholder="例如 SO{yyyyMM}-{0000}" />
-          </Form.Item>
-        )}
-        <Form.Item
-          label="標題範本"
-          name="title_template"
-          extra={
-            editing
-              ? '關聯欄位與選擇器顯示的文字，{} 內可寫 record_no（單號）、欄位代碼，或「關聯欄位.目標欄位」引用關聯資料的欄位，例如 {record_no} {customer_id.name}；空白使用預設規則'
-              : '關聯欄位與選擇器顯示的文字；新的資料類別只能引用 {record_no}（單號），新增欄位後再回來設定；空白使用預設規則'
-          }
-        >
-          <Input autoComplete="off" placeholder="例如 {record_no} {name}" />
-        </Form.Item>
-        {error && <Alert showIcon type="error" message={error} />}
+          {error && <Alert showIcon type="error" message={error} />}
+        </FormGrid>
       </Form>
     </Modal>
   );

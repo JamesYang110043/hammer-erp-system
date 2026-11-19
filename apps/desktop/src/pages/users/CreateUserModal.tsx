@@ -1,6 +1,7 @@
 import { Alert, Form, Input, Modal, Select } from 'antd';
 import { useState } from 'react';
 
+import { FORM_MODAL_WIDTH, FormGrid } from '../../components/FormGrid';
 import { errorMessage } from '../../api/client';
 import { useCreateUser, useRoles } from '../../api/users';
 import { passwordRule } from '../../auth/passwordRules';
@@ -44,6 +45,7 @@ export function CreateUserModal({ open, onClose }: { open: boolean; onClose: () 
 
   return (
     <Modal
+      width={FORM_MODAL_WIDTH}
       title="新增帳號"
       open={open}
       onCancel={close}
@@ -68,35 +70,37 @@ export function CreateUserModal({ open, onClose }: { open: boolean; onClose: () 
           initialValues={{ password: generateTempPassword() }}
           preserve={false}
         >
-          <Form.Item
-            label="帳號"
-            name="username"
-            rules={[{ required: true, whitespace: true, message: '請輸入帳號' }]}
-          >
-            <Input autoComplete="off" />
-          </Form.Item>
-          <Form.Item
-            label="顯示名稱"
-            name="display_name"
-            rules={[{ required: true, whitespace: true, message: '請輸入顯示名稱' }]}
-          >
-            <Input autoComplete="off" />
-          </Form.Item>
-          <Form.Item label="角色" name="role" rules={[{ required: true, message: '請選擇角色' }]}>
-            <Select
-              loading={roles.isPending}
-              options={roles.data?.map((r) => ({ value: r.code, label: r.name }))}
-            />
-          </Form.Item>
-          <Form.Item
-            label="臨時密碼"
-            name="password"
-            extra="使用者第一次登入時必須修改密碼"
-            rules={[{ required: true, message: '請輸入臨時密碼' }, passwordRule]}
-          >
-            <TempPasswordInput />
-          </Form.Item>
-          {alert && <Alert showIcon type="error" message={alert} />}
+          <FormGrid>
+            <Form.Item
+              label="帳號"
+              name="username"
+              rules={[{ required: true, whitespace: true, message: '請輸入帳號' }]}
+            >
+              <Input autoComplete="off" />
+            </Form.Item>
+            <Form.Item
+              label="顯示名稱"
+              name="display_name"
+              rules={[{ required: true, whitespace: true, message: '請輸入顯示名稱' }]}
+            >
+              <Input autoComplete="off" />
+            </Form.Item>
+            <Form.Item label="角色" name="role" rules={[{ required: true, message: '請選擇角色' }]}>
+              <Select
+                loading={roles.isPending}
+                options={roles.data?.map((r) => ({ value: r.code, label: r.name }))}
+              />
+            </Form.Item>
+            <Form.Item
+              label="臨時密碼"
+              name="password"
+              extra="使用者第一次登入時必須修改密碼"
+              rules={[{ required: true, message: '請輸入臨時密碼' }, passwordRule]}
+            >
+              <TempPasswordInput />
+            </Form.Item>
+            {alert && <Alert showIcon type="error" message={alert} />}
+          </FormGrid>
         </Form>
       )}
     </Modal>

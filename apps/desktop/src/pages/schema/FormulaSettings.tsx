@@ -3,6 +3,7 @@ import type { FormInstance } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { useMemo, useRef } from 'react';
 
+import { FULL_ROW } from '../../components/FormGrid';
 import { useAllEntities, useEntity, useEntityDetails } from '../../api/schema';
 import type { FieldDefinition, FormulaSyntaxError } from '../../bindings';
 import { detailEntitiesOf } from '../../schema/entities';
@@ -52,6 +53,7 @@ export function FormulaSettings({
   return (
     <>
       <Form.Item
+        className={FULL_ROW}
         label="公式"
         name="formula"
         rules={[{ required: true, whitespace: true, message: '請輸入公式' }]}

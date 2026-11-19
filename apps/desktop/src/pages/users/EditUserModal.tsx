@@ -1,6 +1,7 @@
 import { Alert, Form, Input, Modal, Select, Switch } from 'antd';
 import { useState } from 'react';
 
+import { FORM_MODAL_WIDTH, FormGrid } from '../../components/FormGrid';
 import { useRoles, useUpdateUser } from '../../api/users';
 import type { UpdateUserRequest, User } from '../../bindings';
 import { applyFormError } from './formErrors';
@@ -44,6 +45,7 @@ export function EditUserModal({ user, onClose }: { user: User | undefined; onClo
 
   return (
     <Modal
+      width={FORM_MODAL_WIDTH}
       title={user ? `編輯帳號：${user.username}` : '編輯帳號'}
       open={user !== undefined}
       onCancel={close}
@@ -65,23 +67,25 @@ export function EditUserModal({ user, onClose }: { user: User | undefined; onClo
           }}
           preserve={false}
         >
-          <Form.Item
-            label="顯示名稱"
-            name="display_name"
-            rules={[{ required: true, whitespace: true, message: '請輸入顯示名稱' }]}
-          >
-            <Input autoComplete="off" />
-          </Form.Item>
-          <Form.Item label="角色" name="role" rules={[{ required: true, message: '請選擇角色' }]}>
-            <Select
-              loading={roles.isPending}
-              options={roles.data?.map((r) => ({ value: r.code, label: r.name }))}
-            />
-          </Form.Item>
-          <Form.Item label="啟用" name="is_active" valuePropName="checked" extra="停用後無法登入">
-            <Switch />
-          </Form.Item>
-          {error && <Alert showIcon type="error" message={error} />}
+          <FormGrid>
+            <Form.Item
+              label="顯示名稱"
+              name="display_name"
+              rules={[{ required: true, whitespace: true, message: '請輸入顯示名稱' }]}
+            >
+              <Input autoComplete="off" />
+            </Form.Item>
+            <Form.Item label="角色" name="role" rules={[{ required: true, message: '請選擇角色' }]}>
+              <Select
+                loading={roles.isPending}
+                options={roles.data?.map((r) => ({ value: r.code, label: r.name }))}
+              />
+            </Form.Item>
+            <Form.Item label="啟用" name="is_active" valuePropName="checked" extra="停用後無法登入">
+              <Switch />
+            </Form.Item>
+            {error && <Alert showIcon type="error" message={error} />}
+          </FormGrid>
         </Form>
       )}
     </Modal>

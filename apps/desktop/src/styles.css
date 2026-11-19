@@ -4,3 +4,28 @@ body,
   height: 100%;
   margin: 0;
 }
+
+/* Modal 表單的多欄排列（src/components/FormGrid.tsx） */
+.form-grid-container {
+  container-type: inline-size;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+  /* 驗證訊息只讓自己那一格變高，不拉伸同一列的欄位 */
+  align-items: start;
+}
+
+/* 長欄位與非欄位內容（Alert、說明、自訂區塊）佔滿整列 */
+.form-grid > .form-grid-full,
+.form-grid > :not(.ant-form-item) {
+  grid-column: 1 / -1;
+}
+
+@container (max-width: 480px) {
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

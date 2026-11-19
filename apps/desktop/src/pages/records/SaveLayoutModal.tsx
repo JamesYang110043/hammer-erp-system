@@ -1,6 +1,7 @@
 import { Alert, Checkbox, Form, Input, Modal } from 'antd';
 import { useState } from 'react';
 
+import { FORM_MODAL_WIDTH, FULL_ROW, FormGrid } from '../../components/FormGrid';
 import { useCreateLayout } from '../../api/records';
 import type { ViewLayout } from '../../bindings';
 import type { LayoutConfig } from '../../records/columns';
@@ -66,6 +67,7 @@ export function SaveLayoutModal({
 
   return (
     <Modal
+      width={FORM_MODAL_WIDTH}
       title="另存新版面"
       open={open}
       onCancel={close}
@@ -82,25 +84,28 @@ export function SaveLayoutModal({
         preserve={false}
         initialValues={{ name: '', isGlobal: false, isDefault: true }}
       >
-        <Form.Item
-          label="版面名稱"
-          name="name"
-          rules={[
-            { required: true, whitespace: true, message: '請輸入版面名稱' },
-            { max: MAX_LAYOUT_NAME_CHARS, message: `最多 ${MAX_LAYOUT_NAME_CHARS} 個字` },
-          ]}
-        >
-          <Input autoComplete="off" />
-        </Form.Item>
-        {canSaveGlobal && (
-          <Form.Item name="isGlobal" valuePropName="checked" extra="所有使用者都可以選用">
-            <Checkbox>全域版面</Checkbox>
+        <FormGrid>
+          <Form.Item
+            className={FULL_ROW}
+            label="版面名稱"
+            name="name"
+            rules={[
+              { required: true, whitespace: true, message: '請輸入版面名稱' },
+              { max: MAX_LAYOUT_NAME_CHARS, message: `最多 ${MAX_LAYOUT_NAME_CHARS} 個字` },
+            ]}
+          >
+            <Input autoComplete="off" />
           </Form.Item>
-        )}
-        <Form.Item name="isDefault" valuePropName="checked" extra="開啟列表時自動套用">
-          <Checkbox>設為預設</Checkbox>
-        </Form.Item>
-        {error && <Alert showIcon type="error" message={error} />}
+          {canSaveGlobal && (
+            <Form.Item name="isGlobal" valuePropName="checked" extra="所有使用者都可以選用">
+              <Checkbox>全域版面</Checkbox>
+            </Form.Item>
+          )}
+          <Form.Item name="isDefault" valuePropName="checked" extra="開啟列表時自動套用">
+            <Checkbox>設為預設</Checkbox>
+          </Form.Item>
+          {error && <Alert showIcon type="error" message={error} />}
+        </FormGrid>
       </Form>
     </Modal>
   );

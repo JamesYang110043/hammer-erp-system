@@ -1,6 +1,7 @@
 import { Alert, App, Form, Input, InputNumber, Modal, Switch } from 'antd';
 import { useState } from 'react';
 
+import { FORM_MODAL_WIDTH, FormGrid } from '../../components/FormGrid';
 import { apiErrorCode } from '../../api/client';
 import { useCreateCurrency, useUpdateCurrency } from '../../api/currencies';
 import type { Currency } from '../../bindings';
@@ -88,6 +89,7 @@ export function CurrencyFormModal({
 
   return (
     <Modal
+      width={FORM_MODAL_WIDTH}
       title={currency ? `編輯幣別：${currency.code}` : '新增幣別'}
       open={open}
       onCancel={close}
@@ -123,55 +125,57 @@ export function CurrencyFormModal({
             : { decimal_places: 2, is_active: true }
         }
       >
-        <Form.Item
-          label="代碼"
-          name="code"
-          normalize={(v: string | undefined) => v?.toUpperCase()}
-          extra={currency ? '代碼建立後不可修改' : 'ISO 4217 代碼，例如 GBP'}
-          rules={
-            currency
-              ? []
-              : [
-                  { required: true, message: '請輸入幣別代碼' },
-                  { pattern: CURRENCY_CODE_RE, message: '幣別代碼必須是 3 個英文字母' },
-                ]
-          }
-        >
-          <Input autoComplete="off" maxLength={3} disabled={currency !== null} />
-        </Form.Item>
-        <Form.Item
-          label="名稱"
-          name="name"
-          rules={[{ required: true, whitespace: true, message: '請輸入幣別名稱' }]}
-        >
-          <Input autoComplete="off" />
-        </Form.Item>
-        <Form.Item label="符號" name="symbol">
-          <Input autoComplete="off" placeholder="例如 £" />
-        </Form.Item>
-        <Form.Item
-          label="小數位數"
-          name="decimal_places"
-          extra="金額的小數位數；修改後只影響之後輸入的金額"
-          rules={[{ required: true, message: '請輸入小數位數' }]}
-        >
-          <InputNumber min={0} max={MAX_CURRENCY_DECIMAL_PLACES} precision={0} />
-        </Form.Item>
-        {currency && (
+        <FormGrid>
           <Form.Item
-            label="啟用"
-            name="is_active"
-            valuePropName="checked"
-            extra={
-              currency.is_base
-                ? '本位幣不可停用'
-                : '停用後不出現在幣別選單，也不可新增或修改它的匯率；已存的資料保留'
+            label="代碼"
+            name="code"
+            normalize={(v: string | undefined) => v?.toUpperCase()}
+            extra={currency ? '代碼建立後不可修改' : 'ISO 4217 代碼，例如 GBP'}
+            rules={
+              currency
+                ? []
+                : [
+                    { required: true, message: '請輸入幣別代碼' },
+                    { pattern: CURRENCY_CODE_RE, message: '幣別代碼必須是 3 個英文字母' },
+                  ]
             }
           >
-            <Switch disabled={currency.is_base} />
+            <Input autoComplete="off" maxLength={3} disabled={currency !== null} />
           </Form.Item>
-        )}
-        {error && <Alert showIcon type="error" message={error} />}
+          <Form.Item
+            label="名稱"
+            name="name"
+            rules={[{ required: true, whitespace: true, message: '請輸入幣別名稱' }]}
+          >
+            <Input autoComplete="off" />
+          </Form.Item>
+          <Form.Item label="符號" name="symbol">
+            <Input autoComplete="off" placeholder="例如 £" />
+          </Form.Item>
+          <Form.Item
+            label="小數位數"
+            name="decimal_places"
+            extra="金額的小數位數；修改後只影響之後輸入的金額"
+            rules={[{ required: true, message: '請輸入小數位數' }]}
+          >
+            <InputNumber min={0} max={MAX_CURRENCY_DECIMAL_PLACES} precision={0} />
+          </Form.Item>
+          {currency && (
+            <Form.Item
+              label="啟用"
+              name="is_active"
+              valuePropName="checked"
+              extra={
+                currency.is_base
+                  ? '本位幣不可停用'
+                  : '停用後不出現在幣別選單，也不可新增或修改它的匯率；已存的資料保留'
+              }
+            >
+              <Switch disabled={currency.is_base} />
+            </Form.Item>
+          )}
+          {error && <Alert showIcon type="error" message={error} />}
+        </FormGrid>
       </Form>
     </Modal>
   );

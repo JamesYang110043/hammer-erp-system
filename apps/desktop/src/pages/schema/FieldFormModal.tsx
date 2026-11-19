@@ -1,6 +1,7 @@
 import { Alert, Form, Input, InputNumber, Modal, Select, Switch, Typography } from 'antd';
 import { useState } from 'react';
 
+import { FORM_MODAL_WIDTH, FULL_ROW, FormGrid } from '../../components/FormGrid';
 import { useCreateField, useFormulaSyntax, useUpdateField } from '../../api/schema';
 import type { FieldDefinition } from '../../bindings';
 import { duplicateValues, formatValue } from '../../schema/errorDetails';
@@ -120,7 +121,7 @@ export function FieldFormModal({
       okText="儲存"
       okButtonProps={{ loading: pending, disabled: isFormula && syntax.error !== undefined }}
       destroyOnHidden
-      width={640}
+      width={FORM_MODAL_WIDTH}
     >
       {target !== undefined && (
         <Form
@@ -137,103 +138,112 @@ export function FieldFormModal({
           }}
           preserve={false}
         >
-          {field?.is_system && (
-            <Alert
-              showIcon
-              type="info"
-              message="系統欄位只能修改顯示名稱、顯示、必填、預設值、欄寬與說明文字"
-              style={{ marginBottom: 16 }}
-            />
-          )}
-          <Form.Item
-            label="欄位代碼"
-            name="field_key"
-            rules={editable('field_key') ? [keyRule] : []}
-            extra={
-              editable('field_key')
-                ? '小寫英文字母開頭，只能使用小寫英文字母、數字與底線；建立後不可修改'
-                : locked('field_key')
-            }
-          >
-            <Input autoComplete="off" disabled={!editable('field_key')} />
-          </Form.Item>
-          <Form.Item
-            label="顯示名稱"
-            name="label"
-            rules={[{ required: true, whitespace: true, message: '請輸入顯示名稱' }]}
-            extra={locked('label')}
-          >
-            <Input autoComplete="off" disabled={!editable('label')} />
-          </Form.Item>
-          <Form.Item label="資料型態" name="data_type" extra={locked('data_type')}>
-            {/* 選項不多，不使用虛擬捲動（全部選項都在 DOM 中） */}
-            <Select options={typeOptions} disabled={!editable('data_type')} virtual={false} />
-          </Form.Item>
-
-          {visible('type_settings') && isFormula && (
-            <FormulaSettings
-              form={form}
-              entityKey={entityKey}
-              selfKey={field?.field_key}
-              syntaxError={syntax.error}
-              disabled={!editable('type_settings')}
-            />
-          )}
-          {visible('type_settings') && locked('type_settings') && (
-            <Typography.Paragraph type="secondary">{locked('type_settings')}</Typography.Paragraph>
-          )}
-          {visible('type_settings') && (
-            <TypeSettingsFields
-              dataType={dataType}
-              resultType={resultType}
-              disabled={!editable('type_settings')}
-              relationLocked={field !== undefined}
-            />
-          )}
-
-          {visible('default_value') && hasDefaultValue(dataType) && (
-            <Form.Item label="預設值" name="default_value" extra={locked('default_value')}>
-              <DefaultValueInput
-                dataType={dataType}
-                options={options}
-                decimalPlaces={decimalPlaces}
-                disabled={!editable('default_value')}
+          <FormGrid>
+            {field?.is_system && (
+              <Alert
+                showIcon
+                type="info"
+                message="系統欄位只能修改顯示名稱、顯示、必填、預設值、欄寬與說明文字"
+                style={{ marginBottom: 16 }}
               />
-            </Form.Item>
-          )}
-
-          <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 24 }}>
-            {SWITCHES.filter((s) => visible(s.prop)).map((s) => (
-              <Form.Item
-                key={s.prop}
-                label={s.label}
-                name={s.prop}
-                valuePropName="checked"
-                tooltip={s.extra}
-                extra={locked(s.prop)}
-              >
-                <Switch disabled={!editable(s.prop)} />
-              </Form.Item>
-            ))}
-          </div>
-
-          {visible('column_width') && (
+            )}
             <Form.Item
-              label="欄寬"
-              name="column_width"
-              extra={locked('column_width') ?? '列表的欄寬（px），留空為自動'}
+              label="欄位代碼"
+              name="field_key"
+              rules={editable('field_key') ? [keyRule] : []}
+              extra={
+                editable('field_key')
+                  ? '小寫英文字母開頭，只能使用小寫英文字母、數字與底線；建立後不可修改'
+                  : locked('field_key')
+              }
             >
-              <InputNumber min={1} precision={0} disabled={!editable('column_width')} />
+              <Input autoComplete="off" disabled={!editable('field_key')} />
             </Form.Item>
-          )}
-          {visible('help_text') && (
-            <Form.Item label="說明文字" name="help_text" extra={locked('help_text')}>
-              <Input.TextArea rows={2} disabled={!editable('help_text')} />
+            <Form.Item
+              label="顯示名稱"
+              name="label"
+              rules={[{ required: true, whitespace: true, message: '請輸入顯示名稱' }]}
+              extra={locked('label')}
+            >
+              <Input autoComplete="off" disabled={!editable('label')} />
             </Form.Item>
-          )}
+            <Form.Item label="資料型態" name="data_type" extra={locked('data_type')}>
+              {/* 選項不多，不使用虛擬捲動（全部選項都在 DOM 中） */}
+              <Select options={typeOptions} disabled={!editable('data_type')} virtual={false} />
+            </Form.Item>
 
-          {duplicates && <DuplicateAlert {...duplicates} />}
-          {error && <Alert showIcon type="error" message={error} />}
+            {visible('type_settings') && isFormula && (
+              <FormulaSettings
+                form={form}
+                entityKey={entityKey}
+                selfKey={field?.field_key}
+                syntaxError={syntax.error}
+                disabled={!editable('type_settings')}
+              />
+            )}
+            {visible('type_settings') && locked('type_settings') && (
+              <Typography.Paragraph type="secondary">
+                {locked('type_settings')}
+              </Typography.Paragraph>
+            )}
+            {visible('type_settings') && (
+              <TypeSettingsFields
+                dataType={dataType}
+                resultType={resultType}
+                disabled={!editable('type_settings')}
+                relationLocked={field !== undefined}
+              />
+            )}
+
+            {visible('default_value') && hasDefaultValue(dataType) && (
+              <Form.Item label="預設值" name="default_value" extra={locked('default_value')}>
+                <DefaultValueInput
+                  dataType={dataType}
+                  options={options}
+                  decimalPlaces={decimalPlaces}
+                  disabled={!editable('default_value')}
+                />
+              </Form.Item>
+            )}
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 24 }}>
+              {SWITCHES.filter((s) => visible(s.prop)).map((s) => (
+                <Form.Item
+                  key={s.prop}
+                  label={s.label}
+                  name={s.prop}
+                  valuePropName="checked"
+                  tooltip={s.extra}
+                  extra={locked(s.prop)}
+                >
+                  <Switch disabled={!editable(s.prop)} />
+                </Form.Item>
+              ))}
+            </div>
+
+            {visible('column_width') && (
+              <Form.Item
+                label="欄寬"
+                name="column_width"
+                extra={locked('column_width') ?? '列表的欄寬（px），留空為自動'}
+              >
+                <InputNumber min={1} precision={0} disabled={!editable('column_width')} />
+              </Form.Item>
+            )}
+            {visible('help_text') && (
+              <Form.Item
+                className={FULL_ROW}
+                label="說明文字"
+                name="help_text"
+                extra={locked('help_text')}
+              >
+                <Input.TextArea rows={2} disabled={!editable('help_text')} />
+              </Form.Item>
+            )}
+
+            {duplicates && <DuplicateAlert {...duplicates} />}
+            {error && <Alert showIcon type="error" message={error} />}
+          </FormGrid>
         </Form>
       )}
     </Modal>
