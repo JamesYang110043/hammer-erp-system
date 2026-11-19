@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  AuditOutlined,
   CheckCircleOutlined,
   FileDoneOutlined,
   ReloadOutlined,
@@ -42,7 +43,26 @@ import type {
   Record as DataRecord,
   StockInsufficientDetails_Serialize as StockInsufficientDetails,
 } from '../../bindings';
-import { recordListPath, recordPath } from '../../modules';
+import { newRecordPath, recordListPath, recordPath } from '../../modules';
+import { useVoidInvoice } from '../../api/invoicing';
+import {
+  INVOICING_FIELDS,
+  SALES_ALLOWANCE,
+  SALES_INVOICE,
+  invoicingActionLabel,
+  invoicingConfirmText,
+  invoicingStatusNote,
+  isInvoicingDocument,
+} from '../../records/invoicing';
+import {
+  InvoiceLinksNote,
+  SalesAllowanceAutofill,
+  SalesInvoiceAutofill,
+  ShipmentPicker,
+  TaxPeriodNote,
+  VoidInvoiceModal,
+} from './InvoicingInputs';
+import type { VoidDetails } from './InvoicingInputs';
 import {
   DOCUMENT_ACTION_LABELS,
   actionConfirmText,
@@ -208,7 +228,13 @@ function RecordForm({
     confirm: useDocumentAction(entityKey, 'confirm'),
     close: useDocumentAction(entityKey, 'close'),
   };
-  const actionPending = Object.values(mutations).some((m) => m.isPending);
+  // 發票模組的作廢帶日期與原因（§8.11「開立與作廢」）
+  const invoicing = isInvoicingDocument(entityKey);
+  const voidInvoice = useVoidInvoice(entityKey);
+  const [voidOpen, setVoidOpen] = useState(false);
+  const actionLabel = (action: DocumentAction) =>
+    invoicingActionLabel(entityKey, action) ?? DOCUMENT_ACTION_LABELS[action];
+  const actionPending = Object.values(mutations).some((m) => m.isPending) || voidInvoice.isPending;
   // 採購單、進貨單：幣別、匯率帶入與金額預覽（§8.8）
   const priced = pricedDocument(entityKey) !== undefined;
   const [actionError, setActionError] = useState<DocumentActionError>();
@@ -343,15 +369,48 @@ function RecordForm({
     message.error(errorMessage(err));
   };
 
+  const onActionError = (target: DocumentAction) => (err: unknown) => {
+    // 版本衝突沿用存檔衝突的提示（重新載入）；其他錯誤以易懂的訊息列在表單上方
+    if (apiErrorCode(err) === 'CONFLICT') {
+      setConflict(true);
+      return;
+    }
+    const labels = Object.fromEntries(fields.map((f) => [f.field_key, f.label]));
+    setActionError(documentActionError(err, target, labels, actionLabel(target)));
+  };
+
+  const runVoidInvoice = (details: VoidDetails) => {
+    if (!record) {
+      return;
+    }
+    voidInvoice
+      .mutateAsync({ record, voidDate: details.voidDate, voidReason: details.voidReason })
+      .then(
+        () => {
+          setVoidOpen(false);
+          message.success('已作廢');
+          onReload();
+        },
+        (err: unknown) => {
+          setVoidOpen(false);
+          onActionError('void')(err);
+        },
+      );
+  };
+
   const runAction = (target: DocumentAction) => {
     if (!record) {
       return;
     }
+    if (invoicing && target === 'void') {
+      setVoidOpen(true);
+      return;
+    }
     const mutation = mutations[target];
-    const label = DOCUMENT_ACTION_LABELS[target];
+    const label = actionLabel(target);
     modal.confirm({
       title: `確定要${label}這張${entity.label}？`,
-      content: actionConfirmText(entityKey, target),
+      content: invoicingConfirmText(entityKey, target) ?? actionConfirmText(entityKey, target),
       okText: label,
       okButtonProps: target === 'void' ? { danger: true } : undefined,
       cancelText: '取消',
@@ -364,7 +423,7 @@ function RecordForm({
               setConflict(true);
             } else {
               const labels = Object.fromEntries(fields.map((f) => [f.field_key, f.label]));
-              setActionError(documentActionError(err, target, labels));
+              setActionError(documentActionError(err, target, labels, actionLabel(target)));
               // 欄位錯誤（例如確認時沒有匯率）同時標示在欄位上
               const fieldErrors = (recordFieldErrors(err) ?? []).filter((e) =>
                 visible.some((f) => f.field_key === e.field_key),
@@ -484,7 +543,7 @@ function RecordForm({
         <Space>
           {entityIcon(entity.icon)}
           {title}
-          {status && <DocumentStatusTag status={status} />}
+          {status && <DocumentStatusTag status={status} entityKey={entityKey} />}
           {dirty && <Tag color="orange">未存檔</Tag>}
         </Space>
       }
@@ -500,10 +559,18 @@ function RecordForm({
                 loading={mutations[action].isPending}
                 onClick={() => !actionPending && runAction(action)}
               >
-                {DOCUMENT_ACTION_LABELS[action]}
+                {actionLabel(action)}
               </Button>
             </Tooltip>
           ))}
+          {entityKey === SALES_INVOICE && record && status === 'posted' && canWrite && (
+            <Button
+              icon={<AuditOutlined />}
+              onClick={() => navigate(`${newRecordPath(SALES_ALLOWANCE)}?invoice=${record.id}`)}
+            >
+              開立折讓
+            </Button>
+          )}
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(recordListPath(entityKey))}>
             返回列表
           </Button>
@@ -538,8 +605,15 @@ function RecordForm({
       )}
       {isDocument && record && status && status !== 'draft' && (
         <Typography.Paragraph type="secondary">
-          {documentStatusNote(entityKey, status, record.document, formatTaipei)}
+          {invoicingStatusNote(
+            entityKey,
+            documentStatusNote(entityKey, status, record.document, formatTaipei),
+          )}
         </Typography.Paragraph>
+      )}
+      {/* 出貨單的發票號碼（§8.11「查詢 API」）：作廢前要先作廢發票 */}
+      {isShipment && record && (status === 'posted' || status === 'void') && (
+        <InvoiceLinksNote entityKey={SHIPMENT} record={record} />
       )}
       {conflict && (
         <Alert
@@ -571,6 +645,12 @@ function RecordForm({
           )}
           {editable && entityKey === SALES_RETURN && !record && (
             <SalesReturnAutofill details={details} onChange={onValuesChange} />
+          )}
+          {editable && entityKey === SALES_INVOICE && (
+            <SalesInvoiceAutofill onChange={onValuesChange} />
+          )}
+          {editable && entityKey === SALES_ALLOWANCE && (
+            <SalesAllowanceAutofill details={details} isNew={!record} onChange={onValuesChange} />
           )}
           {editable && isSales && (
             <SalesAutofill entityKey={entityKey} details={details} onChange={onValuesChange} />
@@ -663,7 +743,13 @@ function RecordForm({
                 </Form.Item>
               );
             })}
+            {invoicing && displayed.some((f) => f.field_key === INVOICING_FIELDS.taxPeriod) && (
+              <TaxPeriodNote />
+            )}
           </div>
+          {editable && entityKey === SALES_INVOICE && (
+            <ShipmentPicker details={details} onChange={onValuesChange} />
+          )}
           <ShipmentAllocationContext.Provider value={allocation}>
             {details.map((table) => (
               <LinesTable
@@ -702,6 +788,16 @@ function RecordForm({
             </Form.Item>
           )}
         </Form>
+      )}
+      {invoicing && record && (
+        <VoidInvoiceModal
+          open={voidOpen}
+          title={`作廢這張${entity.label}`}
+          period={record.data[INVOICING_FIELDS.taxPeriod]}
+          pending={voidInvoice.isPending}
+          onOk={runVoidInvoice}
+          onCancel={() => setVoidOpen(false)}
+        />
       )}
       <Modal
         open={blocker.state === 'blocked'}

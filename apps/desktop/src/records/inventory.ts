@@ -81,7 +81,7 @@ export function findLot<T extends Pick<InventoryLot, 'lot_no'>>(
   return lots?.find((l) => l.lot_no.toLowerCase() === key);
 }
 
-/** 新增時預設今天的單據日期欄位（盤點調整單 §8.10、進貨單據 §8.8）。 */
+/** 新增時預設今天的單據日期欄位（盤點調整單 §8.10、進貨單據 §8.8、銷貨單據 §8.9、發票模組 §8.11）。 */
 const TODAY_DEFAULT_FIELDS: Record<string, string> = {
   [STOCK_ADJUSTMENT]: 'adjustment_date',
   purchase_order: 'order_date',
@@ -90,10 +90,15 @@ const TODAY_DEFAULT_FIELDS: Record<string, string> = {
   sales_order: 'order_date',
   shipment: 'ship_date',
   sales_return: 'return_date',
+  // 發票模組（§8.11）
+  sales_invoice: 'invoice_date',
+  sales_allowance: 'allowance_date',
+  purchase_invoice: 'invoice_date',
+  purchase_allowance: 'allowance_date',
 };
 
 /** 新增時稅別預設應稅的銷貨單據（§8.9「金額與稅額」；出貨單選擇訂單後帶入訂單的稅別）。 */
-const TAXABLE_DEFAULT: readonly string[] = ['sales_order', 'shipment'];
+const TAXABLE_DEFAULT: readonly string[] = ['sales_order', 'shipment', 'sales_invoice'];
 
 /**
  * 新增資料時表單的預設值：系統單據的單據日期預設今天（台北時間）；訂單、出貨單的稅別預設應稅

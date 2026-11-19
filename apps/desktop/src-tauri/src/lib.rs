@@ -92,6 +92,10 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::list_stock_balances,
             commands::list_product_lots,
             commands::list_inventory_transactions,
+            commands::list_uninvoiced_shipments,
+            commands::list_uninvoiced_receipts,
+            commands::list_invoice_links,
+            commands::void_invoice_record,
             commands::allocation_preview,
             commands::list_layouts,
             commands::get_default_layout,
@@ -173,6 +177,13 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::inventory::LotQuery>()
         .typ::<hammer_shared::inventory::InventoryLot>()
         .typ::<hammer_shared::inventory::TransactionQuery>()
+        // 發票模組
+        .typ::<hammer_shared::invoice::UninvoicedShipmentQuery>()
+        .typ::<hammer_shared::invoice::UninvoicedShipment>()
+        .typ::<hammer_shared::invoice::UninvoicedReceiptQuery>()
+        .typ::<hammer_shared::invoice::UninvoicedReceipt>()
+        .typ::<hammer_shared::invoice::InvoiceLinkQuery>()
+        .typ::<hammer_shared::invoice::InvoiceLink>()
         .typ::<hammer_shared::inventory::InventoryTransaction>()
         .typ::<hammer_shared::inventory::AllocationPreviewRequest>()
         .typ::<hammer_shared::inventory::AllocationPreview>()

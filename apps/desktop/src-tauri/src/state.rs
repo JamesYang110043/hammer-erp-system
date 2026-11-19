@@ -19,6 +19,10 @@ use hammer_shared::inventory::{
     AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
     StockBalance, StockBalanceQuery, TransactionQuery,
 };
+use hammer_shared::invoice::{
+    InvoiceLink, InvoiceLinkQuery, UninvoicedReceipt, UninvoicedReceiptQuery, UninvoicedShipment,
+    UninvoicedShipmentQuery,
+};
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
     ViewLayout,
@@ -531,6 +535,39 @@ impl AppState {
     ) -> Result<Page<InventoryTransaction>, ClientError> {
         self.with_token(async |client, url, token| {
             client.list_inventory_transactions(url, token, query).await
+        })
+        .await
+    }
+
+    /// 尚未開立發票的出貨單。
+    pub async fn list_uninvoiced_shipments(
+        &self,
+        query: &UninvoicedShipmentQuery,
+    ) -> Result<Page<UninvoicedShipment>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.list_uninvoiced_shipments(url, token, query).await
+        })
+        .await
+    }
+
+    /// 尚未取得憑證的進貨單。
+    pub async fn list_uninvoiced_receipts(
+        &self,
+        query: &UninvoicedReceiptQuery,
+    ) -> Result<Page<UninvoicedReceipt>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.list_uninvoiced_receipts(url, token, query).await
+        })
+        .await
+    }
+
+    /// 單據的發票、憑證、折讓。
+    pub async fn list_invoice_links(
+        &self,
+        query: &InvoiceLinkQuery,
+    ) -> Result<Vec<InvoiceLink>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.list_invoice_links(url, token, query).await
         })
         .await
     }

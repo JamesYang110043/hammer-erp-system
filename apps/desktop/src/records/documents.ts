@@ -246,13 +246,16 @@ export interface DocumentActionError {
  * - `422 INVALID_STATUS` → 說明單據目前的狀態，提示重新載入
  * - `422 VALIDATION` → 伺服器的訊息，`details.fields` 逐項列出（`labels` 為欄位代碼 → 顯示名稱）
  * - 其他 → 伺服器的訊息
+ *
+ * `actionLabel` 為動作的名稱（發票模組的過帳顯示為「開立」）。
  */
 export function documentActionError(
   err: unknown,
   action: DocumentAction,
   labels: Record<string, string> = {},
+  actionLabel: string = DOCUMENT_ACTION_LABELS[action],
 ): DocumentActionError {
-  const label = DOCUMENT_ACTION_LABELS[action];
+  const label = actionLabel;
   const code = apiErrorCode(err);
   const d = details(err);
   if (code === 'CONFLICT') {

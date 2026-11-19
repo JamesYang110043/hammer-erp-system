@@ -11,6 +11,17 @@ import {
   amountLineKey,
 } from '../../records/purchasing';
 import { SALES_FIELDS as S, salesLineAmount, salesLineKey, salesTotals } from '../../records/sales';
+import {
+  DUPLICATE,
+  INVOICING_FIELDS as I,
+  SALES_INVOICE,
+  invoiceLineAmount,
+  invoiceTotals,
+  invoicingLineKey,
+  isInvoicingDocument,
+  dateText,
+  taxPeriod,
+} from '../../records/invoicing';
 
 /**
  * 明細金額與合計的即時預覽：依表單目前的值（`values`）計算，寫入唯讀的金額欄位
@@ -25,12 +36,53 @@ export function useAmountPreview(
   enabled: boolean,
 ) {
   const salesKey = salesLineKey(entityKey);
-  const lineKey = amountLineKey(entityKey) ?? salesKey;
+  const invoiceKey = invoicingLineKey(entityKey);
+  const lineKey = amountLineKey(entityKey) ?? salesKey ?? invoiceKey;
+  const invoicing = isInvoicingDocument(entityKey);
   // 只有採購單、進貨單、進貨退回、訂單、出貨單的草稿需要
   const currencies = useAllCurrencies(enabled && lineKey !== undefined);
   const taxRates = useTaxRates(enabled && lineKey !== undefined);
   useEffect(() => {
-    if (!enabled || !lineKey) {
+    if (!enabled) {
+      return;
+    }
+    // 發票模組：期別由發票（折讓）日期計算（§8.11「期別」）
+    if (invoicing) {
+      const date = values[I.invoiceDate] ?? values[I.allowanceDate];
+      form.setFieldValue(I.taxPeriod, taxPeriod(dateText(date)));
+    }
+    if (!lineKey) {
+      return;
+    }
+    if (invoiceKey) {
+      // 發票、折讓以台幣計算；三聯式、折讓單價未稅，二聯式含稅；手動稅額 ±1 元（§8.11「金額與稅額」）
+      const twd =
+        currencies.data?.find((c) => c.code === 'TWD') ?? currencies.data?.find((c) => c.is_base);
+      const tax = taxRates.data?.find((t) => t.code === values[I.taxType]);
+      const lines = ((values[LINES_FORM_KEY] as Record<string, LineFormValues[]> | undefined)?.[
+        invoiceKey
+      ] ?? []) as LineFormValues[];
+      const amounts = lines.map((line) =>
+        twd ? invoiceLineAmount(line[I.qty], line[I.unitPrice], twd.decimal_places) : undefined,
+      );
+      amounts.forEach((amount, i) => {
+        form.setFieldValue([LINES_FORM_KEY, invoiceKey, i, I.amount], amount);
+      });
+      const totals =
+        twd && tax
+          ? invoiceTotals(
+              amounts.filter((a): a is string => a !== undefined),
+              tax.rate,
+              entityKey === SALES_INVOICE && values[I.invoiceType] === DUPLICATE,
+              twd.decimal_places,
+              values[I.taxManual],
+            )
+          : undefined;
+      form.setFieldsValue({
+        [I.subtotal]: totals?.subtotal,
+        [I.taxAmount]: totals?.tax_amount,
+        [I.total]: totals?.total,
+      });
       return;
     }
     if (salesKey) {
@@ -103,5 +155,16 @@ export function useAmountPreview(
       [F.total]: totals.total,
       [F.totalTwd]: totals.total_twd ?? undefined,
     });
-  }, [form, lineKey, salesKey, enabled, values, currencies.data, taxRates.data]);
+  }, [
+    form,
+    entityKey,
+    lineKey,
+    salesKey,
+    invoiceKey,
+    invoicing,
+    enabled,
+    values,
+    currencies.data,
+    taxRates.data,
+  ]);
 }

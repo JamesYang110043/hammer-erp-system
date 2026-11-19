@@ -174,8 +174,8 @@ export function useDocumentAction(entityKey: string, action: DocumentAction) {
     entityKey,
     (record: Pick<DataRecord, 'id' | 'version'>) =>
       unwrap(ACTION_COMMANDS[action](entityKey, record.id, record.version)),
-    // 過帳、作廢會異動庫存；進貨會回寫採購單
-    [inventoryKey, ['records'], ['record']],
+    // 過帳、作廢會異動庫存；進貨會回寫採購單；開立發票會改變「尚未開立發票的出貨單」
+    [inventoryKey, ['records'], ['record'], ['invoicing']],
   );
 }
 

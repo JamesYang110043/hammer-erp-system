@@ -30,6 +30,7 @@ import {
 import { INVENTORY_MODULES } from '../inventoryModules';
 import { entityIcon } from '../pages/schema/entityIcons';
 import { INVENTORY_GROUP_LABEL, inventoryEntities } from '../records/inventory';
+import { INVOICING_GROUP_LABEL, invoicingEntities } from '../records/invoicing';
 import { PURCHASING_GROUP_LABEL, purchasingEntities } from '../records/purchasing';
 import { SALES_GROUP_LABEL, salesEntities } from '../records/sales';
 import { MASTER_DATA_LABEL } from '../schema/entities';
@@ -115,6 +116,23 @@ export function AppLayout() {
         ]
       : [];
 
+  // 發票：銷項發票、銷貨折讓、進項憑證、進貨折讓（docs/architecture.md §8.11）
+  const invoicingList = (canReadRecords ? invoicingEntities(entities.data ?? []) : []).map(
+    entityItem,
+  );
+  const invoicingItems: MenuItem[] =
+    invoicingList.length > 0
+      ? [
+          {
+            type: 'group',
+            key: 'invoicing-group',
+            label: INVOICING_GROUP_LABEL,
+            children: invoicingList,
+          },
+          { type: 'divider', key: 'invoicing-group-divider' },
+        ]
+      : [];
+
   // 庫存：盤點調整單與庫存查詢（docs/architecture.md §8.10）
   const inventory: MenuItem[] = [
     ...(canReadRecords ? inventoryEntities(entities.data ?? []) : []).map(entityItem),
@@ -142,6 +160,7 @@ export function AppLayout() {
     ...masterDataItems,
     ...purchasingItems,
     ...salesItems,
+    ...invoicingItems,
     ...inventoryItems,
     ...MODULES.filter((m) => !m.permission || can(m.permission)).flatMap((m) => {
       const item: MenuItem = { key: m.path, icon: m.icon, label: m.label };

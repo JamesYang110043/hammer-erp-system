@@ -26,6 +26,10 @@ use hammer_shared::inventory::{
     AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
     StockBalance, StockBalanceQuery, TransactionQuery,
 };
+use hammer_shared::invoice::{
+    InvoiceLink, InvoiceLinkQuery, UninvoicedReceipt, UninvoicedReceiptQuery, UninvoicedShipment,
+    UninvoicedShipmentQuery,
+};
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
     ViewLayout,
@@ -342,6 +346,51 @@ impl ApiClient {
         let builder = self
             .http
             .get(endpoint(server_url, "/inventory/transactions"))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/invoicing/uninvoiced-shipments`（尚未開立發票的出貨單）。
+    pub async fn list_uninvoiced_shipments(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &UninvoicedShipmentQuery,
+    ) -> Result<Page<UninvoicedShipment>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/invoicing/uninvoiced-shipments"))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/invoicing/uninvoiced-receipts`（尚未取得憑證的進貨單）。
+    pub async fn list_uninvoiced_receipts(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &UninvoicedReceiptQuery,
+    ) -> Result<Page<UninvoicedReceipt>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/invoicing/uninvoiced-receipts"))
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/invoicing/links`（單據的發票、憑證、折讓）。
+    pub async fn list_invoice_links(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &InvoiceLinkQuery,
+    ) -> Result<Vec<InvoiceLink>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/invoicing/links"))
             .bearer_auth(token)
             .query(query);
         authed(read_json(send(builder).await?).await)
@@ -2215,6 +2264,61 @@ mod tests {
             .unwrap();
         assert_eq!(preview.lines[0].allocations[0].lot_no, "L-01");
         assert_eq!(preview.lines[0].shortage.to_string(), "7.0000");
+    }
+
+    #[tokio::test]
+    async fn invoicing_query_endpoints() {
+        use axum::extract::RawQuery;
+
+        let url = serve(
+            Router::new()
+                .route(
+                    "/invoicing/uninvoiced-shipments",
+                    get(|RawQuery(q): RawQuery| async move {
+                        assert_eq!(q.as_deref(), Some("customer_id=c1&page=1"));
+                        axum::Json(json!({ "items": [], "total": 0, "page": 1, "page_size": 50 }))
+                    }),
+                )
+                .route(
+                    "/invoicing/links",
+                    get(|RawQuery(q): RawQuery| async move {
+                        assert_eq!(q.as_deref(), Some("entity_key=shipment&record_id=r1"));
+                        axum::Json(json!([{
+                            "entity_key": "sales_invoice",
+                            "record_id": "0196f5a0-0000-7000-8000-000000000601",
+                            "record_no": "SI202611-0001", "invoice_no": "AB12345678",
+                            "invoice_date": "2026-11-19", "status": "posted",
+                        }]))
+                    }),
+                ),
+        )
+        .await;
+        let client = ApiClient::new().unwrap();
+        let page = client
+            .list_uninvoiced_shipments(
+                &url,
+                "tok",
+                &UninvoicedShipmentQuery {
+                    customer_id: Some("c1".into()),
+                    page: Some(1),
+                    ..UninvoicedShipmentQuery::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.total, 0);
+        let links = client
+            .list_invoice_links(
+                &url,
+                "tok",
+                &InvoiceLinkQuery {
+                    entity_key: Some("shipment".into()),
+                    record_id: Some("r1".into()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(links[0].invoice_no.as_deref(), Some("AB12345678"));
     }
 
     #[tokio::test]
