@@ -11,6 +11,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './App';
 import { createQueryClient } from './api/queryClient';
+import { appTheme } from './theme';
 import './styles.css';
 
 dayjs.locale('zh-tw');
@@ -24,7 +25,7 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <ConfigProvider locale={zhTW}>
+    <ConfigProvider locale={zhTW} theme={appTheme}>
       <AntApp>
         <QueryClientProvider client={queryClient}>
           <App />
