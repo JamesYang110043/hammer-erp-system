@@ -146,9 +146,10 @@ describe('操作紀錄頁', () => {
     await firstRow();
 
     await user.click(screen.getByLabelText('動作'));
-    await user.click(await screen.findByTitle('登出'));
+    // 下拉選單是虛擬清單，jsdom 只會渲染前幾個選項，選前面的選項
+    await user.click(await screen.findByTitle('登入'));
     await user.click(screen.getByRole('button', { name: /查\s*詢/ }));
-    await waitFor(() => expect(auditQueries(invoke).at(-1)).toMatchObject({ action: 'logout' }));
+    await waitFor(() => expect(auditQueries(invoke).at(-1)).toMatchObject({ action: 'login' }));
 
     await user.click(screen.getByRole('button', { name: /清\s*除/ }));
 
