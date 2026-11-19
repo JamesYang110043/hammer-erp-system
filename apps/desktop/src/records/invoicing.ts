@@ -67,6 +67,12 @@ export const INVOICING_FIELDS = {
   shipment: 'shipment_id',
   salesInvoice: 'sales_invoice_id',
   salesReturn: 'sales_return_id',
+  supplier: 'supplier_id',
+  sellerTaxId: 'seller_tax_id',
+  docType: 'doc_type',
+  goodsReceipt: 'goods_receipt_id',
+  purchaseInvoice: 'purchase_invoice_id',
+  purchaseReturn: 'purchase_return_id',
   allowanceDate: 'allowance_date',
   voidDate: 'void_date',
   product: 'product_id',
@@ -77,6 +83,9 @@ export const INVOICING_FIELDS = {
 } as const;
 
 const F = INVOICING_FIELDS;
+
+/** 海關代徵營業稅繳納證。 */
+export const CUSTOMS = 'customs';
 
 /** 二聯式（單價含稅）。 */
 export const DUPLICATE = 'duplicate';
@@ -327,4 +336,32 @@ export function invoicingStatusNote(entityKey: string, note: string): string {
   }
   const verb = posted.slice(1);
   return note.replace('已過帳', posted).replace('過帳時間', `${verb}時間`);
+}
+
+/** 沒有明細、由使用者輸入金額的單據（進項憑證、進貨折讓）：總計 = 未稅 + 稅額；不是數字時為 `undefined`。 */
+export function enteredTotal(subtotal: unknown, taxAmount: unknown): string | undefined {
+  const a = parse(subtotal);
+  const b = parse(taxAmount);
+  return a && b ? format(add(a, b), 4) : undefined;
+}
+
+/** 是否為由使用者輸入金額的單據。 */
+export function hasEnteredAmounts(entityKey: string): boolean {
+  return entityKey === PURCHASE_INVOICE || entityKey === PURCHASE_ALLOWANCE;
+}
+
+/**
+ * 依勾選的進貨單建議進項憑證的金額：都是台幣時，以台幣總計合計反推未稅（`round(合計 ÷ (1 + 稅率), 0)`），
+ * 稅額 = 合計 − 未稅；有外幣或沒有台幣總計時為 `undefined`（依憑證輸入）。
+ */
+export function suggestedInvoiceAmounts(
+  receipts: readonly { currency_code: string; total_twd: string | null }[],
+  taxRate: string,
+): { subtotal: string; tax_amount: string } | undefined {
+  if (receipts.length === 0 || receipts.some((r) => r.currency_code !== 'TWD' || !r.total_twd)) {
+    return undefined;
+  }
+  const sum = receipts.reduce<Dec>((acc, r) => add(acc, parse(r.total_twd) ?? ZERO), ZERO);
+  const subtotal = div(sum, add({ units: 1n, scale: 0 }, parse(taxRate) ?? ZERO), 0) ?? sum;
+  return { subtotal: format(subtotal, 0), tax_amount: format(sub(sum, subtotal), 0) };
 }

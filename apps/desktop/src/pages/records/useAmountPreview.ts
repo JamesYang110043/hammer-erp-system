@@ -20,6 +20,8 @@ import {
   invoicingLineKey,
   isInvoicingDocument,
   dateText,
+  enteredTotal,
+  hasEnteredAmounts,
   taxPeriod,
 } from '../../records/invoicing';
 
@@ -50,6 +52,11 @@ export function useAmountPreview(
     if (invoicing) {
       const date = values[I.invoiceDate] ?? values[I.allowanceDate];
       form.setFieldValue(I.taxPeriod, taxPeriod(dateText(date)));
+    }
+    // 進項憑證、進貨折讓沒有明細：總計 = 輸入的未稅金額 + 稅額
+    if (hasEnteredAmounts(entityKey)) {
+      form.setFieldValue(I.total, enteredTotal(values[I.subtotal], values[I.taxAmount]));
+      return;
     }
     if (!lineKey) {
       return;

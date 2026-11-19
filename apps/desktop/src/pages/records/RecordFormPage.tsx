@@ -46,7 +46,10 @@ import type {
 import { newRecordPath, recordListPath, recordPath } from '../../modules';
 import { useVoidInvoice } from '../../api/invoicing';
 import {
+  CUSTOMS,
   INVOICING_FIELDS,
+  PURCHASE_ALLOWANCE,
+  PURCHASE_INVOICE,
   SALES_ALLOWANCE,
   SALES_INVOICE,
   invoicingActionLabel,
@@ -56,6 +59,9 @@ import {
 } from '../../records/invoicing';
 import {
   InvoiceLinksNote,
+  PurchaseAllowanceAutofill,
+  PurchaseInvoiceAutofill,
+  ReceiptPicker,
   SalesAllowanceAutofill,
   SalesInvoiceAutofill,
   ShipmentPicker,
@@ -103,6 +109,7 @@ import {
 } from '../../records/lines';
 import type { DetailTable, LineFormValues } from '../../records/lines';
 import {
+  GOODS_RECEIPT,
   PURCHASE_RETURN,
   PURCHASING_FIELDS,
   lineFormFields,
@@ -235,6 +242,13 @@ function RecordForm({
   const actionLabel = (action: DocumentAction) =>
     invoicingActionLabel(entityKey, action) ?? DOCUMENT_ACTION_LABELS[action];
   const actionPending = Object.values(mutations).some((m) => m.isPending) || voidInvoice.isPending;
+  // 已開立的發票（憑證）可以開立折讓；海關繳納證不可折讓（§8.11）
+  const allowanceEntity =
+    entityKey === SALES_INVOICE
+      ? SALES_ALLOWANCE
+      : entityKey === PURCHASE_INVOICE && record?.data[INVOICING_FIELDS.docType] !== CUSTOMS
+        ? PURCHASE_ALLOWANCE
+        : undefined;
   // 採購單、進貨單：幣別、匯率帶入與金額預覽（§8.8）
   const priced = pricedDocument(entityKey) !== undefined;
   const [actionError, setActionError] = useState<DocumentActionError>();
@@ -563,10 +577,10 @@ function RecordForm({
               </Button>
             </Tooltip>
           ))}
-          {entityKey === SALES_INVOICE && record && status === 'posted' && canWrite && (
+          {allowanceEntity && record && status === 'posted' && canWrite && (
             <Button
               icon={<AuditOutlined />}
-              onClick={() => navigate(`${newRecordPath(SALES_ALLOWANCE)}?invoice=${record.id}`)}
+              onClick={() => navigate(`${newRecordPath(allowanceEntity)}?invoice=${record.id}`)}
             >
               開立折讓
             </Button>
@@ -615,6 +629,9 @@ function RecordForm({
       {isShipment && record && (status === 'posted' || status === 'void') && (
         <InvoiceLinksNote entityKey={SHIPMENT} record={record} />
       )}
+      {entityKey === GOODS_RECEIPT && record && (status === 'posted' || status === 'void') && (
+        <InvoiceLinksNote entityKey={GOODS_RECEIPT} record={record} label="進項憑證" />
+      )}
       {conflict && (
         <Alert
           showIcon
@@ -651,6 +668,12 @@ function RecordForm({
           )}
           {editable && entityKey === SALES_ALLOWANCE && (
             <SalesAllowanceAutofill details={details} isNew={!record} onChange={onValuesChange} />
+          )}
+          {editable && entityKey === PURCHASE_INVOICE && (
+            <PurchaseInvoiceAutofill onChange={onValuesChange} />
+          )}
+          {editable && entityKey === PURCHASE_ALLOWANCE && (
+            <PurchaseAllowanceAutofill isNew={!record} onChange={onValuesChange} />
           )}
           {editable && isSales && (
             <SalesAutofill entityKey={entityKey} details={details} onChange={onValuesChange} />
@@ -749,6 +772,9 @@ function RecordForm({
           </div>
           {editable && entityKey === SALES_INVOICE && (
             <ShipmentPicker details={details} onChange={onValuesChange} />
+          )}
+          {editable && entityKey === PURCHASE_INVOICE && (
+            <ReceiptPicker details={details} onChange={onValuesChange} />
           )}
           <ShipmentAllocationContext.Provider value={allocation}>
             {details.map((table) => (

@@ -1,6 +1,13 @@
 import type { EntityDefinition, FieldDefinition } from '../bindings';
 import { PRODUCT, STOCK_ADJUSTMENT } from './documentFixtures';
 import {
+  GOODS_RECEIPT,
+  PURCHASE_RETURN,
+  PURCHASING_ENTITIES,
+  SUPPLIER,
+  purchasingEntityDetail,
+} from './purchasingFixtures';
+import {
   CUSTOMER,
   SALES_ENTITIES,
   SALES_RETURN,
@@ -274,6 +281,200 @@ export const SALES_INVOICE_LINE_FIELDS = textLines(SALES_INVOICE_LINE);
 export const SALES_INVOICE_SHIPMENT_FIELDS = shipmentLinkFields();
 export const SALES_ALLOWANCE_FIELDS = salesAllowanceFields();
 export const SALES_ALLOWANCE_LINE_FIELDS = textLines(SALES_ALLOWANCE_LINE);
+
+export const PURCHASE_INVOICE: EntityDefinition = documentEntity({
+  id: '01a2a0c0-4c50-7005-8000-000000000006',
+  key: 'purchase_invoice',
+  label: '進項憑證',
+  numbering_pattern: 'PI{yyyyMM}-{0000}',
+  title_template: '{invoice_no} {supplier_id.name}',
+  sort_order: 320,
+});
+
+export const PURCHASE_INVOICE_RECEIPT: EntityDefinition = documentEntity({
+  id: '01a2a0c0-4c50-7006-8000-000000000007',
+  key: 'purchase_invoice_receipt',
+  label: '憑證進貨單',
+  kind: 'detail',
+  parent_entity_id: PURCHASE_INVOICE.id,
+  numbering_pattern: null,
+  title_template: '{goods_receipt_id.record_no}',
+  sort_order: 0,
+});
+
+export const PURCHASE_ALLOWANCE: EntityDefinition = documentEntity({
+  id: '01a2a0c0-4c50-7007-8000-000000000008',
+  key: 'purchase_allowance',
+  label: '進貨折讓',
+  numbering_pattern: 'PA{yyyyMM}-{0000}',
+  title_template: '{record_no} {supplier_id.name}',
+  sort_order: 330,
+});
+
+const enteredMoney = (entity: EntityDefinition, key: string, label: string) =>
+  sys(entity, {
+    field_key: key,
+    label,
+    data_type: 'money',
+    is_required: true,
+    decimal_places: 4,
+    validation: MIN_ZERO,
+  });
+
+function purchaseStatus(entity: EntityDefinition, posted: string) {
+  return sys(entity, {
+    field_key: 'status',
+    label: '狀態',
+    data_type: 'select',
+    is_readonly: true,
+    options: [
+      { value: 'draft', label: '草稿', color: null },
+      { value: 'posted', label: posted, color: null },
+      { value: 'void', label: '已作廢', color: null },
+    ],
+  });
+}
+
+function purchaseInvoiceFields(): FieldDefinition[] {
+  sort = 0;
+  const e = PURCHASE_INVOICE;
+  return [
+    sys(e, {
+      field_key: 'doc_type',
+      label: '憑證種類',
+      data_type: 'select',
+      is_required: true,
+      default_value: 'triplicate',
+      options: [
+        { value: 'triplicate', label: '三聯式發票', color: null },
+        { value: 'electronic', label: '電子發票', color: null },
+        { value: 'customs', label: '海關代徵營業稅繳納證', color: null },
+      ],
+    }),
+    sys(e, { field_key: 'invoice_no', label: '憑證號碼', is_required: true }),
+    sys(e, { field_key: 'invoice_date', label: '憑證日期', data_type: 'date', is_required: true }),
+    sys(e, { field_key: 'tax_period', label: '期別', is_readonly: true }),
+    sys(e, {
+      field_key: 'supplier_id',
+      label: '廠商',
+      data_type: 'relation',
+      is_required: true,
+      relation_entity_id: SUPPLIER.id,
+    }),
+    sys(e, { field_key: 'seller_tax_id', label: '賣方統一編號' }),
+    sys(e, {
+      field_key: 'tax_type',
+      label: '稅別',
+      data_type: 'select',
+      is_required: true,
+      default_value: 'taxable',
+      options: TAX_OPTIONS,
+    }),
+    enteredMoney(e, 'subtotal', '未稅金額'),
+    enteredMoney(e, 'tax_amount', '稅額'),
+    readonlyMoney(e, 'total', '總計'),
+    sys(e, {
+      field_key: 'deductible',
+      label: '可扣抵',
+      data_type: 'boolean',
+      is_required: true,
+      default_value: true,
+    }),
+    purchaseStatus(e, '已登錄'),
+    ...voidFields(e),
+    notes(e),
+  ];
+}
+
+function receiptLinkFields(): FieldDefinition[] {
+  sort = 0;
+  return [
+    sys(PURCHASE_INVOICE_RECEIPT, {
+      field_key: 'goods_receipt_id',
+      label: '進貨單',
+      data_type: 'relation',
+      is_required: true,
+      relation_entity_id: GOODS_RECEIPT.id,
+    }),
+  ];
+}
+
+function purchaseAllowanceFields(): FieldDefinition[] {
+  sort = 0;
+  const e = PURCHASE_ALLOWANCE;
+  return [
+    sys(e, {
+      field_key: 'purchase_invoice_id',
+      label: '原憑證',
+      data_type: 'relation',
+      is_required: true,
+      relation_entity_id: PURCHASE_INVOICE.id,
+    }),
+    sys(e, {
+      field_key: 'supplier_id',
+      label: '廠商',
+      data_type: 'relation',
+      is_readonly: true,
+      relation_entity_id: SUPPLIER.id,
+    }),
+    sys(e, {
+      field_key: 'allowance_date',
+      label: '折讓日期',
+      data_type: 'date',
+      is_required: true,
+    }),
+    sys(e, { field_key: 'tax_period', label: '期別', is_readonly: true }),
+    sys(e, {
+      field_key: 'tax_type',
+      label: '稅別',
+      data_type: 'select',
+      is_readonly: true,
+      options: TAX_OPTIONS,
+    }),
+    sys(e, {
+      field_key: 'purchase_return_id',
+      label: '進貨退回',
+      data_type: 'relation',
+      relation_entity_id: PURCHASE_RETURN.id,
+    }),
+    enteredMoney(e, 'subtotal', '折讓未稅金額'),
+    enteredMoney(e, 'tax_amount', '折讓稅額'),
+    readonlyMoney(e, 'total', '折讓總計'),
+    purchaseStatus(e, '已開立'),
+    sys(e, { field_key: 'reason', label: '折讓原因' }),
+    ...voidFields(e),
+    notes(e),
+  ];
+}
+
+export const PURCHASE_INVOICE_FIELDS = purchaseInvoiceFields();
+export const PURCHASE_INVOICE_RECEIPT_FIELDS = receiptLinkFields();
+export const PURCHASE_ALLOWANCE_FIELDS = purchaseAllowanceFields();
+
+/** 進貨與發票模組的資料類別（`list_entities`）。 */
+export const PURCHASE_INVOICING_ENTITIES = [
+  ...PURCHASING_ENTITIES,
+  PURCHASE_INVOICE,
+  PURCHASE_INVOICE_RECEIPT,
+  PURCHASE_ALLOWANCE,
+];
+
+/** 進項憑證、進貨折讓的 `get_entity`（其他交給 {@link purchasingEntityDetail}）。 */
+export function purchaseInvoicingEntityDetail(key: string) {
+  const fields: Record<string, FieldDefinition[]> = {
+    purchase_invoice: PURCHASE_INVOICE_FIELDS,
+    purchase_invoice_receipt: PURCHASE_INVOICE_RECEIPT_FIELDS,
+    purchase_allowance: PURCHASE_ALLOWANCE_FIELDS,
+  };
+  const entity = PURCHASE_INVOICING_ENTITIES.find((e) => e.key === key);
+  if (!entity || !(key in fields)) {
+    return purchasingEntityDetail(key);
+  }
+  return { entity, fields: fields[key] };
+}
+
+export const PURCHASE_INVOICE_ID = '0196f5a0-0000-7000-8000-000000000e21';
+export const PURCHASE_ALLOWANCE_ID = '0196f5a0-0000-7000-8000-000000000e31';
 
 /** 銷貨與發票模組的資料類別（`list_entities`）。 */
 export const INVOICING_ENTITIES = [
