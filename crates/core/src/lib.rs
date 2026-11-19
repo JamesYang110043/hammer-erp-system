@@ -10,6 +10,7 @@
 //! - [`formulas`]：存檔時計算公式欄位
 //! - [`inventory`]：庫存引擎（鎖定、入庫建批號、先進先出與指定批號扣庫存、反向處理、異動流水帳）
 //! - [`inventory_queries`]：庫存查詢（商品庫存、商品的批號、異動流水帳）
+//! - [`invoicing`]：發票模組（銷項發票、銷貨折讓、進項憑證、進貨折讓）存檔時的規則（期別、折讓從原發票帶入）
 //! - [`layouts`]：列表版面（`view_layouts`）
 //! - [`master_data`]：基本資料（單位、商品分類、商品、客戶、廠商）的業務規則
 //! - [`numbering`]：單號規則的解析與產生
@@ -42,6 +43,7 @@ pub mod exchange_rates;
 pub mod formulas;
 pub mod inventory;
 pub mod inventory_queries;
+pub mod invoicing;
 pub mod layouts;
 pub mod master_data;
 pub mod numbering;

@@ -17,6 +17,15 @@ use uuid::Uuid;
 /// 0012 之前的最後一個 migration 版本。
 const BEFORE_PURCHASING: i64 = 11;
 
+const ENTITIES: [&str; 6] = [
+    "purchase_order",
+    "purchase_order_line",
+    "goods_receipt",
+    "goods_receipt_line",
+    "purchase_return",
+    "purchase_return_line",
+];
+
 fn dec(s: &str) -> Decimal {
     s.parse().unwrap()
 }
@@ -154,9 +163,11 @@ async fn entities_are_registered(pool: PgPool) {
                 e.numbering_pattern, e.title_template, e.icon, e.sort_order, e.is_active
          FROM entity_definitions e
          LEFT JOIN entity_definitions p ON p.id = e.parent_entity_id
-         WHERE e.key LIKE 'purchase%' OR e.key LIKE 'goods_receipt%'
+         WHERE e.key = ANY($1)
          ORDER BY e.id",
     )
+    // 不用 LIKE 'purchase%'：M5 的進項憑證、進貨折讓也以 purchase 開頭
+    .bind(&ENTITIES[..])
     .fetch_all(&pool)
     .await
     .unwrap();
