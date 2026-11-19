@@ -31,6 +31,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use hammer_db::inventory as inventory_db;
+use hammer_db::invoicing as invoicing_db;
 use hammer_db::purchasing::{self as db, OrderForReceipt, OrderLineRow, ReceiptLineRow};
 use hammer_db::sqlx::PgConnection;
 use hammer_shared::Id;
@@ -54,6 +55,7 @@ use crate::audit::{AuditDiff, AuditEntry};
 use crate::documents::{DocumentContext, DocumentHandler, HandlerFuture};
 use crate::formulas::today_of;
 use crate::inventory::{GOODS, Inventory, LOT_NO_TAKEN, Line, LockRequest, Receipt, Source, qty4};
+use crate::invoicing::PURCHASE_INVOICE;
 use crate::record_data::FieldError;
 use crate::record_lines::{LineError, audit_key};
 use crate::stock_adjustments::{MSG_LOT_DUPLICATE, MSG_NO_LINES, MSG_PRODUCT_DELETED, ProductInfo};
@@ -570,6 +572,23 @@ async fn void(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), 
                     entity_key: PURCHASE_RETURN.into(),
                     record_id: *id,
                     record_no: no.clone(),
+                })
+                .collect(),
+        });
+    }
+    // 被有效的進項憑證關聯時不可作廢（§8.11「其他單據的作廢限制」）；登錄憑證時以 FOR UPDATE 鎖定進貨單，
+    // 這裡進貨單已由框架鎖定，所以兩邊不會同時成功
+    let invoices =
+        invoicing_db::posted_invoices_of_receipts(&mut *conn, &[doc.record_id], None, None).await?;
+    if let Some(first) = invoices.first() {
+        return Err(CoreError::DocumentsInUse {
+            message: format!("此進貨單已有進項憑證 {}，請先作廢憑證", first.invoice_no),
+            documents: invoices
+                .iter()
+                .map(|i| DocumentRef {
+                    entity_key: PURCHASE_INVOICE.into(),
+                    record_id: i.invoice_id,
+                    record_no: i.invoice_record_no.clone(),
                 })
                 .collect(),
         });

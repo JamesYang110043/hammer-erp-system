@@ -27,11 +27,11 @@ use hammer_shared::document::DocumentRef;
 use serde_json::{Map, Value};
 
 use super::save::{
-    BUYER_NAME, BUYER_TAX_ID, CUSTOMER_ID, INVOICE_NO, INVOICE_TYPE, LinkCheck, check_header,
-    field_error, id_of, link_errors, load_links,
+    BUYER_NAME, BUYER_TAX_ID, CUSTOMER_ID, INVOICE_NO, INVOICE_TYPE, LinkCheck, LinkKind,
+    SHIPMENT_LINKS, check_header, field_error, id_of, link_errors, load_links,
 };
 use super::voiding::{self, void_details};
-use super::{SALES_ALLOWANCE, SALES_INVOICE_LINE, SALES_INVOICE_SHIPMENT};
+use super::{SALES_ALLOWANCE, SALES_INVOICE_LINE};
 use crate::CoreError;
 use crate::documents::{DocumentContext, DocumentHandler, HandlerFuture};
 use crate::purchasing::save::line_errors as qty_price_errors;
@@ -147,29 +147,17 @@ async fn post(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), 
     }
 
     let ids = db::invoice_shipment_ids(&mut *conn, doc.record_id).await?;
-    let (shipments, invoiced) = load_links(conn, &ids, Some(doc.record_id), true).await?;
-    let link_rows: Vec<(usize, Option<Id>)> = ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (i, Some(*id)))
-        .collect();
-    let mut link_lines = link_errors(&LinkCheck {
-        customer_id,
-        rows: &link_rows,
-        shipments: &shipments,
-        invoiced: &invoiced,
-    });
-    for (index, id) in &link_rows {
-        if id.is_some_and(|id| !shipments.contains_key(&id)) {
-            link_lines.push(LineError::field(
-                SALES_INVOICE_SHIPMENT,
-                *index,
-                super::save::SHIPMENT_ID,
-                "出貨單已刪除",
-            ));
-        }
-    }
-    lines.extend(link_lines);
+    lines.extend(
+        linked_errors(
+            conn,
+            &SHIPMENT_LINKS,
+            &ids,
+            customer_id,
+            doc.record_id,
+            false,
+        )
+        .await?,
+    );
 
     if fields.iter().all(|f| f.field_key != INVOICE_NO)
         && let Some((_, record_no)) =
@@ -181,6 +169,42 @@ async fn post(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), 
         ));
     }
     voiding::validation(fields, lines)
+}
+
+/// 開立時鎖定並檢查關聯的單據（出貨單、進貨單）：存檔時的檢查，加上單據已刪除。
+pub(crate) async fn linked_errors(
+    conn: &mut PgConnection,
+    kind: &LinkKind,
+    ids: &[Id],
+    party_id: Option<Id>,
+    invoice_id: Id,
+    customs: bool,
+) -> Result<Vec<LineError>, CoreError> {
+    let (documents, invoiced) =
+        load_links(conn, kind, ids, Some(invoice_id), true, customs).await?;
+    let rows: Vec<(usize, Option<Id>)> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (i, Some(*id)))
+        .collect();
+    let mut errors = link_errors(&LinkCheck {
+        kind,
+        party_id,
+        rows: &rows,
+        documents: &documents,
+        invoiced: &invoiced,
+    });
+    for (index, id) in ids.iter().enumerate() {
+        if !documents.contains_key(id) {
+            errors.push(LineError::field(
+                kind.detail_key,
+                index,
+                kind.field,
+                format!("{}已刪除", kind.doc_word),
+            ));
+        }
+    }
+    Ok(errors)
 }
 
 async fn void(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), CoreError> {

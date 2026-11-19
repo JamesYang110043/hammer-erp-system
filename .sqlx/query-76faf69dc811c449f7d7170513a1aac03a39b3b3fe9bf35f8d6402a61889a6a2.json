@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT goods_receipt_id\n        FROM purchase_invoice_receipts\n        WHERE purchase_invoice_id = $1 AND deleted_at IS NULL\n        ORDER BY sort_order, id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "goods_receipt_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "purchase_invoice_receipts",
+            "name": "goods_receipt_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "76faf69dc811c449f7d7170513a1aac03a39b3b3fe9bf35f8d6402a61889a6a2"
+}

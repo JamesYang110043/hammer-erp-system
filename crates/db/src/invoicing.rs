@@ -8,6 +8,8 @@
 //! - 銷項發票：帶入買受人的客戶資料、關聯出貨單的讀取與鎖定、已開立發票的出貨單、號碼是否已使用、
 //!   有效的折讓
 //! - 銷貨折讓：鎖定原發票、關聯的銷貨退回、已開立折讓的合計
+//! - 進項憑證、進貨折讓：廠商統編、關聯進貨單的讀取與鎖定、已登錄憑證的進貨單（發票類與海關繳納證分開）、
+//!   號碼是否已登錄、有效的折讓、關聯的進貨退回
 //! - [`set_void_details`]：作廢日期與原因
 //! - [`count_customer_invoice_documents`]、[`count_supplier_invoice_documents`]：客戶、廠商被引用的張數
 
@@ -111,25 +113,26 @@ pub async fn find_customer_for_invoice<'e>(
     Ok(row)
 }
 
-/// 發票關聯的出貨單（§8.11「關聯出貨單、進貨單」）。
+/// 發票（憑證）關聯的出貨單或進貨單（§8.11「關聯出貨單、進貨單」）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShipmentForInvoice {
+pub struct DocumentForInvoice {
     pub id: Uuid,
     pub record_no: String,
     /// `draft` / `posted` / `void`。
     pub status: String,
-    pub customer_id: Uuid,
+    /// 出貨單為客戶、進貨單為廠商。
+    pub party_id: Uuid,
 }
 
 /// 未刪除的出貨單中 id 在 `ids` 內的（依 id 排序），以 `FOR SHARE` 鎖定（存檔時使用）。
 pub async fn list_shipments_for_invoice<'e>(
     executor: impl PgExecutor<'e>,
     ids: &[Uuid],
-) -> Result<Vec<ShipmentForInvoice>, DbError> {
+) -> Result<Vec<DocumentForInvoice>, DbError> {
     let rows = sqlx::query_as!(
-        ShipmentForInvoice,
+        DocumentForInvoice,
         r#"
-        SELECT id, record_no, status, customer_id
+        SELECT id, record_no, status, customer_id AS party_id
         FROM shipments
         WHERE id = ANY($1) AND deleted_at IS NULL
         ORDER BY id
@@ -147,11 +150,11 @@ pub async fn list_shipments_for_invoice<'e>(
 pub async fn lock_shipments_for_invoice<'e>(
     executor: impl PgExecutor<'e>,
     ids: &[Uuid],
-) -> Result<Vec<ShipmentForInvoice>, DbError> {
+) -> Result<Vec<DocumentForInvoice>, DbError> {
     let rows = sqlx::query_as!(
-        ShipmentForInvoice,
+        DocumentForInvoice,
         r#"
-        SELECT id, record_no, status, customer_id
+        SELECT id, record_no, status, customer_id AS party_id
         FROM shipments
         WHERE id = ANY($1) AND deleted_at IS NULL
         ORDER BY id
@@ -503,4 +506,251 @@ pub async fn list_sales_allowance_lines<'e>(
     .fetch_all(executor)
     .await?;
     Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// 進項憑證、進貨折讓（#186）
+// ---------------------------------------------------------------------------
+
+/// 未刪除廠商的統一編號（外層 `None` 為廠商不存在或已刪除）。
+pub async fn find_supplier_tax_id<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<Option<String>>, DbError> {
+    let row = sqlx::query_scalar!(
+        "SELECT tax_id FROM suppliers WHERE id = $1 AND deleted_at IS NULL",
+        id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 未刪除的進貨單中 id 在 `ids` 內的（依 id 排序）；`lock` 為開立時以 `FOR UPDATE` 鎖定，否則 `FOR SHARE`。
+pub async fn list_receipts_for_invoice<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+    lock: bool,
+) -> Result<Vec<DocumentForInvoice>, DbError> {
+    let rows = if lock {
+        sqlx::query_as!(
+            DocumentForInvoice,
+            r#"
+            SELECT id, record_no, status, supplier_id AS party_id
+            FROM goods_receipts
+            WHERE id = ANY($1) AND deleted_at IS NULL
+            ORDER BY id
+            FOR UPDATE
+            "#,
+            ids,
+        )
+        .fetch_all(executor)
+        .await?
+    } else {
+        sqlx::query_as!(
+            DocumentForInvoice,
+            r#"
+            SELECT id, record_no, status, supplier_id AS party_id
+            FROM goods_receipts
+            WHERE id = ANY($1) AND deleted_at IS NULL
+            ORDER BY id
+            FOR SHARE
+            "#,
+            ids,
+        )
+        .fetch_all(executor)
+        .await?
+    };
+    Ok(rows)
+}
+
+/// `receipt_ids` 中已被有效（`posted`）進項憑證關聯的進貨單。`customs` 為海關繳納證，否則為發票類
+/// （三聯式、電子發票）；兩類各自計算（§8.11）。`exclude` 為不列入的憑證。
+pub async fn posted_invoices_of_receipts<'e>(
+    executor: impl PgExecutor<'e>,
+    receipt_ids: &[Uuid],
+    customs: Option<bool>,
+    exclude: Option<Uuid>,
+) -> Result<Vec<InvoicedDocument>, DbError> {
+    let rows = sqlx::query_as!(
+        InvoicedDocument,
+        r#"
+        SELECT l.goods_receipt_id AS document_id, i.id AS invoice_id, i.invoice_no,
+               i.record_no AS invoice_record_no
+        FROM purchase_invoice_receipts l
+        JOIN purchase_invoices i ON i.id = l.purchase_invoice_id
+        WHERE l.goods_receipt_id = ANY($1) AND l.deleted_at IS NULL
+          AND i.status = 'posted' AND i.deleted_at IS NULL
+          AND ($2::boolean IS NULL OR (i.doc_type = 'customs') = $2)
+          AND i.id IS DISTINCT FROM $3
+        ORDER BY l.goods_receipt_id, i.id
+        "#,
+        receipt_ids,
+        customs,
+        exclude,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 進項憑證關聯的進貨單 id（未刪除的關聯，依順序）。
+pub async fn invoice_receipt_ids<'e>(
+    executor: impl PgExecutor<'e>,
+    invoice_id: Uuid,
+) -> Result<Vec<Uuid>, DbError> {
+    let ids = sqlx::query_scalar!(
+        r#"
+        SELECT goods_receipt_id
+        FROM purchase_invoice_receipts
+        WHERE purchase_invoice_id = $1 AND deleted_at IS NULL
+        ORDER BY sort_order, id
+        "#,
+        invoice_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(ids)
+}
+
+/// 同一廠商已登錄（`posted`）號碼 `invoice_no` 的進項憑證（`exclude` 除外）：`(id, record_no)`。
+pub async fn find_purchase_invoice_by_no<'e>(
+    executor: impl PgExecutor<'e>,
+    supplier_id: Uuid,
+    invoice_no: &str,
+    exclude: Uuid,
+) -> Result<Option<(Uuid, String)>, DbError> {
+    let row = sqlx::query!(
+        r#"
+        SELECT id, record_no
+        FROM purchase_invoices
+        WHERE supplier_id = $1 AND invoice_no = $2 AND status = 'posted' AND id <> $3
+        ORDER BY id
+        LIMIT 1
+        "#,
+        supplier_id,
+        invoice_no,
+        exclude,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row.map(|r| (r.id, r.record_no)))
+}
+
+/// 指向進項憑證的有效（`posted`）進貨折讓：`(id, record_no)`，依 id 排序。
+pub async fn posted_allowances_of_purchase_invoice<'e>(
+    executor: impl PgExecutor<'e>,
+    invoice_id: Uuid,
+) -> Result<Vec<(Uuid, String)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id, record_no
+        FROM purchase_allowances
+        WHERE purchase_invoice_id = $1 AND status = 'posted' AND deleted_at IS NULL
+        ORDER BY id
+        "#,
+        invoice_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.record_no)).collect())
+}
+
+/// 同 [`find_purchase_invoice_for_allowance`]，但以 `FOR UPDATE` 鎖定（開立進貨折讓時）。
+pub async fn lock_purchase_invoice_for_allowance<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<InvoiceForAllowance>, DbError> {
+    let row = sqlx::query_as!(
+        InvoiceForAllowance,
+        r#"
+        SELECT id, status, supplier_id AS party_id, tax_type, doc_type, invoice_date, total
+        FROM purchase_invoices
+        WHERE id = $1 AND deleted_at IS NULL
+        FOR UPDATE
+        "#,
+        id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
+/// 未刪除的進貨退回；`lock` 為 `true` 時以 `FOR UPDATE` 鎖定，否則 `FOR SHARE`。
+pub async fn find_purchase_return_for_allowance<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    lock: bool,
+) -> Result<Option<ReturnForAllowance>, DbError> {
+    let row = if lock {
+        sqlx::query_as!(
+            ReturnForAllowance,
+            r#"
+            SELECT id, record_no, status, supplier_id AS party_id
+            FROM purchase_returns
+            WHERE id = $1 AND deleted_at IS NULL
+            FOR UPDATE
+            "#,
+            id,
+        )
+        .fetch_optional(executor)
+        .await?
+    } else {
+        sqlx::query_as!(
+            ReturnForAllowance,
+            r#"
+            SELECT id, record_no, status, supplier_id AS party_id
+            FROM purchase_returns
+            WHERE id = $1 AND deleted_at IS NULL
+            FOR SHARE
+            "#,
+            id,
+        )
+        .fetch_optional(executor)
+        .await?
+    };
+    Ok(row)
+}
+
+/// 關聯進貨退回的有效（`posted`）進貨折讓：`(id, record_no)`，依 id 排序；`exclude` 除外。
+pub async fn posted_allowances_of_purchase_return<'e>(
+    executor: impl PgExecutor<'e>,
+    return_id: Uuid,
+    exclude: Option<Uuid>,
+) -> Result<Vec<(Uuid, String)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id, record_no
+        FROM purchase_allowances
+        WHERE purchase_return_id = $1 AND status = 'posted' AND deleted_at IS NULL
+          AND id IS DISTINCT FROM $2
+        ORDER BY id
+        "#,
+        return_id,
+        exclude,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.record_no)).collect())
+}
+
+/// 進項憑證的有效（`posted`）進貨折讓 `total` 合計（`exclude` 除外）。
+pub async fn posted_allowance_total_of_purchase_invoice<'e>(
+    executor: impl PgExecutor<'e>,
+    invoice_id: Uuid,
+    exclude: Option<Uuid>,
+) -> Result<Decimal, DbError> {
+    let total = sqlx::query_scalar!(
+        r#"
+        SELECT COALESCE(sum(total), 0) AS "total!"
+        FROM purchase_allowances
+        WHERE purchase_invoice_id = $1 AND status = 'posted' AND deleted_at IS NULL
+          AND id IS DISTINCT FROM $2
+        "#,
+        invoice_id,
+        exclude,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(total)
 }
