@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, record_no, status, supplier_id AS party_id\n            FROM goods_receipts\n            WHERE id = ANY($1) AND deleted_at IS NULL\n            ORDER BY id\n            FOR SHARE\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "record_no",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "record_no"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "party_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "goods_receipts",
+            "name": "supplier_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "57ffc55fa156ff4193dc5dc3cd21aab343f60963413886306a7bdfd5a87123e3"
+}

@@ -296,6 +296,16 @@ async fn purchase_invoice_and_allowance_drafts(pool: PgPool) {
         }),
     )
     .await;
+    // 憑證只能關聯已過帳的進貨單（#186）；以 SQL 模擬過帳
+    sqlx::query(
+        "UPDATE goods_receipts SET status = 'posted', posted_at = now(), posted_by = $2,
+             exchange_rate = 1 WHERE id = $1",
+    )
+    .bind(receipt.id)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let invoice = create(
         &pool,

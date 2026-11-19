@@ -1,5 +1,7 @@
-//! 折讓（銷貨折讓、進貨折讓，docs/architecture.md §8.11「銷貨折讓」「進貨折讓」）的檢查，與銷貨折讓的
-//! 開立、作廢（[`SalesAllowanceHandler`]）。
+//! 折讓（銷貨折讓、進貨折讓，docs/architecture.md §8.11「銷貨折讓」「進貨折讓」）的檢查與開立、作廢
+//! （[`SalesAllowanceHandler`]、[`PurchaseAllowanceHandler`]）。
+//!
+//! 進貨折讓與銷貨折讓相同，差別：原憑證不可是海關繳納證；沒有明細，未稅金額必須大於 0。
 //!
 //! # 檢查（存檔與開立都執行）
 //!
@@ -24,7 +26,7 @@ use serde_json::{Map, Value};
 use time::Date;
 
 use super::amounts::display_grouped;
-use super::save::{date_of, decimal_of, field_error, id_of};
+use super::save::{CUSTOMS, MSG_SUBTOTAL_POSITIVE, date_of, decimal_of, field_error, id_of};
 use super::voiding;
 use super::{PURCHASE_ALLOWANCE, SALES_ALLOWANCE, SALES_ALLOWANCE_LINE};
 use crate::CoreError;
@@ -37,6 +39,8 @@ use crate::stock_adjustments::MSG_NO_LINES;
 
 /// 折讓日期欄位。
 pub const ALLOWANCE_DATE: &str = "allowance_date";
+/// 進貨折讓指向海關繳納證。
+pub const MSG_CUSTOMS_ALLOWANCE: &str = "海關繳納證不可折讓";
 /// 作廢日期早於折讓日期。
 pub const MSG_VOID_BEFORE_ALLOWANCE: &str = "作廢日期不可早於折讓日期";
 
@@ -110,6 +114,9 @@ pub(crate) fn invoice_errors(
         "void" => errors.push(field_error(source.invoice_field, source.void_message)),
         _ => errors.push(field_error(source.invoice_field, source.draft_message)),
     }
+    if source.entity_key == PURCHASE_ALLOWANCE && invoice.doc_type == CUSTOMS {
+        errors.push(field_error(source.invoice_field, MSG_CUSTOMS_ALLOWANCE));
+    }
     if allowance_date.is_some_and(|d| d < invoice.invoice_date) {
         errors.push(field_error(ALLOWANCE_DATE, source.date_message));
     }
@@ -181,8 +188,10 @@ pub(crate) async fn check_return(
         let taken = db::posted_allowances_of_sales_return(&mut *conn, return_id, exclude).await?;
         (ret, taken)
     } else {
-        // 進貨折讓在 #186 加入
-        return Ok(None);
+        let ret = db::find_purchase_return_for_allowance(&mut *conn, return_id, lock).await?;
+        let taken =
+            db::posted_allowances_of_purchase_return(&mut *conn, return_id, exclude).await?;
+        (ret, taken)
     };
     let taken: Vec<String> = taken.into_iter().map(|(_, no)| no).collect();
     Ok(ret.and_then(|ret| return_error(source, &ret, party_id, &taken)))
@@ -197,28 +206,44 @@ pub(crate) async fn check_cap_on_save(
     let Some(source) = source_of(entity_key) else {
         return Ok(());
     };
-    if source.entity_key != SALES_ALLOWANCE {
-        return Ok(());
-    }
     let (Some(invoice_id), Some(total)) = (
         id_of(data.get(source.invoice_field)),
         decimal_of(data.get("total")),
     ) else {
         return Ok(());
     };
-    let Some(invoice) = db::find_sales_invoice_for_allowance(&mut *conn, invoice_id).await? else {
+    let invoice = if source.entity_key == SALES_ALLOWANCE {
+        db::find_sales_invoice_for_allowance(&mut *conn, invoice_id).await?
+    } else {
+        db::find_purchase_invoice_for_allowance(&mut *conn, invoice_id).await?
+    };
+    let Some(invoice) = invoice else {
         return Ok(());
     };
     if invoice.status != "posted" {
         return Ok(());
     }
     // 存檔的折讓一定是草稿，不在「已開立」中，不需要排除自己
-    let used = db::posted_allowance_total_of_sales_invoice(&mut *conn, invoice_id, None).await?;
+    let used = used_amount(conn, source, invoice_id, None).await?;
     let places = sales_places(&mut *conn).await?;
     match cap_error(source, total, invoice.total, used, places) {
         Some(error) => Err(CoreError::InvalidFields(vec![error])),
         None => Ok(()),
     }
+}
+
+/// 原發票（憑證）已開立折讓的 `total` 合計（`exclude` 除外）。
+async fn used_amount(
+    conn: &mut PgConnection,
+    source: &AllowanceSource,
+    invoice_id: Id,
+    exclude: Option<Id>,
+) -> Result<Decimal, CoreError> {
+    Ok(if source.entity_key == SALES_ALLOWANCE {
+        db::posted_allowance_total_of_sales_invoice(&mut *conn, invoice_id, exclude).await?
+    } else {
+        db::posted_allowance_total_of_purchase_invoice(&mut *conn, invoice_id, exclude).await?
+    })
 }
 
 /// 銷貨折讓的開立、作廢處理函式（[`crate::documents::DocumentHandlers::standard`] 註冊）。
@@ -231,7 +256,7 @@ impl DocumentHandler for SalesAllowanceHandler {
         conn: &'a mut PgConnection,
         doc: &'a DocumentContext<'a>,
     ) -> HandlerFuture<'a> {
-        Box::pin(post(conn, doc))
+        Box::pin(post(conn, doc, &SALES))
     }
 
     fn void<'a>(
@@ -239,7 +264,7 @@ impl DocumentHandler for SalesAllowanceHandler {
         conn: &'a mut PgConnection,
         doc: &'a DocumentContext<'a>,
     ) -> HandlerFuture<'a> {
-        Box::pin(void(conn, doc))
+        Box::pin(void(conn, doc, InvoiceTable::SalesAllowances))
     }
 
     fn accepts_void_details(&self) -> bool {
@@ -247,14 +272,51 @@ impl DocumentHandler for SalesAllowanceHandler {
     }
 }
 
-async fn post(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), CoreError> {
-    let source = &SALES;
+/// 進貨折讓的開立、作廢處理函式（[`crate::documents::DocumentHandlers::standard`] 註冊）。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PurchaseAllowanceHandler;
+
+impl DocumentHandler for PurchaseAllowanceHandler {
+    fn post<'a>(
+        &'a self,
+        conn: &'a mut PgConnection,
+        doc: &'a DocumentContext<'a>,
+    ) -> HandlerFuture<'a> {
+        Box::pin(post(conn, doc, &PURCHASE))
+    }
+
+    fn void<'a>(
+        &'a self,
+        conn: &'a mut PgConnection,
+        doc: &'a DocumentContext<'a>,
+    ) -> HandlerFuture<'a> {
+        Box::pin(void(conn, doc, InvoiceTable::PurchaseAllowances))
+    }
+
+    fn accepts_void_details(&self) -> bool {
+        true
+    }
+}
+
+async fn post(
+    conn: &mut PgConnection,
+    doc: &DocumentContext<'_>,
+    source: &AllowanceSource,
+) -> Result<(), CoreError> {
+    let sales = source.entity_key == SALES_ALLOWANCE;
     let mut fields = Vec::new();
     let invoice_id = id_of(doc.data.get(source.invoice_field))
         .ok_or_else(|| CoreError::Internal("折讓沒有原發票".into()))?;
-    let invoice = db::lock_sales_invoice_for_allowance(&mut *conn, invoice_id).await?;
+    let invoice = if sales {
+        db::lock_sales_invoice_for_allowance(&mut *conn, invoice_id).await?
+    } else {
+        db::lock_purchase_invoice_for_allowance(&mut *conn, invoice_id).await?
+    };
     let Some(invoice) = invoice else {
-        fields.push(field_error(source.invoice_field, "發票已刪除"));
+        fields.push(field_error(
+            source.invoice_field,
+            format!("{}已刪除", source.invoice_word),
+        ));
         return voiding::validation(fields, Vec::new());
     };
     fields.extend(invoice_errors(
@@ -275,41 +337,37 @@ async fn post(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), 
     );
 
     let mut lines = Vec::new();
-    let rows = db::list_sales_allowance_lines(&mut *conn, doc.record_id).await?;
-    if rows.is_empty() {
-        lines.push(LineError::detail(SALES_ALLOWANCE_LINE, MSG_NO_LINES));
-    }
-    for (index, row) in rows.iter().enumerate() {
-        lines.extend(LineError::from_fields(
-            SALES_ALLOWANCE_LINE,
-            index,
-            qty_price_errors(Some(row.qty), Some(row.unit_price)),
-        ));
+    if sales {
+        let rows = db::list_sales_allowance_lines(&mut *conn, doc.record_id).await?;
+        if rows.is_empty() {
+            lines.push(LineError::detail(SALES_ALLOWANCE_LINE, MSG_NO_LINES));
+        }
+        for (index, row) in rows.iter().enumerate() {
+            lines.extend(LineError::from_fields(
+                SALES_ALLOWANCE_LINE,
+                index,
+                qty_price_errors(Some(row.qty), Some(row.unit_price)),
+            ));
+        }
+    } else if decimal_of(doc.data.get("subtotal")).is_none_or(|v| v <= Decimal::ZERO) {
+        fields.push(field_error("subtotal", MSG_SUBTOTAL_POSITIVE));
     }
 
     if invoice.status == "posted" {
         let total = decimal_of(doc.data.get("total")).unwrap_or(Decimal::ZERO);
-        let used = db::posted_allowance_total_of_sales_invoice(
-            &mut *conn,
-            invoice_id,
-            Some(doc.record_id),
-        )
-        .await?;
+        let used = used_amount(conn, source, invoice_id, Some(doc.record_id)).await?;
         let places = sales_places(&mut *conn).await?;
         fields.extend(cap_error(source, total, invoice.total, used, places));
     }
     voiding::validation(fields, lines)
 }
 
-async fn void(conn: &mut PgConnection, doc: &DocumentContext<'_>) -> Result<(), CoreError> {
-    voiding::write_void_details(
-        conn,
-        doc,
-        InvoiceTable::SalesAllowances,
-        ALLOWANCE_DATE,
-        MSG_VOID_BEFORE_ALLOWANCE,
-    )
-    .await
+async fn void(
+    conn: &mut PgConnection,
+    doc: &DocumentContext<'_>,
+    table: InvoiceTable,
+) -> Result<(), CoreError> {
+    voiding::write_void_details(conn, doc, table, ALLOWANCE_DATE, MSG_VOID_BEFORE_ALLOWANCE).await
 }
 
 #[cfg(test)]

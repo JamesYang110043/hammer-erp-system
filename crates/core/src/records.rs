@@ -2161,7 +2161,10 @@ async fn invoice_link_rules(
 ) -> Result<Vec<LineError>, CoreError> {
     let rows: Vec<(usize, &Map<String, Value>)> = lines
         .iter()
-        .filter(|d| d.detail.entity.key == invoicing::SALES_INVOICE_SHIPMENT)
+        .filter(|d| {
+            d.detail.entity.key == invoicing::SALES_INVOICE_SHIPMENT
+                || d.detail.entity.key == invoicing::PURCHASE_INVOICE_RECEIPT
+        })
         .flat_map(|d| d.lines.iter())
         .filter_map(|l| Some((l.index, l.data.as_object()?)))
         .collect();
@@ -2177,6 +2180,9 @@ async fn apply_amounts(
     data: &mut Map<String, Value>,
     lines: &mut [DetailWrite<'_>],
 ) -> Result<(), CoreError> {
+    if invoicing::save::has_entered_amounts(entity_key) {
+        return invoicing::save::apply_entered_amounts(tx, entity_key, data).await;
+    }
     if let Some(line_key) = invoicing::save::amount_lines(entity_key) {
         let rows: Vec<&mut Map<String, Value>> = lines
             .iter_mut()

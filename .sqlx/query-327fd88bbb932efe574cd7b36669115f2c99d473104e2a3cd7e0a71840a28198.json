@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, record_no, status, customer_id\n        FROM shipments\n        WHERE id = ANY($1) AND deleted_at IS NULL\n        ORDER BY id\n        FOR UPDATE\n        ",
+  "query": "\n        SELECT id, record_no, status, customer_id AS party_id\n        FROM shipments\n        WHERE id = ANY($1) AND deleted_at IS NULL\n        ORDER BY id\n        FOR UPDATE\n        ",
   "describe": {
     "columns": [
       {
@@ -38,7 +38,7 @@
       },
       {
         "ordinal": 3,
-        "name": "customer_id",
+        "name": "party_id",
         "type_info": "Uuid",
         "origin": {
           "Table": {
@@ -60,5 +60,5 @@
       false
     ]
   },
-  "hash": "fc531939e9b3a8202cb7cfcc67209b89e3fa450fba3832e11d8b67f98e8868cd"
+  "hash": "327fd88bbb932efe574cd7b36669115f2c99d473104e2a3cd7e0a71840a28198"
 }

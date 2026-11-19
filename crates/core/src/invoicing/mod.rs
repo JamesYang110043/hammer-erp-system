@@ -6,17 +6,21 @@
 //! - [`amounts`]：手動修正稅額、輸入的稅額檢查（明細金額與合計共用 [`crate::sales::amounts`]）
 //! - [`save`]：存檔時的買受人帶入、號碼與統一編號、期別、折讓從原發票帶入、明細檢查、關聯出貨單、金額
 //! - [`sales_invoices`]：銷項發票的開立與作廢（[`SalesInvoiceHandler`]）
-//! - [`allowances`]：折讓的原發票、退回單、累計上限檢查；銷貨折讓的開立與作廢（[`SalesAllowanceHandler`]）
+//! - [`purchase_invoices`]：進項憑證的登錄與作廢（[`PurchaseInvoiceHandler`]）
+//! - [`allowances`]：折讓的原發票、退回單、累計上限檢查；開立與作廢（[`SalesAllowanceHandler`]、
+//!   [`PurchaseAllowanceHandler`]）
 //! - [`voiding`]：作廢日期與原因（四種單據共用）
 
 pub mod allowances;
 pub mod amounts;
 pub mod number;
+pub mod purchase_invoices;
 pub mod sales_invoices;
 pub mod save;
 pub mod voiding;
 
-pub use allowances::SalesAllowanceHandler;
+pub use allowances::{PurchaseAllowanceHandler, SalesAllowanceHandler};
+pub use purchase_invoices::PurchaseInvoiceHandler;
 pub use sales_invoices::SalesInvoiceHandler;
 
 /// 銷項發票的資料類別代碼。
