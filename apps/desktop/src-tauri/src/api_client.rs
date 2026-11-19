@@ -23,7 +23,8 @@ use hammer_shared::exchange_rate::{
 };
 use hammer_shared::health::HealthResponse;
 use hammer_shared::inventory::{
-    InventoryLot, InventoryTransaction, LotQuery, StockBalance, StockBalanceQuery, TransactionQuery,
+    AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
+    StockBalance, StockBalanceQuery, TransactionQuery,
 };
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
@@ -343,6 +344,21 @@ impl ApiClient {
             .get(endpoint(server_url, "/inventory/transactions"))
             .bearer_auth(token)
             .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/inventory/allocation-preview`（出貨的建議批號，只試算）。
+    pub async fn allocation_preview(
+        &self,
+        server_url: &str,
+        token: &str,
+        req: &AllocationPreviewRequest,
+    ) -> Result<AllocationPreview, ClientError> {
+        let builder = self
+            .http
+            .post(endpoint(server_url, "/inventory/allocation-preview"))
+            .bearer_auth(token)
+            .json(req);
         authed(read_json(send(builder).await?).await)
     }
 
@@ -2152,6 +2168,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(txns.total, 0);
+    }
+
+    #[tokio::test]
+    async fn allocation_preview_endpoint() {
+        use hammer_shared::inventory::AllocationPreviewLineInput;
+
+        let url = serve(Router::new().route(
+            "/inventory/allocation-preview",
+            post(
+                |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                    assert_eq!(
+                        body,
+                        json!({ "lines": [{
+                        "product_id": "0196f5a0-0000-7000-8000-000000000601",
+                        "qty": "12", "lot_no": null,
+                    }] })
+                    );
+                    axum::Json(json!({ "lines": [{
+                    "index": 0, "product_id": "0196f5a0-0000-7000-8000-000000000601",
+                    "product_type": "goods", "qty": "12.0000",
+                    "allocations": [{
+                        "lot_id": "0196f5a0-0000-7000-8000-000000000701", "lot_no": "L-01",
+                        "received_date": "2026-10-02", "qty": "5.0000", "unit_cost_twd": "80.0000",
+                    }],
+                    "shortage": "7.0000",
+                }] }))
+                },
+            ),
+        ))
+        .await;
+        let client = ApiClient::new().unwrap();
+        let preview = client
+            .allocation_preview(
+                &url,
+                "tok",
+                &AllocationPreviewRequest {
+                    lines: vec![AllocationPreviewLineInput {
+                        product_id: Some("0196f5a0-0000-7000-8000-000000000601".into()),
+                        qty: Some("12".into()),
+                        lot_no: None,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview.lines[0].allocations[0].lot_no, "L-01");
+        assert_eq!(preview.lines[0].shortage.to_string(), "7.0000");
     }
 
     #[tokio::test]

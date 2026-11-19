@@ -87,10 +87,17 @@ const TODAY_DEFAULT_FIELDS: Record<string, string> = {
   purchase_order: 'order_date',
   goods_receipt: 'receipt_date',
   purchase_return: 'return_date',
+  sales_order: 'order_date',
+  shipment: 'ship_date',
+  sales_return: 'return_date',
 };
 
+/** 新增時稅別預設應稅的銷貨單據（§8.9「金額與稅額」；出貨單選擇訂單後帶入訂單的稅別）。 */
+const TAXABLE_DEFAULT: readonly string[] = ['sales_order', 'shipment'];
+
 /**
- * 新增資料時表單的預設值：系統單據的單據日期預設今天（台北時間；欄位定義沒有設定預設值時）。
+ * 新增資料時表單的預設值：系統單據的單據日期預設今天（台北時間）；訂單、出貨單的稅別預設應稅
+ * （都只在欄位定義沒有設定預設值時）。
  * 其他資料類別原樣回傳。
  */
 export function withFormDefaults(
@@ -102,9 +109,19 @@ export function withFormDefaults(
   if (!dateField) {
     return fields;
   }
-  return fields.map((f) =>
-    f.field_key === dateField && f.default_value === null ? { ...f, default_value: today } : f,
-  );
+  const taxable = TAXABLE_DEFAULT.includes(entityKey);
+  return fields.map((f) => {
+    if (f.default_value !== null) {
+      return f;
+    }
+    if (f.field_key === dateField) {
+      return { ...f, default_value: today };
+    }
+    if (taxable && f.field_key === 'tax_type') {
+      return { ...f, default_value: 'taxable' };
+    }
+    return f;
+  });
 }
 
 /** 異動類型的顯示名稱。 */

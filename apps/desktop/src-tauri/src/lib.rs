@@ -92,6 +92,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::list_stock_balances,
             commands::list_product_lots,
             commands::list_inventory_transactions,
+            commands::allocation_preview,
             commands::list_layouts,
             commands::get_default_layout,
             commands::create_layout,
@@ -173,6 +174,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::inventory::InventoryLot>()
         .typ::<hammer_shared::inventory::TransactionQuery>()
         .typ::<hammer_shared::inventory::InventoryTransaction>()
+        .typ::<hammer_shared::inventory::AllocationPreviewRequest>()
+        .typ::<hammer_shared::inventory::AllocationPreview>()
         // 附件
         .typ::<hammer_shared::attachment::Attachment>()
         .typ::<crate::state::UploadProgress>()

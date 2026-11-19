@@ -178,6 +178,11 @@ export const commands = {
 	listProductLots: (productId: string, query: LotQuery_Deserialize) => typedError<Page<InventoryLot_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_product_lots", { productId, query })),
 	/**  庫存異動流水帳（需要 `record.read`），新到舊。 */
 	listInventoryTransactions: (query: TransactionQuery_Deserialize) => typedError<Page<InventoryTransaction_Serialize>, ClientError_Serialize>(__TAURI_INVOKE("list_inventory_transactions", { query })),
+	/**
+	 *  出貨的建議批號（需要 `record.read`，docs/architecture.md §8.9「建議批號 API」）：
+	 *  依過帳的分配順序試算，不鎖定、不寫入；庫存不足不是錯誤，回傳 `shortage`。
+	 */
+	allocationPreview: (req: AllocationPreviewRequest_Deserialize) => typedError<AllocationPreview_Serialize, ClientError_Serialize>(__TAURI_INVOKE("allocation_preview", { req })),
 	/**  列表版面：全域版面與自己的個人版面（需要 `record.read`）。 */
 	listLayouts: (key: string) => typedError<ViewLayout_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("list_layouts", { key })),
 	/**  要套用的預設版面：自己的預設 → 全域預設 → 依欄位定義產生。 */
@@ -220,6 +225,86 @@ export const MIN_PASSWORD_CHARS = 10 as const;
 export const PERMISSIONS = {"AUDIT_READ":"audit.read","DATA_EXPORT":"data.export","RECORD_POST":"record.post","RECORD_READ":"record.read","RECORD_WRITE":"record.write","SCHEMA_MANAGE":"schema.manage","SETTINGS_MANAGE":"settings.manage","USER_MANAGE":"user.manage"} as const;
 
 /* Types */
+/**  建議批號的結果，`lines` 與 request 的順序相同。 */
+export type AllocationPreview = AllocationPreview_Serialize | AllocationPreview_Deserialize;
+
+/**  一列的建議結果。 */
+export type AllocationPreviewLine = AllocationPreviewLine_Serialize | AllocationPreviewLine_Deserialize;
+
+/**  建議批號的一列輸入。值以字串接收，由伺服器解析（格式錯誤時回傳該列的欄位錯誤）。 */
+export type AllocationPreviewLineInput = AllocationPreviewLineInput_Serialize | AllocationPreviewLineInput_Deserialize;
+
+/**  建議批號的一列輸入。值以字串接收，由伺服器解析（格式錯誤時回傳該列的欄位錯誤）。 */
+export type AllocationPreviewLineInput_Deserialize = {
+	/**  商品 id。 */
+	product_id?: string | null,
+	/**  數量：大於 0、最多 4 位小數。 */
+	qty?: string | null,
+	/**  手動指定的批號（去除前後空白；省略或空字串為先進先出）。 */
+	lot_no?: string | null,
+};
+
+/**  建議批號的一列輸入。值以字串接收，由伺服器解析（格式錯誤時回傳該列的欄位錯誤）。 */
+export type AllocationPreviewLineInput_Serialize = {
+	/**  商品 id。 */
+	product_id: string | null,
+	/**  數量：大於 0、最多 4 位小數。 */
+	qty: string | null,
+	/**  手動指定的批號（去除前後空白；省略或空字串為先進先出）。 */
+	lot_no: string | null,
+};
+
+/**  一列的建議結果。 */
+export type AllocationPreviewLine_Deserialize = {
+	/**  request 中的位置（從 0 開始）。 */
+	index: number,
+	product_id: string,
+	/**  `goods` / `service`。 */
+	product_type: string,
+	qty: string,
+	/**  依扣除順序；`service` 為空陣列。 */
+	allocations: PreviewAllocation_Deserialize[],
+	/**  不足的數量（足夠時為 `"0.0000"`）。 */
+	shortage: string,
+};
+
+/**  一列的建議結果。 */
+export type AllocationPreviewLine_Serialize = {
+	/**  request 中的位置（從 0 開始）。 */
+	index: number,
+	product_id: string,
+	/**  `goods` / `service`。 */
+	product_type: string,
+	qty: string,
+	/**  依扣除順序；`service` 為空陣列。 */
+	allocations: PreviewAllocation_Serialize[],
+	/**  不足的數量（足夠時為 `"0.0000"`）。 */
+	shortage: string,
+};
+
+/**  `POST /api/v1/inventory/allocation-preview` 的 request。 */
+export type AllocationPreviewRequest = AllocationPreviewRequest_Serialize | AllocationPreviewRequest_Deserialize;
+
+/**  `POST /api/v1/inventory/allocation-preview` 的 request。 */
+export type AllocationPreviewRequest_Deserialize = {
+	lines?: AllocationPreviewLineInput_Deserialize[],
+};
+
+/**  `POST /api/v1/inventory/allocation-preview` 的 request。 */
+export type AllocationPreviewRequest_Serialize = {
+	lines: AllocationPreviewLineInput_Serialize[],
+};
+
+/**  建議批號的結果，`lines` 與 request 的順序相同。 */
+export type AllocationPreview_Deserialize = {
+	lines: AllocationPreviewLine_Deserialize[],
+};
+
+/**  建議批號的結果，`lines` 與 request 的順序相同。 */
+export type AllocationPreview_Serialize = {
+	lines: AllocationPreviewLine_Serialize[],
+};
+
 /**  API 錯誤回應的內容。 */
 export type ApiError = ApiError_Serialize | ApiError_Deserialize;
 
@@ -1907,6 +1992,27 @@ export type Page<T> = {
 	page: number,
 	/**  實際使用的每頁筆數（已套用預設值與上限）。 */
 	page_size: number,
+};
+
+/**  從一個批號扣除的建議。 */
+export type PreviewAllocation = PreviewAllocation_Serialize | PreviewAllocation_Deserialize;
+
+/**  從一個批號扣除的建議。 */
+export type PreviewAllocation_Deserialize = {
+	lot_id: string,
+	lot_no: string,
+	received_date: string,
+	qty: string,
+	unit_cost_twd: string,
+};
+
+/**  從一個批號扣除的建議。 */
+export type PreviewAllocation_Serialize = {
+	lot_id: string,
+	lot_no: string,
+	received_date: string,
+	qty: string,
+	unit_cost_twd: string,
 };
 
 /**  預覽中的一個公式欄位。 */

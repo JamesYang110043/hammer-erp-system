@@ -19,7 +19,8 @@ use hammer_shared::exchange_rate::{
 };
 use hammer_shared::health::HealthResponse;
 use hammer_shared::inventory::{
-    InventoryLot, InventoryTransaction, LotQuery, StockBalance, StockBalanceQuery, TransactionQuery,
+    AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
+    StockBalance, StockBalanceQuery, TransactionQuery,
 };
 use hammer_shared::layout::{
     CreateViewLayoutRequest, DefaultViewLayout, DeleteViewLayoutQuery, UpdateViewLayoutRequest,
@@ -663,6 +664,17 @@ pub async fn list_inventory_transactions(
     query: TransactionQuery,
 ) -> Result<Page<InventoryTransaction>, ClientError> {
     state.list_inventory_transactions(&query).await
+}
+
+/// 出貨的建議批號（需要 `record.read`，docs/architecture.md §8.9「建議批號 API」）：
+/// 依過帳的分配順序試算，不鎖定、不寫入；庫存不足不是錯誤，回傳 `shortage`。
+#[tauri::command]
+#[specta::specta]
+pub async fn allocation_preview(
+    state: State<'_, AppState>,
+    req: AllocationPreviewRequest,
+) -> Result<AllocationPreview, ClientError> {
+    state.allocation_preview(&req).await
 }
 
 /// 列表版面：全域版面與自己的個人版面（需要 `record.read`）。

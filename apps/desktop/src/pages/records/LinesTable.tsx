@@ -18,6 +18,8 @@ import {
 } from '../../records/purchasing';
 import { FormulaValue } from './FieldValue';
 import { ReceiptLotNoInput, ReturnableQty } from './PurchasingInputs';
+import { SHIPMENT_LINE } from '../../records/sales';
+import { ShipmentLotCell } from './SalesInputs';
 import { RecordFieldInput } from './RecordFieldInput';
 import { CurrentQty, LotNoInput, UnitCostInput } from './StockAdjustmentLineInputs';
 
@@ -74,6 +76,8 @@ export function LinesTable({
   const isGoodsReceipt = entity.key === GOODS_RECEIPT_LINE;
   // 進貨退回明細：批號（唯讀）連到庫存查詢；草稿顯示可退數量
   const isPurchaseReturn = entity.key === PURCHASE_RETURN_LINE;
+  // 出貨明細：批號留空為先進先出；草稿顯示建議批號、可以指定批號
+  const isShipment = entity.key === SHIPMENT_LINE;
 
   return (
     <Form.List name={listName}>
@@ -136,12 +140,13 @@ export function LinesTable({
                           },
                         ]}
                       >
-                        {(isGoodsReceipt || isPurchaseReturn) &&
+                        {(isGoodsReceipt || isPurchaseReturn || isShipment) &&
                         field.field_key === PURCHASING_FIELDS.lotNo ? (
                           <ReceiptLotNoInput
                             row={rowPath}
                             label={field.label}
                             disabled={disabled || !canWrite}
+                            placeholder={isShipment ? '留空則先進先出' : undefined}
                           />
                         ) : isStockAdjustment && field.field_key === LINE_FIELDS.lotNo ? (
                           <LotNoInput
@@ -198,6 +203,16 @@ export function LinesTable({
             title: '可退數量',
             align: 'right',
             render: (_, row) => <ReturnableQty row={[...listName, row.name]} />,
+          });
+        }
+        if (isShipment && canWrite) {
+          const lotIndex = columns.findIndex((c) => c.key === PURCHASING_FIELDS.lotNo);
+          columns.splice(lotIndex < 0 ? columns.length : lotIndex + 1, 0, {
+            key: '__allocation',
+            title: '建議批號',
+            render: (_, row) => (
+              <ShipmentLotCell listName={listName} row={row.name} onRowsChange={onRowsChange} />
+            ),
           });
         }
         if (canWrite) {
