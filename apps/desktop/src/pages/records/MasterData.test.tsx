@@ -14,6 +14,7 @@ import type {
 import { ADMIN, startupCommands } from '../../test/fixtures';
 import { commandError, mockCommands } from '../../test/ipc';
 import type { CommandHandler } from '../../test/ipc';
+import { navSectionItems, openNavSection } from '../../test/nav';
 import { renderWithProviders } from '../../test/render';
 import { REPAIR, fieldDef } from '../../test/schemaFixtures';
 
@@ -224,20 +225,24 @@ describe('基本資料選單', () => {
   it('sidebar_lists_system_masters_under_master_data', async () => {
     const invoke = renderAt('#/connection');
     const user = userEvent.setup();
-    const menu = await screen.findByRole('menu', undefined, { timeout: PAGE_LOAD_TIMEOUT });
-    await within(menu).findByRole('menuitem', { name: /商品分類/ });
+    const menu = await screen.findByRole(
+      'navigation',
+      { name: '主選單' },
+      { timeout: PAGE_LOAD_TIMEOUT },
+    );
+    // 「基本資料」是選單的第一個區塊
+    await within(menu).findByRole('menuitem', { name: '基本資料' });
+    expect(within(menu).getAllByRole('menuitem')[0]).toHaveTextContent('基本資料');
+    await openNavSection(user, '基本資料');
 
-    expect(
-      within(menu).getByText('基本資料', { selector: '.ant-menu-item-group-title' }),
-    ).toBeInTheDocument();
-    const items = within(menu)
-      .getAllByRole('menuitem')
-      .map((el) => el.textContent);
-    // 依選單排序，放在最上方；明細子表（聯絡人）不列出
+    const items = navSectionItems('基本資料');
+    // 依選單排序；明細子表（聯絡人）不列出
     expect(items.slice(0, 5)).toEqual(['商品', '商品分類', '單位', '客戶', '廠商']);
     expect(items).not.toContain('客戶聯絡人');
     // 自訂資料類別仍在原本的分組
-    expect(items).toContain('維修單');
+    expect(items).not.toContain('維修單');
+    await openNavSection(user, '主檔');
+    expect(navSectionItems('主檔')).toContain('維修單');
 
     await user.click(within(menu).getByRole('menuitem', { name: /商品$/ }));
     expect(window.location.hash).toBe('#/entities/product');

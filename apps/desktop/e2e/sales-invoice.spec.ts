@@ -11,6 +11,7 @@ import {
 } from '../src/test/invoicingFixtures';
 import { CURRENCIES, TAX_RATES, purchasingRecord } from '../src/test/purchasingFixtures';
 import { CUSTOMER_ID, CUSTOMER_TITLE, SHIPMENT_ID } from '../src/test/salesFixtures';
+import { openNavSection } from './nav';
 import { CommandRejection, mockTauri } from './tauri-mock';
 import type { E2eCommandHandler } from './tauri-mock';
 
@@ -266,6 +267,7 @@ test('sales invoice from shipments: buyer, lines, manual tax, issue, allowance',
 
   // 左側選單的「發票」分組
   await p.goto('/');
+  await openNavSection(p, '發票');
   await expect(p.getByRole('menuitem', { name: /銷項發票/ })).toBeVisible();
   await expect(p.getByRole('menuitem', { name: /銷貨折讓/ })).toBeVisible();
   await p.goto('/#/entities/sales_invoice/new');

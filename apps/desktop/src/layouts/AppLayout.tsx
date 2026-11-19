@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons';
 import { App, Button, Dropdown, Layout, Menu, Modal, Space, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 
 import { errorMessage } from '../api/client';
@@ -34,6 +34,8 @@ import { INVOICING_GROUP_LABEL, invoicingEntities } from '../records/invoicing';
 import { PURCHASING_GROUP_LABEL, purchasingEntities } from '../records/purchasing';
 import { SALES_GROUP_LABEL, salesEntities } from '../records/sales';
 import { MASTER_DATA_LABEL } from '../schema/entities';
+import { loadOpenKeys, saveOpenKeys, sectionOf, withSectionOpen } from './navSections';
+import type { NavSection } from './navSections';
 
 const { Header, Sider, Content, Footer } = Layout;
 
@@ -58,102 +60,70 @@ export function AppLayout() {
     icon: entityIcon(e.icon),
     label: e.label,
   });
-  // 自訂資料類別依種類分組（主檔、單據），組內依選單排序
-  const entityItems: MenuItem[] = canReadRecords
-    ? menuEntityGroups(entities.data ?? []).map((g) => ({
-        type: 'group',
-        key: `${ENTITIES_PATH}-${g.kind}`,
-        label: g.label,
-        children: g.entities.map(entityItem),
-      }))
-    : [];
+  // 可收折的區塊（子選單）；沒有任何項目（例如沒有權限）的區塊不顯示
+  const sections: NavSection[] = [];
+  const section = (key: string, label: string, children: MenuItem[]): MenuItem | null => {
+    if (children.length === 0) {
+      return null;
+    }
+    sections.push({ key, itemKeys: children.map((c) => String(c?.key)) });
+    return { key, label, children };
+  };
+  const divider = (key: string): MenuItem => ({ type: 'divider', key });
+  /** 區塊後面接一條分隔線；區塊不顯示時兩者都不顯示。 */
+  const sectionWithDivider = (key: string, label: string, children: MenuItem[]): MenuItem[] => {
+    const item = section(key, label, children);
+    return item ? [item, divider(`${key}-divider`)] : [];
+  };
+
   // 系統主檔（商品、客戶、廠商…）與幣別、匯率放在選單最上方
-  const masterData: MenuItem[] = [
+  const masterDataItems = sectionWithDivider(`${ENTITIES_PATH}-system`, MASTER_DATA_LABEL, [
     ...(canReadRecords ? masterDataEntities(entities.data ?? []) : []).map(entityItem),
     ...MASTER_DATA_MODULES.filter((m) => !m.permission || can(m.permission)).map((m): MenuItem => ({
       key: m.path,
       icon: m.icon,
       label: m.label,
     })),
-  ];
-  const masterDataItems: MenuItem[] =
-    masterData.length > 0
-      ? [
-          {
-            type: 'group',
-            key: `${ENTITIES_PATH}-system`,
-            label: MASTER_DATA_LABEL,
-            children: masterData,
-          },
-          { type: 'divider', key: `${ENTITIES_PATH}-system-divider` },
-        ]
-      : [];
+  ]);
 
   // 進貨：採購單、進貨單（docs/architecture.md §8.8）
-  const purchasing = (canReadRecords ? purchasingEntities(entities.data ?? []) : []).map(
-    entityItem,
+  const purchasingItems = sectionWithDivider(
+    'purchasing-group',
+    PURCHASING_GROUP_LABEL,
+    (canReadRecords ? purchasingEntities(entities.data ?? []) : []).map(entityItem),
   );
-  const purchasingItems: MenuItem[] =
-    purchasing.length > 0
-      ? [
-          {
-            type: 'group',
-            key: 'purchasing-group',
-            label: PURCHASING_GROUP_LABEL,
-            children: purchasing,
-          },
-          { type: 'divider', key: 'purchasing-group-divider' },
-        ]
-      : [];
 
   // 銷貨：訂單、出貨單、銷貨退回（docs/architecture.md §8.9）
-  const sales = (canReadRecords ? salesEntities(entities.data ?? []) : []).map(entityItem);
-  const salesItems: MenuItem[] =
-    sales.length > 0
-      ? [
-          { type: 'group', key: 'sales-group', label: SALES_GROUP_LABEL, children: sales },
-          { type: 'divider', key: 'sales-group-divider' },
-        ]
-      : [];
+  const salesItems = sectionWithDivider(
+    'sales-group',
+    SALES_GROUP_LABEL,
+    (canReadRecords ? salesEntities(entities.data ?? []) : []).map(entityItem),
+  );
 
   // 發票：銷項發票、銷貨折讓、進項憑證、進貨折讓（docs/architecture.md §8.11）
-  const invoicingList = (canReadRecords ? invoicingEntities(entities.data ?? []) : []).map(
-    entityItem,
+  const invoicingItems = sectionWithDivider(
+    'invoicing-group',
+    INVOICING_GROUP_LABEL,
+    (canReadRecords ? invoicingEntities(entities.data ?? []) : []).map(entityItem),
   );
-  const invoicingItems: MenuItem[] =
-    invoicingList.length > 0
-      ? [
-          {
-            type: 'group',
-            key: 'invoicing-group',
-            label: INVOICING_GROUP_LABEL,
-            children: invoicingList,
-          },
-          { type: 'divider', key: 'invoicing-group-divider' },
-        ]
-      : [];
 
   // 庫存：盤點調整單與庫存查詢（docs/architecture.md §8.10）
-  const inventory: MenuItem[] = [
+  const inventoryItems = sectionWithDivider('inventory-group', INVENTORY_GROUP_LABEL, [
     ...(canReadRecords ? inventoryEntities(entities.data ?? []) : []).map(entityItem),
     ...INVENTORY_MODULES.filter((m) => !m.permission || can(m.permission)).map((m): MenuItem => ({
       key: m.path,
       icon: m.icon,
       label: m.label,
     })),
-  ];
-  const inventoryItems: MenuItem[] =
-    inventory.length > 0
-      ? [
-          {
-            type: 'group',
-            key: 'inventory-group',
-            label: INVENTORY_GROUP_LABEL,
-            children: inventory,
-          },
-          { type: 'divider', key: 'inventory-group-divider' },
-        ]
-      : [];
+  ]);
+
+  // 自訂資料類別依種類分組（主檔、單據），組內依選單排序
+  const entityItems: MenuItem[] = canReadRecords
+    ? menuEntityGroups(entities.data ?? []).flatMap((g) => {
+        const item = section(`${ENTITIES_PATH}-${g.kind}`, g.label, g.entities.map(entityItem));
+        return item ? [item] : [];
+      })
+    : [];
 
   // 選單依權限顯示；頁面本身也有檢查（router.tsx 的 RequirePermission）
   const menuItems: MenuItem[] = [
@@ -171,6 +141,21 @@ export function AppLayout() {
   // `/customers/123` → `customers`；`/entities/repair` → `entities/repair`
   const [first = '', second = ''] = location.pathname.split('/').slice(1);
   const selected = first === ENTITIES_PATH ? `${first}/${second}` : first;
+
+  // 區塊展開狀態：沿用上次的狀態，並展開目前頁面所屬的區塊。
+  // 切換頁面、或資料類別載入後才知道目前頁面所屬的區塊時 → 自動展開該區塊
+  // （使用者在同一頁收起區塊則維持收起）
+  const currentSection = sectionOf(sections, selected);
+  const [openKeys, setOpenKeys] = useState<readonly string[]>(() =>
+    withSectionOpen(loadOpenKeys(), currentSection),
+  );
+  const pageSection = `${selected}\n${currentSection ?? ''}`;
+  const [openedFor, setOpenedFor] = useState(pageSection);
+  if (openedFor !== pageSection) {
+    setOpenedFor(pageSection);
+    setOpenKeys(withSectionOpen(openKeys, currentSection));
+  }
+  useEffect(() => saveOpenKeys(openKeys), [openKeys]);
 
   return (
     <Layout style={{ height: '100vh' }}>
@@ -190,6 +175,8 @@ export function AppLayout() {
             <Menu
               mode="inline"
               selectedKeys={[selected]}
+              openKeys={[...openKeys]}
+              onOpenChange={setOpenKeys}
               items={menuItems}
               onClick={({ key }) => navigate(`/${key}`)}
               style={{ borderInlineEnd: 'none' }}

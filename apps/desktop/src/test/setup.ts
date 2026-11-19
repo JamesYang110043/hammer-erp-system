@@ -32,6 +32,8 @@ if (!Element.prototype.scrollIntoView) {
 
 afterEach(() => {
   cleanup();
+  // 左側選單的展開狀態等存在 localStorage，避免影響下一個測試
+  window.localStorage.clear();
   // 清除 mockIPC 設定，避免影響下一個測試
   clearMocks();
 });

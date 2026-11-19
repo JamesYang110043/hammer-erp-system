@@ -43,6 +43,13 @@ test('side menu scrolls independently of the content area', async ({ page }) => 
     current_user: () => ADMIN,
     list_entities: () => [PRODUCT, STOCK_ADJUSTMENT, ...CUSTOM],
   });
+  // 區塊全部展開（上次的展開狀態，見 src/layouts/navSections.ts）
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'hammer.nav.openKeys',
+      JSON.stringify(['entities-system', 'inventory-group', 'entities-master']),
+    );
+  });
   // 矮視窗：選單放不下
   await page.setViewportSize({ width: 1280, height: 420 });
   await page.goto('/');

@@ -12,6 +12,7 @@ import {
   SHIPMENT_ID,
   salesEntityDetail,
 } from '../src/test/salesFixtures';
+import { openNavSection } from './nav';
 import { CommandRejection, mockTauri } from './tauri-mock';
 import type { E2eCommandHandler } from './tauri-mock';
 
@@ -237,6 +238,7 @@ test('sales order: product fills sale price, preview matches server, confirm', a
 
   // 從選單「銷貨」開啟訂單
   await p.goto('/');
+  await openNavSection(p, '銷貨');
   await expect(p.getByText('銷貨', { exact: true })).toBeVisible();
   await expect(p.getByRole('menuitem', { name: /訂單/ })).toBeVisible();
   await expect(p.getByRole('menuitem', { name: /出貨單/ })).toBeVisible();
