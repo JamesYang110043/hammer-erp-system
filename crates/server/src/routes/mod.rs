@@ -20,6 +20,7 @@ pub mod currencies;
 pub mod entities;
 pub mod health;
 pub mod inventory;
+pub mod invoicing;
 pub mod layouts;
 pub mod records;
 pub mod setup;
@@ -125,6 +126,15 @@ fn protected_routes() -> Router<AppState> {
             get(inventory::list_product_lots),
         )
         .route("/inventory/transactions", get(inventory::list_transactions))
+        .route(
+            "/invoicing/uninvoiced-shipments",
+            get(invoicing::list_uninvoiced_shipments),
+        )
+        .route(
+            "/invoicing/uninvoiced-receipts",
+            get(invoicing::list_uninvoiced_receipts),
+        )
+        .route("/invoicing/links", get(invoicing::list_links))
         .route(
             "/inventory/allocation-preview",
             post(inventory::allocation_preview),

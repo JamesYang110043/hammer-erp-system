@@ -9,12 +9,14 @@
 //! - [`purchase_invoices`]：進項憑證的登錄與作廢（[`PurchaseInvoiceHandler`]）
 //! - [`allowances`]：折讓的原發票、退回單、累計上限檢查；開立與作廢（[`SalesAllowanceHandler`]、
 //!   [`PurchaseAllowanceHandler`]）
+//! - [`queries`]：查詢 API（尚未開立發票的出貨單、尚未取得憑證的進貨單、單據的發票）
 //! - [`voiding`]：作廢日期與原因（四種單據共用）
 
 pub mod allowances;
 pub mod amounts;
 pub mod number;
 pub mod purchase_invoices;
+pub mod queries;
 pub mod sales_invoices;
 pub mod save;
 pub mod voiding;

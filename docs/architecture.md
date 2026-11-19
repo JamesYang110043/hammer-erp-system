@@ -2330,7 +2330,7 @@ tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
 - 列出已過帳、未刪除、沒有被該類（`doc_class` 預設 `invoice` = `triplicate`、`electronic`；`customs` = 海關繳納證）有效進項憑證關聯的進貨單；日期為 `receipt_date`。
 - 項目：`{ "id", "record_no", "receipt_date", "supplier_id", "supplier_code", "supplier_name", "currency_code", "exchange_rate", "tax_type", "total", "total_twd", "returned_total", "net_total" }`（退回、淨額為單據幣別）。
 
-**單據的發票** `GET /api/v1/invoicing/links?entity_key=shipment&record_id=…`（`entity_key` 為 `shipment`、`goods_receipt`、`sales_return`、`purchase_return`）：回傳關聯此單據的發票、憑證或折讓（**含已作廢**，不分頁），`[ { "entity_key", "record_id", "record_no", "invoice_no", "invoice_date", "status" } ]`，依 `invoice_date, id` 排序；折讓的 `invoice_no` 為 `null`、`invoice_date` 為折讓日期。出貨單、進貨單等畫面用來顯示「已開立的發票號碼」。單據不存在 → `404`。
+**單據的發票** `GET /api/v1/invoicing/links?entity_key=shipment&record_id=…`（`entity_key` 為 `shipment`、`goods_receipt`、`sales_return`、`purchase_return`）：回傳關聯此單據的發票、憑證或折讓（未刪除，**含草稿與已作廢**，不分頁），`[ { "entity_key", "record_id", "record_no", "invoice_no", "invoice_date", "status" } ]`，依 `invoice_date, id` 排序；折讓的 `invoice_no` 為 `null`、`invoice_date` 為折讓日期。出貨單、進貨單等畫面用來顯示「已開立的發票號碼」。單據不存在 → `404`。
 
 `entity_key`、`doc_class` 不是允許的值 → `422 VALIDATION`（`details.field` 為參數名稱）。
 
