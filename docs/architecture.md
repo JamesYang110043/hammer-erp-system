@@ -457,6 +457,132 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 - 操作紀錄不逐筆寫：整批完成時在最後一批的 transaction 內寫一筆 `audit_logs`（動作 `recalculate`、`entity_key` 為資料類別代碼、`record_id` 為空、`after_data` 為 `{ "processed", "changed", "with_errors" }`）。中途失敗時已完成的批次不還原、也不寫操作紀錄；再執行一次即可（沒有變動的資料不會寫入）。
 - 不做：背景作業與進度回報、只重算部分資料。
 
+### 7.7 表單版面（M8）
+
+管理者可以自訂每個資料類別的表單畫面（桌面程式的 `RecordFormPage`：主檔與單據的新增、編輯、檢視共用）：把欄位分成多個區塊、每個區塊 1–4 欄、調整欄位寬度與順序，並移動系統區塊（明細表、挑選出貨單等）的位置。版面存在 `form_layouts`（§8.5），每個資料類別最多一個、只有全域版面；型別在 `hammer_shared::form_layout`，檢查與正規化在 `hammer_core::form_layout`。
+
+**不做**：個人表單版面、分頁（Tabs）、明細表內部的欄位順序與欄寬（仍依明細子表的欄位定義 `sort_order`、`column_width`）、依條件顯示欄位。
+
+#### config 結構
+
+```json
+{
+  "sections": [
+    {
+      "key": "basic",
+      "title": "基本資料",
+      "columns": 2,
+      "collapsible": false,
+      "collapsed": false,
+      "items": [
+        { "type": "block", "block": "record_no" },
+        { "type": "field", "field": "receipt_date", "span": 1 },
+        { "type": "field", "field": "supplier_id", "span": 1 },
+        { "type": "spacer", "span": 1 },
+        { "type": "field", "field": "currency_code", "span": 1 },
+        { "type": "field", "field": "remark", "span": 2 }
+      ]
+    },
+    {
+      "key": "lines",
+      "title": "明細",
+      "columns": 1,
+      "collapsible": false,
+      "collapsed": false,
+      "items": [
+        { "type": "block", "block": "lines:goods_receipt_line" }
+      ]
+    },
+    {
+      "key": "extra",
+      "title": "其他資訊",
+      "columns": 3,
+      "collapsible": true,
+      "collapsed": true,
+      "items": [
+        { "type": "field", "field": "inspector", "span": 1 },
+        { "type": "field", "field": "inspection_note", "span": 2 }
+      ]
+    }
+  ]
+}
+```
+
+**區塊**（`sections`，依陣列順序由上往下顯示；至少 1 個、最多 20 個）：
+
+| 屬性 | 規則 |
+|---|---|
+| `key` | 版面內不可重複；`^[a-z][a-z0-9_]{0,49}$`。例外：`_other`、`_blocks` 是讀取時自動附加的區塊（見下方），寫入時可以出現，由伺服器改名後儲存 |
+| `title` | 去除前後空白後最長 50 字元，不可有控制字元；可以是空字串（不顯示標題） |
+| `columns` | 1–4 的整數 |
+| `collapsible` | 是否可以收折；為 `true` 時 `title` 不可為空 |
+| `collapsed` | 開啟表單時是否預設收折；只有 `collapsible = true` 時可以為 `true` |
+| `items` | 項目陣列，可以為空；同一個版面所有區塊的項目合計最多 300 個 |
+
+**項目**（`items`，在區塊內由左而右、由上而下排列，放不下就換行；`span` 為佔用的欄數）：
+
+| `type` | 其他屬性 | 規則 |
+|---|---|---|
+| `field` | `field`、`span` | `field` 為此資料類別**主表**的欄位代碼（不含明細子表的欄位）；整個版面中同一個欄位最多出現一次；`span` 為 1 到該區塊 `columns` 的整數，省略時為 1 |
+| `spacer` | `span` | 空白佔位，用來讓下一個欄位換到下一欄或下一列；`span` 規則同上 |
+| `block` | `block` | 系統區塊代碼（見下方）；一律佔滿整列（不接受 `span`）；整個版面中同一個系統區塊最多出現一次 |
+
+- 欄位的顯示與否仍由欄位定義的 `is_visible` 決定，**版面不能隱藏欄位**。`is_visible = false` 的欄位可以放在版面中（保留位置，改回顯示時就出現在該位置），但不顯示。
+- 欄位的標籤、必填、唯讀、說明文字、輸入元件都依欄位定義，版面只決定位置與寬度。
+- 依附在某個欄位的說明（例如銷項發票、進項憑證 `tax_period` 下方的期別說明）跟著該欄位移動，不是系統區塊。
+
+#### 系統區塊
+
+系統區塊是表單中不屬於欄位定義、由程式提供的區塊。系統區塊**只能移動、不能移除**：寫入的版面可以不放，讀取時自動附加（見下方「自動附加」）。目前 `RecordFormPage` 內寫死的區塊對應如下：
+
+| 代碼 | 名稱 | 適用的資料類別 | 何時顯示（由區塊本身判斷） |
+|---|---|---|---|
+| `record_no` | 單號 | 有單號規則（`numbering_pattern`）的資料類別，含所有系統單據 | 有單號規則，或這筆資料已有單號；新增時顯示「存檔後產生」 |
+| `lines:<明細子表代碼>` | 明細表（標題為明細子表名稱） | 每個有效的明細子表一個，例如 `lines:goods_receipt_line`、`lines:customer_contact`、自訂的 `lines:parts` | 一律顯示 |
+| `shipment_picker` | 選擇出貨單 | `sales_invoice` | 可以編輯時 |
+| `receipt_picker` | 選擇進貨單 | `purchase_invoice` | 可以編輯時 |
+| `allowance_available` | 可折讓金額 | `sales_allowance`、`purchase_allowance` | 可以編輯且已選擇發票（憑證）時 |
+| `used_lots` | 實際扣用的批號（出貨單）／加回的批號（銷貨退回） | `shipment`、`sales_return` | 已過帳或已作廢時 |
+
+- 「只在新增時出現」「只在某些狀態出現」的區塊，由區塊本身依上表判斷；版面只決定位置，新增、編輯、檢視共用同一個版面。
+- 各單據的**帶入工具**（`PurchasingAutofill`、`SalesAutofill`、`PurchaseReturnAutofill`、`SalesReturnAutofill`、`SalesInvoiceAutofill`、`PurchaseInvoiceAutofill`：選擇廠商、客戶、訂單、進貨單、出貨單、幣別等之後自動帶入其他欄位與明細）沒有畫面，只監聽欄位變動，所以不是系統區塊，不受版面影響。銷貨折讓、進貨折讓的帶入工具有畫面的部分即 `allowance_available`。
+- 表單以外的頁面元素不屬於版面：頁首的標題與動作按鈕（過帳、作廢、確認、結案、刪除）、單據狀態說明、發票號碼（`InvoiceLinksNote`）、錯誤與版本衝突提示、表單最下方的「儲存」按鈕。
+- 適用的資料類別清單（不含 `lines:*`）定義在 `hammer_shared::form_layout`，伺服器與桌面程式共用；`lines:*` 依資料類別目前有效的明細子表決定。之後新增寫死的區塊時，同步更新本表與該清單。
+
+#### 寫入時的檢查
+
+`PUT` 的 `config` 必須完全合法，任一項不符 → `422 VALIDATION`，`details.field` 指出位置（例如 `sections[1].items[3].field`）：
+
+- 結構與上表的規則（`key` 格式與重複、`title` 長度、`columns`、`span` 範圍、`collapsible` / `collapsed`、數量上限）
+- `field` 必須是此資料類別主表**有效**（`is_active = true`）的欄位；不存在、已停用、重複 → `422`
+- `block` 必須是此資料類別適用的系統區塊；`lines:<代碼>` 必須是此資料類別有效的明細子表；不適用、重複 → `422`
+- 不認得的屬性 → `422`（`deny_unknown_fields`）
+
+#### 讀取時的處理（正規化）
+
+`GET` 回傳的 `config` 是「正規化」後的版面，桌面程式（表單渲染與設計器）直接使用，不需要自己處理以下規則：
+
+1. **略過**：參照到已停用或不存在的欄位、已停用或刪除的明細子表、不再適用的系統區塊（例如欄位型態變更、明細子表停用後），讀取時略過該項目，**不回傳錯誤**。項目的 `span` 大於區塊 `columns` 時調整為 `columns`。資料庫中的 config 格式不合法（無法解析）時視為沒有設定版面。
+2. **自動附加欄位**：主表有效、`is_visible = true`、但沒有放進版面的欄位，依欄位 `sort_order` 附加到最後的「其他欄位」區塊（`key = "_other"`、`title = "其他欄位"`、`columns = 1`、不可收折），每個欄位 `span = 1`。沒有要附加的項目時不產生這個區塊。
+3. **自動附加系統區塊**：此資料類別適用、但沒有放進版面的系統區塊：`record_no` 插入第一個區塊的最前面；其他依上表的順序（`lines:*` 依明細子表的 `sort_order`）附加到最後，接在「其他欄位」之後，放在 `key = "_blocks"`、`title` 為空、`columns = 1` 的區塊。
+4. 略過之後沒有任何項目的區塊仍然回傳（設計器要能看到），桌面程式渲染表單時不顯示沒有可見項目的區塊。
+
+**沒有設定版面**（或已還原成預設）時，依欄位定義自動產生，與 M8 之前的畫面相同：一個 `key = "main"`、`title` 為空、`columns = 1`、不可收折的區塊，依序放 `record_no`（適用時）、主表有效且顯示的欄位（依 `sort_order`），之後是上表的其他系統區塊。回應以 `is_default: true` 表示是自動產生的版面。
+
+自動附加與自動產生的 `_other`、`_blocks`、`main` 區塊回到設計器後就是一般的區塊；管理者存檔時這些項目就寫入版面（寫入前伺服器把 `_other`、`_blocks` 改名為 `other`、`blocks`，已有同名的區塊時依序加上 `_2`、`_3`）。
+
+#### 渲染
+
+- 區塊以標題分隔，區塊內為 `columns` 欄的格線，項目依 `span` 佔用欄數。可收折的區塊依 `collapsed` 決定開啟時是否收折；收折的區塊內有驗證錯誤時，送出時自動展開。
+- **視窗變窄時退回單欄**：表單內容寬度小於 `columns × 280px` 時，該區塊改為單欄（`span` 視為 1、`spacer` 不顯示），項目順序不變。
+- 唯讀者（沒有 `record.write`）看到的版面與可編輯者相同。
+
+#### 權限與紀錄
+
+- 讀取需要 `record.read`（打開表單的人都要讀取版面）；修改、還原成預設需要 `schema.manage`。
+- 修改、還原寫入 `audit_logs`（`entity_key = "form_layout"`、`record_id` 為 `form_layouts.id`；`before_data` / `after_data` 為 config）；還原成預設時 `after_data` 為 `null`。
+- 樂觀鎖定（§9.4）：`PUT` 帶 `version`；第一次建立時 `version` 為 `null`（此時已有版面 → `409 CONFLICT`）。
+
 ---
 
 ## 8. 資料庫設計
@@ -788,6 +914,20 @@ stock_adjustments ─< stock_adjustment_lines ─┬─0..1── inventory_lots
 - 預設版面的取得順序：使用者自己的預設 → 全域預設 → 依欄位定義自動產生（有效且顯示的欄位，依欄位排序）。
 - `config` 參照到已停用或不存在的欄位（或欄位型態變更後已不適用的排序、篩選條件）時，讀取時略過，不回傳錯誤；寫入時則必須合法。
 - 型別與端點見 `hammer_shared::layout`。
+
+#### `form_layouts`（M8）
+| 欄位 | 型態 | 說明 |
+|---|---|---|
+| id | UUID PK | |
+| entity_id | UUID FK → entity_definitions | 主表的資料類別（`kind` 為 `master` 或 `document`；明細子表不可設定） |
+| config | JSONB | 區塊與項目，格式見 §7.7 |
+| ＋共通欄位 | | 含 `version`（樂觀鎖定）、`deleted_at` |
+
+- 部分唯一索引 `(entity_id) WHERE deleted_at IS NULL`：每個資料類別最多一筆有效的版面。只有全域版面，沒有 `user_id`（不做個人表單版面）。
+- 讀取需要 `record.read`，修改需要 `schema.manage`；寫入時檢查 `version`（§9.4），並寫入 `audit_logs`。
+- 還原成預設時軟刪除（`deleted_at`），之後再設定時建立新的一筆。資料類別刪除時版面保留，但不會再被讀取。
+- 讀取時略過不合法的參照、自動附加未放入的欄位與系統區塊、沒有版面時自動產生（§7.7「讀取時的處理」）。
+- 型別與端點見 `hammer_shared::form_layout`。
 
 #### `custom_records`
 | 欄位 | 型態 | 說明 |
@@ -2416,6 +2556,13 @@ tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
   - 系統資料類別在一般新增、修改、刪除以外的動作：系統單據的過帳、作廢（見下方「單據動作」），這些動作有自己的權限（`record.post`）與規則。單據的一般新增、修改、刪除仍使用通用資料 API。
   - 不是資料類別的資料：幣別 `/api/v1/currencies`、匯率 `/api/v1/exchange-rates`、稅別 `/api/v1/tax-rates`（§8.6）、庫存查詢 `/api/v1/inventory/…`（§8.10；建議批號 §8.9）。它們沒有自訂欄位、版面、關聯，也不出現在 `GET /api/v1/entities`。
 - 重新計算公式：`POST /api/v1/entities/{entity_key}/recalculate`（需要 `schema.manage`，無 request body），回應 `{ "processed": 120, "changed": 37, "with_errors": 2 }`（型別 `hammer_shared::schema::RecalculateResult`；規則見 §7.6「重新計算」）。
+- 表單版面（§7.7、§8.5 `form_layouts`；型別在 `hammer_shared::form_layout`）：
+  | 端點 | 權限 | 說明 |
+  |---|---|---|
+  | `GET /api/v1/entities/{entity_key}/form-layout` | `record.read` | 回應 `{ "id", "version", "is_default", "config" }`；`config` 為正規化後的版面。沒有設定版面時 `is_default = true`，`id`、`version` 為 `null`，`config` 為自動產生的版面 |
+  | `PUT /api/v1/entities/{entity_key}/form-layout` | `schema.manage` | request `{ "version": 3, "config": { … } }`（第一次建立時 `version` 為 `null`）；回應同 `GET`，`version` + 1。config 不合法 → `422 VALIDATION`；版本不符 → `409 CONFLICT` |
+  | `DELETE /api/v1/entities/{entity_key}/form-layout?version=N` | `schema.manage` | 還原成預設（軟刪除）；回應同 `GET`（`is_default = true`）。沒有設定版面時 `404` |
+  - 資料類別不存在、已停用或已刪除、是明細子表 → `404 NOT_FOUND`。
 - 錯誤格式統一：
   ```json
   { "code": "STOCK_INSUFFICIENT", "message": "商品 A001 庫存不足，尚缺 5", "details": { … } }
@@ -2519,6 +2666,7 @@ tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
 | M5 | 發票：銷項發票、銷貨折讓、進項憑證、進貨折讓（內部紀錄，§8.11） |
 | M6 | 財務（⏳） |
 | M7 | 報表、Excel 匯出、列印、備份與還原介面 |
+| M8 | 表單畫面自訂排版：表單版面（`form_layouts`）資料表與 API、表單依版面渲染、表單版面設計器（§7.7） |
 
 ---
 
