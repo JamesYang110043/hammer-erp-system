@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, LayoutOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { DragEndEvent } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
 import { Alert, App, Button, Card, Popconfirm, Space, Table, Tag, Typography } from 'antd';
@@ -212,6 +212,15 @@ export function FieldsPage() {
             >
               重新整理
             </Button>
+            {/* 表單版面（§7.7）：明細子表在主表的表單中編輯，沒有自己的版面 */}
+            {current && current.kind !== 'detail' && (
+              <Button
+                icon={<LayoutOutlined />}
+                onClick={() => navigate(`/schema/${key}/form-layout`)}
+              >
+                表單版面
+              </Button>
+            )}
             <Button
               type="primary"
               icon={<PlusOutlined />}

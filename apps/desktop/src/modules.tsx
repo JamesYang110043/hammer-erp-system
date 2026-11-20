@@ -20,6 +20,7 @@ import { CurrenciesPage } from './pages/currencies/CurrenciesPage';
 import { ExchangeRatesPage } from './pages/exchangeRates/ExchangeRatesPage';
 import { EntitiesPage } from './pages/schema/EntitiesPage';
 import { FieldsPage } from './pages/schema/FieldsPage';
+import { FormLayoutDesignerPage } from './pages/schema/FormLayoutDesignerPage';
 import { UsersPage } from './pages/users/UsersPage';
 
 export interface ModuleEntry {
@@ -56,7 +57,10 @@ export const MODULES: readonly ModuleEntry[] = [
     icon: <DatabaseOutlined />,
     permission: PERMISSIONS.SCHEMA_MANAGE,
     element: <EntitiesPage />,
-    children: [{ path: ':key', element: <FieldsPage /> }],
+    children: [
+      { path: ':key', element: <FieldsPage /> },
+      { path: ':key/form-layout', element: <FormLayoutDesignerPage /> },
+    ],
   },
   {
     path: 'audit-logs',
