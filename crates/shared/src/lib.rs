@@ -12,6 +12,7 @@ pub mod decimal;
 pub mod document;
 pub mod error;
 pub mod exchange_rate;
+pub mod form_layout;
 pub mod health;
 pub mod id;
 pub mod inventory;

@@ -459,7 +459,7 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 
 ### 7.7 表單版面（M8）
 
-管理者可以自訂每個資料類別的表單畫面（桌面程式的 `RecordFormPage`：主檔與單據的新增、編輯、檢視共用）：把欄位分成多個區塊、每個區塊 1–4 欄、調整欄位寬度與順序，並移動系統區塊（明細表、挑選出貨單等）的位置。版面存在 `form_layouts`（§8.5），每個資料類別最多一個、只有全域版面；型別在 `hammer_shared::form_layout`，檢查與正規化在 `hammer_core::form_layout`。
+管理者可以自訂每個資料類別的表單畫面（桌面程式的 `RecordFormPage`：主檔與單據的新增、編輯、檢視共用）：把欄位分成多個區塊、每個區塊 1–4 欄、調整欄位寬度與順序，並移動系統區塊（明細表、挑選出貨單等）的位置。版面存在 `form_layouts`（§8.5），每個資料類別最多一個、只有全域版面；型別在 `hammer_shared::form_layout`，檢查與正規化在 `hammer_core::form_layouts`。
 
 **不做**：個人表單版面、分頁（Tabs）、明細表內部的欄位順序與欄寬（仍依明細子表的欄位定義 `sort_order`、`column_width`）、依條件顯示欄位。
 
@@ -535,19 +535,21 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 
 系統區塊是表單中不屬於欄位定義、由程式提供的區塊。系統區塊**只能移動、不能移除**：寫入的版面可以不放，讀取時自動附加（見下方「自動附加」）。目前 `RecordFormPage` 內寫死的區塊對應如下：
 
-| 代碼 | 名稱 | 適用的資料類別 | 何時顯示（由區塊本身判斷） |
-|---|---|---|---|
-| `record_no` | 單號 | 有單號規則（`numbering_pattern`）的資料類別，含所有系統單據 | 有單號規則，或這筆資料已有單號；新增時顯示「存檔後產生」 |
-| `lines:<明細子表代碼>` | 明細表（標題為明細子表名稱） | 每個有效的明細子表一個，例如 `lines:goods_receipt_line`、`lines:customer_contact`、自訂的 `lines:parts` | 一律顯示 |
-| `shipment_picker` | 選擇出貨單 | `sales_invoice` | 可以編輯時 |
-| `receipt_picker` | 選擇進貨單 | `purchase_invoice` | 可以編輯時 |
-| `allowance_available` | 可折讓金額 | `sales_allowance`、`purchase_allowance` | 可以編輯且已選擇發票（憑證）時 |
-| `used_lots` | 實際扣用的批號（出貨單）／加回的批號（銷貨退回） | `shipment`、`sales_return` | 已過帳或已作廢時 |
+| 代碼 | 名稱 | 適用的資料類別 | 何時顯示（由區塊本身判斷） | 自動附加的位置 |
+|---|---|---|---|---|
+| `allowance_available` | 可折讓金額 | `sales_allowance`、`purchase_allowance` | 可以編輯且已選擇發票（憑證）時 | 欄位之前 |
+| `record_no` | 單號 | 所有主檔與單據（資料類別的單號規則可以隨時設定或清除，所以一律適用） | 有單號規則，或這筆資料已有單號；新增時顯示「存檔後產生」 | 欄位之前 |
+| `shipment_picker` | 選擇出貨單 | `sales_invoice` | 可以編輯時 | 欄位之後 |
+| `receipt_picker` | 選擇進貨單 | `purchase_invoice` | 可以編輯時 | 欄位之後 |
+| `lines:<明細子表代碼>` | 明細表（標題為明細子表名稱） | 每個有效的明細子表一個，例如 `lines:goods_receipt_line`、`lines:customer_contact`、自訂的 `lines:parts`；依明細子表的 `sort_order` | 一律顯示 | 欄位之後 |
+| `used_lots` | 實際扣用的批號（出貨單）／加回的批號（銷貨退回） | `shipment`、`sales_return` | 已過帳或已作廢時 | 欄位之後 |
+
+上表的順序即自動產生時的順序（與 M8 之前的 `RecordFormPage` 相同）。
 
 - 「只在新增時出現」「只在某些狀態出現」的區塊，由區塊本身依上表判斷；版面只決定位置，新增、編輯、檢視共用同一個版面。
 - 各單據的**帶入工具**（`PurchasingAutofill`、`SalesAutofill`、`PurchaseReturnAutofill`、`SalesReturnAutofill`、`SalesInvoiceAutofill`、`PurchaseInvoiceAutofill`：選擇廠商、客戶、訂單、進貨單、出貨單、幣別等之後自動帶入其他欄位與明細）沒有畫面，只監聽欄位變動，所以不是系統區塊，不受版面影響。銷貨折讓、進貨折讓的帶入工具有畫面的部分即 `allowance_available`。
 - 表單以外的頁面元素不屬於版面：頁首的標題與動作按鈕（過帳、作廢、確認、結案、刪除）、單據狀態說明、發票號碼（`InvoiceLinksNote`）、錯誤與版本衝突提示、表單最下方的「儲存」按鈕。
-- 適用的資料類別清單（不含 `lines:*`）定義在 `hammer_shared::form_layout`，伺服器與桌面程式共用；`lines:*` 依資料類別目前有效的明細子表決定。之後新增寫死的區塊時，同步更新本表與該清單。
+- 適用的資料類別、順序與位置定義在 `hammer_shared::form_layout::system_blocks`，伺服器與桌面程式共用；`lines:*` 依資料類別目前有效的明細子表決定。之後新增寫死的區塊時，同步更新本表與該清單。
 
 #### 寫入時的檢查
 
@@ -564,10 +566,10 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 
 1. **略過**：參照到已停用或不存在的欄位、已停用或刪除的明細子表、不再適用的系統區塊（例如欄位型態變更、明細子表停用後），讀取時略過該項目，**不回傳錯誤**。項目的 `span` 大於區塊 `columns` 時調整為 `columns`。資料庫中的 config 格式不合法（無法解析）時視為沒有設定版面。
 2. **自動附加欄位**：主表有效、`is_visible = true`、但沒有放進版面的欄位，依欄位 `sort_order` 附加到最後的「其他欄位」區塊（`key = "_other"`、`title = "其他欄位"`、`columns = 1`、不可收折），每個欄位 `span = 1`。沒有要附加的項目時不產生這個區塊。
-3. **自動附加系統區塊**：此資料類別適用、但沒有放進版面的系統區塊：`record_no` 插入第一個區塊的最前面；其他依上表的順序（`lines:*` 依明細子表的 `sort_order`）附加到最後，接在「其他欄位」之後，放在 `key = "_blocks"`、`title` 為空、`columns = 1` 的區塊。
+3. **自動附加系統區塊**：此資料類別適用、但沒有放進版面的系統區塊依上表的順序：「欄位之前」的插入第一個區塊的最前面；「欄位之後」的附加到最後，接在「其他欄位」之後，放在 `key = "_blocks"`、`title` 為空、`columns = 1` 的區塊。
 4. 略過之後沒有任何項目的區塊仍然回傳（設計器要能看到），桌面程式渲染表單時不顯示沒有可見項目的區塊。
 
-**沒有設定版面**（或已還原成預設）時，依欄位定義自動產生，與 M8 之前的畫面相同：一個 `key = "main"`、`title` 為空、`columns = 1`、不可收折的區塊，依序放 `record_no`（適用時）、主表有效且顯示的欄位（依 `sort_order`），之後是上表的其他系統區塊。回應以 `is_default: true` 表示是自動產生的版面。
+**沒有設定版面**（或已還原成預設）時，依欄位定義自動產生，與 M8 之前的畫面相同：一個 `key = "main"`、`title` 為空、`columns = 1`、不可收折的區塊，依序放「欄位之前」的系統區塊、主表有效且顯示的欄位（依 `sort_order`）、「欄位之後」的系統區塊。回應以 `is_default: true` 表示是自動產生的版面。
 
 自動附加與自動產生的 `_other`、`_blocks`、`main` 區塊回到設計器後就是一般的區塊；管理者存檔時這些項目就寫入版面（寫入前伺服器把 `_other`、`_blocks` 改名為 `other`、`blocks`，已有同名的區塊時依序加上 `_2`、`_3`）。
 

@@ -9,6 +9,7 @@
 //! - [`document`]：系統單據主表的狀態與過帳、作廢資訊
 //! - [`dynamic_index`]：自訂欄位的動態索引（可搜尋、不可重複；`custom_records` 與系統資料表）
 //! - [`exchange_rate`]：匯率（`exchange_rates`）的查詢、新增、修改、軟刪除與適用匯率查詢
+//! - [`form_layout`]：表單版面（`form_layouts`）
 //! - [`invoicing`]：發票模組存檔時的跨單據讀取（折讓從原發票、憑證帶入的值）
 //! - [`inventory`]：庫存（批號、批號扣除、異動流水帳、商品庫存）的基本讀寫
 //! - [`lock`]：advisory lock
@@ -37,6 +38,7 @@ pub mod document;
 pub mod dynamic_index;
 mod error;
 pub mod exchange_rate;
+pub mod form_layout;
 pub mod inventory;
 pub mod invoicing;
 pub mod lock;

@@ -17,6 +17,7 @@ use hammer_shared::exchange_rate::{
     CreateExchangeRateRequest, DeleteExchangeRateQuery, EffectiveRate, EffectiveRateQuery,
     ExchangeRate, ExchangeRateQuery, UpdateExchangeRateRequest,
 };
+use hammer_shared::form_layout::{DeleteFormLayoutQuery, FormLayout, SaveFormLayoutRequest};
 use hammer_shared::health::HealthResponse;
 use hammer_shared::inventory::{
     AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
@@ -792,6 +793,40 @@ pub async fn delete_layout(
 ) -> Result<(), ClientError> {
     state
         .delete_layout(&key, id, &DeleteViewLayoutQuery { version })
+        .await
+}
+
+/// 資料類別的表單版面（需要 `record.read`）；沒有設定時為自動產生的版面（`is_default`）。
+#[tauri::command]
+#[specta::specta]
+pub async fn get_form_layout(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<FormLayout, ClientError> {
+    state.get_form_layout(&key).await
+}
+
+/// 新增或修改表單版面（需要 `schema.manage`）。`req.version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn save_form_layout(
+    state: State<'_, AppState>,
+    key: String,
+    req: SaveFormLayoutRequest,
+) -> Result<FormLayout, ClientError> {
+    state.save_form_layout(&key, &req).await
+}
+
+/// 表單版面還原成預設（需要 `schema.manage`），回傳自動產生的版面。`version` 不符時回傳 `409 CONFLICT`。
+#[tauri::command]
+#[specta::specta]
+pub async fn reset_form_layout(
+    state: State<'_, AppState>,
+    key: String,
+    version: i32,
+) -> Result<FormLayout, ClientError> {
+    state
+        .reset_form_layout(&key, &DeleteFormLayoutQuery { version })
         .await
 }
 
