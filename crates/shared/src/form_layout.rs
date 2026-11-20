@@ -136,7 +136,7 @@ pub enum FormItem {
         #[serde(default = "one")]
         span: i32,
     },
-    /// 系統區塊，一律佔滿整列。
+    /// 系統區塊，佔滿整列（`record_no` 與欄位相同佔一格）。
     Block {
         /// 系統區塊代碼，例如 `record_no`、`lines:goods_receipt_line`。
         block: String,

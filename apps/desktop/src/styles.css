@@ -29,3 +29,69 @@ body,
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/*
+ * 表單版面（src/pages/records/FormLayoutRenderer.tsx，docs/architecture.md §7.7）：
+ * 區塊內為 N 欄的格線，項目以 --span 佔用欄數；系統區塊（明細表等）佔滿整列。
+ * 寬度不足時退回單欄（2 欄沿用 FormGrid 的 480px；3、4 欄每欄至少 240px），空白格不顯示。
+ */
+.form-layout-container {
+  container-type: inline-size;
+}
+
+.form-layout-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--columns, 1), minmax(0, 1fr));
+  column-gap: 16px;
+  align-items: start;
+}
+
+.form-layout-cell {
+  grid-column: span var(--span, 1);
+  min-width: 0;
+}
+
+.form-layout-grid > .form-layout-block {
+  grid-column: 1 / -1;
+}
+
+/* 單欄的區塊維持原本表單的寬度，明細表等系統區塊不受限制 */
+.form-layout-cols-1 > .form-layout-cell:not(.form-layout-block) {
+  max-width: 720px;
+}
+
+@container (max-width: 480px) {
+  .form-layout-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .form-layout-cols-2 > .form-layout-cell {
+    grid-column: 1 / -1;
+  }
+  .form-layout-cols-2 > .form-layout-spacer {
+    display: none;
+  }
+}
+
+@container (max-width: 720px) {
+  .form-layout-cols-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .form-layout-cols-3 > .form-layout-cell {
+    grid-column: 1 / -1;
+  }
+  .form-layout-cols-3 > .form-layout-spacer {
+    display: none;
+  }
+}
+
+@container (max-width: 960px) {
+  .form-layout-cols-4 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .form-layout-cols-4 > .form-layout-cell {
+    grid-column: 1 / -1;
+  }
+  .form-layout-cols-4 > .form-layout-spacer {
+    display: none;
+  }
+}

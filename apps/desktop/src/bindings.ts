@@ -1661,7 +1661,7 @@ span?: number } |
 { type: "spacer"; 
 /**  佔用的欄數（1 到所在區塊的 `columns`），省略時為 1。 */
 span?: number } | 
-/**  系統區塊，一律佔滿整列。 */
+/**  系統區塊，佔滿整列（`record_no` 與欄位相同佔一格）。 */
 { type: "block"; 
 /**  系統區塊代碼，例如 `record_no`、`lines:goods_receipt_line`。 */
 block: string };
@@ -1678,7 +1678,7 @@ span: number } |
 { type: "spacer"; 
 /**  佔用的欄數（1 到所在區塊的 `columns`），省略時為 1。 */
 span: number } | 
-/**  系統區塊，一律佔滿整列。 */
+/**  系統區塊，佔滿整列（`record_no` 與欄位相同佔一格）。 */
 { type: "block"; 
 /**  系統區塊代碼，例如 `record_no`、`lines:goods_receipt_line`。 */
 block: string };
