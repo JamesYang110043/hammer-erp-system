@@ -33,6 +33,7 @@ import {
   useRecord,
   useUpdateRecord,
 } from '../../api/records';
+import { useFormLayout } from '../../api/formLayouts';
 import { useEntities, useEntity, useEntityDetails } from '../../api/schema';
 import { usePermission } from '../../auth/permission';
 import { PERMISSIONS } from '../../bindings';
@@ -92,6 +93,13 @@ import {
   validateFieldValue,
 } from '../../records/form';
 import type { RecordFormValues } from '../../records/form';
+import {
+  FORM_BLOCKS,
+  generatedFormLayout,
+  linesBlockDetail,
+  resolveFormLayout,
+} from '../../records/formLayout';
+import type { FormLayoutConfig } from '../../records/formLayout';
 import { buildPreviewRequest, formulaCell, formulaFields } from '../../records/formulaPreview';
 import type { PreviewTable } from '../../records/formulaPreview';
 import {
@@ -119,6 +127,7 @@ import { entityIcon } from '../schema/entityIcons';
 import { formatTaipei, taipeiToday } from '../../utils/time';
 import { DocumentStatusTag } from './DocumentStatusTag';
 import { FormulaValue } from './FieldValue';
+import { FormLayoutRenderer } from './FormLayoutRenderer';
 import { LinesTable } from './LinesTable';
 import type { LineRefs } from './LinesTable';
 import { ExchangeRateInput, PurchaseReturnAutofill, PurchasingAutofill } from './PurchasingInputs';
@@ -206,6 +215,7 @@ function RecordForm({
   fields,
   details,
   detailDefs,
+  layout,
   record,
   onReload,
 }: {
@@ -215,6 +225,8 @@ function RecordForm({
   details: DetailTable[];
   /** 明細子表完整的欄位定義（公式預覽用）。 */
   detailDefs: EntityDetail[];
+  /** 表單版面（§7.7）；讀取失敗時為 `undefined`，依欄位定義產生。 */
+  layout?: FormLayoutConfig;
   record?: DataRecord;
   onReload: () => void;
 }) {
@@ -262,6 +274,17 @@ function RecordForm({
     () => [...visible, ...formulaFields(fields)].sort((a, b) => a.sort_order - b.sort_order),
     [visible, fields],
   );
+  // 表單版面：伺服器的版面再依畫面上能顯示的欄位與明細表整理（不會遺漏欄位或系統區塊）
+  const formLayout = useMemo(() => {
+    const content = {
+      entityKey,
+      fieldKeys: displayed.map((f) => f.field_key),
+      detailKeys: details.map((d) => d.entity.key),
+    };
+    return resolveFormLayout(layout ?? generatedFormLayout(content), content);
+  }, [layout, entityKey, displayed, details]);
+  // 有錯誤的欄位：所在的收折區塊自動展開
+  const [revealFields, setRevealFields] = useState<string[]>();
   const initialValues = useMemo<FormValues>(
     () => ({
       ...initialFormValues(visible, record?.data),
@@ -377,6 +400,7 @@ function RecordForm({
         }
       }
       form.setFields(cells);
+      setRevealFields(cells.map((c) => String(c.name[0])));
       message.error(others.length > 0 ? others.join('；') : '資料有誤，請檢查標示的欄位');
       return;
     }
@@ -549,6 +573,142 @@ function RecordForm({
     );
   };
 
+  const displayedByKey = new Map(displayed.map((f) => [f.field_key, f]));
+
+  /** 表單上的一個欄位：公式欄位唯讀顯示預覽值，其他欄位為輸入元件。 */
+  const renderFieldItem = (field: FieldDefinition): ReactNode => {
+    if (field.data_type === 'formula') {
+      const cell = formulaCell(preview, null, 0, field.field_key, {
+        data: record?.data,
+        errors: record?.formula_errors,
+      });
+      return (
+        <Form.Item label={field.label} extra={field.help_text ?? undefined}>
+          <FormulaValue
+            field={field}
+            value={cell.value}
+            error={cell.error}
+            pending={cell.pending && (dirty || !record)}
+          />
+        </Form.Item>
+      );
+    }
+    return (
+      <Form.Item
+        name={field.field_key}
+        label={field.label}
+        extra={field.help_text ?? undefined}
+        required={field.is_required && !field.is_readonly}
+        rules={[
+          {
+            validator: (_, value: unknown) => {
+              const error = validateFieldValue(field, value);
+              return error ? Promise.reject(new Error(error)) : Promise.resolve();
+            },
+          },
+        ]}
+      >
+        {/* 傳 false 會蓋過 Form 的 disabled（唯讀者），只在唯讀欄位時指定 */}
+        {priced && field.field_key === PURCHASING_FIELDS.rate ? (
+          <ExchangeRateInput
+            entityKey={entityKey}
+            field={field}
+            disabled={!editable || field.is_readonly || undefined}
+          />
+        ) : (
+          <RecordFieldInput
+            field={field}
+            // 進貨退回建立後不可更換進貨單（§8.8 `purchase_returns`）
+            disabled={
+              field.is_readonly ||
+              (entityKey === PURCHASE_RETURN &&
+                record !== undefined &&
+                field.field_key === PURCHASING_FIELDS.goodsReceipt) ||
+              // 銷貨退回建立後不可更換出貨單（§8.9 `sales_returns`）
+              (entityKey === SALES_RETURN &&
+                record !== undefined &&
+                field.field_key === SALES_FIELDS.shipment) ||
+              undefined
+            }
+            relation={record?.relations?.[field.field_key]}
+            attachment={record?.attachments?.[field.field_key]}
+          />
+        )}
+      </Form.Item>
+    );
+  };
+
+  /**
+   * 系統區塊（§7.7）：位置由版面決定，是否顯示由區塊本身判斷（例如只在可以編輯時）。
+   * 回傳 `null` 時不顯示。
+   */
+  const renderBlock = (code: string): ReactNode => {
+    const detailKey = linesBlockDetail(code);
+    if (detailKey !== undefined) {
+      const table = details.find((d) => d.entity.key === detailKey);
+      return table ? (
+        <LinesTable
+          table={table}
+          canWrite={editable}
+          refs={refs}
+          onRowsChange={onValuesChange}
+          showPending={dirty || !record}
+          formulaCell={(index, lineId, fieldKey) => {
+            const saved = lineId ? savedLineById.get(lineId) : undefined;
+            return formulaCell(preview, table.entity.key, index, fieldKey, {
+              data: saved?.data,
+              errors: saved?.formula_errors,
+            });
+          }}
+        />
+      ) : null;
+    }
+    switch (code) {
+      case FORM_BLOCKS.recordNo:
+        return showsRecordNo(entity, record) ? (
+          <Form.Item label="單號">
+            <Input
+              aria-label="單號"
+              readOnly
+              disabled
+              style={{ maxWidth: 320 }}
+              value={record?.record_no ?? ''}
+              placeholder={RECORD_NO_PENDING}
+            />
+          </Form.Item>
+        ) : null;
+      case FORM_BLOCKS.allowanceAvailable:
+        // 折讓的帶入工具：選擇發票（憑證）後帶入，並顯示可折讓金額
+        if (!editable) {
+          return null;
+        }
+        if (entityKey === SALES_ALLOWANCE) {
+          return (
+            <SalesAllowanceAutofill details={details} isNew={!record} onChange={onValuesChange} />
+          );
+        }
+        return entityKey === PURCHASE_ALLOWANCE ? (
+          <PurchaseAllowanceAutofill isNew={!record} onChange={onValuesChange} />
+        ) : null;
+      case FORM_BLOCKS.shipmentPicker:
+        return editable && entityKey === SALES_INVOICE ? (
+          <ShipmentPicker details={details} onChange={onValuesChange} />
+        ) : null;
+      case FORM_BLOCKS.receiptPicker:
+        return editable && entityKey === PURCHASE_INVOICE ? (
+          <ReceiptPicker details={details} onChange={onValuesChange} />
+        ) : null;
+      case FORM_BLOCKS.usedLots:
+        return (isShipment || entityKey === SALES_RETURN) &&
+          record &&
+          (status === 'posted' || status === 'void') ? (
+          <UsedLotsTable record={record} docType={isShipment ? SHIPMENT : SALES_RETURN} />
+        ) : null;
+      default:
+        return null;
+    }
+  };
+
   const title = record ? entity.label : `新增${entity.label}`;
 
   return (
@@ -656,7 +816,11 @@ function RecordForm({
           disabled={!editable}
           onValuesChange={onValuesChange}
           onFinish={onFinish}
+          onFinishFailed={({ errorFields }) =>
+            setRevealFields(errorFields.map((e) => String(e.name[0])))
+          }
         >
+          {/* 帶入工具（沒有畫面，只監聽欄位變動），不受版面影響（§7.7「系統區塊」） */}
           {editable && entityKey === PURCHASE_RETURN && !record && (
             <PurchaseReturnAutofill details={details} onChange={onValuesChange} />
           )}
@@ -666,14 +830,8 @@ function RecordForm({
           {editable && entityKey === SALES_INVOICE && (
             <SalesInvoiceAutofill onChange={onValuesChange} />
           )}
-          {editable && entityKey === SALES_ALLOWANCE && (
-            <SalesAllowanceAutofill details={details} isNew={!record} onChange={onValuesChange} />
-          )}
           {editable && entityKey === PURCHASE_INVOICE && (
             <PurchaseInvoiceAutofill onChange={onValuesChange} />
-          )}
-          {editable && entityKey === PURCHASE_ALLOWANCE && (
-            <PurchaseAllowanceAutofill isNew={!record} onChange={onValuesChange} />
           )}
           {editable && isSales && (
             <SalesAutofill entityKey={entityKey} details={details} onChange={onValuesChange} />
@@ -687,119 +845,29 @@ function RecordForm({
               onChange={onValuesChange}
             />
           )}
-          <div style={{ maxWidth: 720 }}>
-            {showsRecordNo(entity, record) && (
-              <Form.Item label="單號">
-                <Input
-                  aria-label="單號"
-                  readOnly
-                  disabled
-                  style={{ maxWidth: 320 }}
-                  value={record?.record_no ?? ''}
-                  placeholder={RECORD_NO_PENDING}
-                />
-              </Form.Item>
-            )}
-            {displayed.map((field) => {
-              if (field.data_type === 'formula') {
-                const cell = formulaCell(preview, null, 0, field.field_key, {
-                  data: record?.data,
-                  errors: record?.formula_errors,
-                });
-                return (
-                  <Form.Item
-                    key={field.field_key}
-                    label={field.label}
-                    extra={field.help_text ?? undefined}
-                  >
-                    <FormulaValue
-                      field={field}
-                      value={cell.value}
-                      error={cell.error}
-                      pending={cell.pending && (dirty || !record)}
-                    />
-                  </Form.Item>
-                );
-              }
-              return (
-                <Form.Item
-                  key={field.field_key}
-                  name={field.field_key}
-                  label={field.label}
-                  extra={field.help_text ?? undefined}
-                  required={field.is_required && !field.is_readonly}
-                  rules={[
-                    {
-                      validator: (_, value: unknown) => {
-                        const error = validateFieldValue(field, value);
-                        return error ? Promise.reject(new Error(error)) : Promise.resolve();
-                      },
-                    },
-                  ]}
-                >
-                  {/* 傳 false 會蓋過 Form 的 disabled（唯讀者），只在唯讀欄位時指定 */}
-                  {priced && field.field_key === PURCHASING_FIELDS.rate ? (
-                    <ExchangeRateInput
-                      entityKey={entityKey}
-                      field={field}
-                      disabled={!editable || field.is_readonly || undefined}
-                    />
-                  ) : (
-                    <RecordFieldInput
-                      field={field}
-                      // 進貨退回建立後不可更換進貨單（§8.8 `purchase_returns`）
-                      disabled={
-                        field.is_readonly ||
-                        (entityKey === PURCHASE_RETURN &&
-                          record !== undefined &&
-                          field.field_key === PURCHASING_FIELDS.goodsReceipt) ||
-                        // 銷貨退回建立後不可更換出貨單（§8.9 `sales_returns`）
-                        (entityKey === SALES_RETURN &&
-                          record !== undefined &&
-                          field.field_key === SALES_FIELDS.shipment) ||
-                        undefined
-                      }
-                      relation={record?.relations?.[field.field_key]}
-                      attachment={record?.attachments?.[field.field_key]}
-                    />
-                  )}
-                </Form.Item>
-              );
-            })}
-            {invoicing && displayed.some((f) => f.field_key === INVOICING_FIELDS.taxPeriod) && (
-              <TaxPeriodNote />
-            )}
-          </div>
-          {editable && entityKey === SALES_INVOICE && (
-            <ShipmentPicker details={details} onChange={onValuesChange} />
-          )}
-          {editable && entityKey === PURCHASE_INVOICE && (
-            <ReceiptPicker details={details} onChange={onValuesChange} />
-          )}
           <ShipmentAllocationContext.Provider value={allocation}>
-            {details.map((table) => (
-              <LinesTable
-                key={table.entity.key}
-                table={table}
-                canWrite={editable}
-                refs={refs}
-                onRowsChange={onValuesChange}
-                showPending={dirty || !record}
-                formulaCell={(index, lineId, fieldKey) => {
-                  const saved = lineId ? savedLineById.get(lineId) : undefined;
-                  return formulaCell(preview, table.entity.key, index, fieldKey, {
-                    data: saved?.data,
-                    errors: saved?.formula_errors,
-                  });
-                }}
-              />
-            ))}
+            <FormLayoutRenderer
+              config={formLayout}
+              reveal={revealFields}
+              renderField={(fieldKey) => {
+                const field = displayedByKey.get(fieldKey);
+                if (!field) {
+                  return null;
+                }
+                const item = renderFieldItem(field);
+                // 期別說明跟著期別欄位（§8.11）
+                return invoicing && fieldKey === INVOICING_FIELDS.taxPeriod ? (
+                  <>
+                    {item}
+                    <TaxPeriodNote />
+                  </>
+                ) : (
+                  item
+                );
+              }}
+              renderBlock={renderBlock}
+            />
           </ShipmentAllocationContext.Provider>
-          {(isShipment || entityKey === SALES_RETURN) &&
-            record &&
-            (status === 'posted' || status === 'void') && (
-              <UsedLotsTable record={record} docType={isShipment ? SHIPMENT : SALES_RETURN} />
-            )}
           {editable && (
             <Form.Item>
               <Button
@@ -844,7 +912,8 @@ function RecordForm({
  * 新增資料（`/entities/:key/new`，需要 `record.write`）與檢視、編輯資料
  * （`/entities/:key/:id`，需要 `record.read`；沒有 `record.write` 時只能檢視）。
  *
- * 表單依欄位定義產生：有效且設定為顯示的欄位，依排序；驗證規則與伺服器相同。
+ * 表單依欄位定義產生：有效且設定為顯示的欄位，依表單版面（§7.7）排列；沒有設定版面時依欄位排序。
+ * 驗證規則與伺服器相同。
  */
 export function RecordFormPage() {
   const { key = '', id } = useParams();
@@ -859,6 +928,8 @@ export function RecordFormPage() {
     [entity.data, entities.data],
   );
   const detailDefs = useEntityDetails(detailEntities);
+  // 表單版面（§7.7）：讀取失敗時依欄位定義產生，不影響輸入
+  const formLayout = useFormLayout(key);
   // 新增時的預設值（盤點調整單的調整日期預設今天）
   const fields = useMemo(
     () => (entity.data ? withFormDefaults(key, entity.data.fields, taipeiToday()) : undefined),
@@ -882,7 +953,13 @@ export function RecordFormPage() {
       </Card>
     );
   }
-  if (!entity.data || !details || !detailDefs.data || (id !== undefined && !record.data)) {
+  if (
+    !entity.data ||
+    !details ||
+    !detailDefs.data ||
+    formLayout.isPending ||
+    (id !== undefined && !record.data)
+  ) {
     return <Card title="資料" loading />;
   }
   const detail = entity.data;
@@ -901,6 +978,7 @@ export function RecordFormPage() {
       fields={fields ?? detail.fields}
       details={details}
       detailDefs={detailDefs.data}
+      layout={formLayout.data?.config}
       record={record.data}
       onReload={() => void record.refetch()}
     />
