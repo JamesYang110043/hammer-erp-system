@@ -15,6 +15,7 @@ use hammer_shared::exchange_rate::{
     CreateExchangeRateRequest, DeleteExchangeRateQuery, EffectiveRate, EffectiveRateQuery,
     ExchangeRate, ExchangeRateQuery, UpdateExchangeRateRequest,
 };
+use hammer_shared::form_layout::{DeleteFormLayoutQuery, FormLayout, SaveFormLayoutRequest};
 use hammer_shared::inventory::{
     AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
     StockBalance, StockBalanceQuery, TransactionQuery,
@@ -625,6 +626,36 @@ impl AppState {
     ) -> Result<(), ClientError> {
         self.with_token(async |client, url, token| {
             client.delete_layout(url, token, key, id, query).await
+        })
+        .await
+    }
+
+    /// 資料類別的表單版面（沒有設定時為自動產生的版面）。
+    pub async fn get_form_layout(&self, key: &str) -> Result<FormLayout, ClientError> {
+        self.with_token(async |client, url, token| client.get_form_layout(url, token, key).await)
+            .await
+    }
+
+    /// 新增或修改表單版面。
+    pub async fn save_form_layout(
+        &self,
+        key: &str,
+        req: &SaveFormLayoutRequest,
+    ) -> Result<FormLayout, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.save_form_layout(url, token, key, req).await
+        })
+        .await
+    }
+
+    /// 表單版面還原成預設。
+    pub async fn reset_form_layout(
+        &self,
+        key: &str,
+        query: &DeleteFormLayoutQuery,
+    ) -> Result<FormLayout, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.reset_form_layout(url, token, key, query).await
         })
         .await
     }

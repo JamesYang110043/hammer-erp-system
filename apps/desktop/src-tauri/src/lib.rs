@@ -102,6 +102,9 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::create_layout,
             commands::update_layout,
             commands::delete_layout,
+            commands::get_form_layout,
+            commands::save_form_layout,
+            commands::reset_form_layout,
             commands::lookup_records,
             commands::upload_attachment,
             commands::download_attachment,
@@ -199,6 +202,14 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .typ::<hammer_shared::layout::DeleteViewLayoutQuery>()
         .typ::<hammer_shared::layout::LayoutSource>()
         .typ::<hammer_shared::layout::DefaultViewLayout>()
+        // 表單版面
+        .typ::<hammer_shared::form_layout::FormItem>()
+        .typ::<hammer_shared::form_layout::FormSection>()
+        .typ::<hammer_shared::form_layout::FormLayoutConfig>()
+        .typ::<hammer_shared::form_layout::FormLayout>()
+        .typ::<hammer_shared::form_layout::SaveFormLayoutRequest>()
+        .typ::<hammer_shared::form_layout::DeleteFormLayoutQuery>()
+        .typ::<hammer_shared::form_layout::BlockPlacement>()
         // command 回傳 `{ status: "ok", data } | { status: "error", error }`，錯誤有型別
         .error_handling(ErrorHandlingMode::Result)
 }

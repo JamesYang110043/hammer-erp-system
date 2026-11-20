@@ -18,6 +18,7 @@ pub mod audit_logs;
 pub mod auth;
 pub mod currencies;
 pub mod entities;
+pub mod form_layouts;
 pub mod health;
 pub mod inventory;
 pub mod invoicing;
@@ -203,6 +204,12 @@ fn protected_routes() -> Router<AppState> {
         .route(
             "/entities/{key}/layouts/{id}",
             patch(layouts::update).delete(layouts::delete),
+        )
+        .route(
+            "/entities/{key}/form-layout",
+            get(form_layouts::get)
+                .put(form_layouts::save)
+                .delete(form_layouts::reset),
         )
         .route("/attachments/{id}", get(attachments::download))
 }

@@ -204,6 +204,12 @@ export const commands = {
 	updateLayout: (key: string, id: string, req: UpdateViewLayoutRequest_Deserialize) => typedError<ViewLayout_Serialize, ClientError_Serialize>(__TAURI_INVOKE("update_layout", { key, id, req })),
 	/**  刪除版面。`version` 不符時回傳 `409 CONFLICT`。 */
 	deleteLayout: (key: string, id: string, version: number) => typedError<null, ClientError_Serialize>(__TAURI_INVOKE("delete_layout", { key, id, version })),
+	/**  資料類別的表單版面（需要 `record.read`）；沒有設定時為自動產生的版面（`is_default`）。 */
+	getFormLayout: (key: string) => typedError<FormLayout_Serialize, ClientError_Serialize>(__TAURI_INVOKE("get_form_layout", { key })),
+	/**  新增或修改表單版面（需要 `schema.manage`）。`req.version` 不符時回傳 `409 CONFLICT`。 */
+	saveFormLayout: (key: string, req: SaveFormLayoutRequest_Deserialize) => typedError<FormLayout_Serialize, ClientError_Serialize>(__TAURI_INVOKE("save_form_layout", { key, req })),
+	/**  表單版面還原成預設（需要 `schema.manage`），回傳自動產生的版面。`version` 不符時回傳 `409 CONFLICT`。 */
+	resetFormLayout: (key: string, version: number) => typedError<FormLayout_Serialize, ClientError_Serialize>(__TAURI_INVOKE("reset_form_layout", { key, version })),
 	/**  關聯欄位的選擇器：依標題搜尋 `key` 的未刪除資料（需要 `record.read`）。 */
 	lookupRecords: (key: string, query: LookupQuery_Deserialize) => typedError<LookupItem[], ClientError_Serialize>(__TAURI_INVOKE("lookup_records", { key, query })),
 	/**
@@ -478,6 +484,13 @@ export type AuditLogQuery_Serialize = {
 	/**  每頁筆數（預設 50，上限 200）。 */
 	page_size: number | null,
 };
+
+/**  系統區塊沒有放進版面時自動附加的位置。 */
+export type BlockPlacement = 
+/**  欄位之前：插入第一個區塊的最前面。 */
+"top" | 
+/**  欄位之後：附加到最後的 [`BLOCKS_SECTION_KEY`] 區塊。 */
+"bottom";
 
 /**
  *  變更自訂欄位資料型態的輸入（§7.4）。系統欄位不可變更型態（§7.2）。
@@ -1075,6 +1088,12 @@ export type DefaultViewLayout_Serialize = {
 	config: LayoutConfig_Serialize,
 };
 
+/**  `DELETE /api/v1/entities/{key}/form-layout` 的 query string。 */
+export type DeleteFormLayoutQuery = {
+	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
+	version: number,
+};
+
 /**  `DELETE /api/v1/users/{id}` 的 query string。 */
 export type DeleteUserQuery = {
 	/**  讀取時取得的版本號；不符時回傳 `409 CONFLICT`。 */
@@ -1626,6 +1645,126 @@ export type FieldStorage =
  *  `formula` 欄位依它的 `formula_result_type` 套用上表。
  */
 export type FilterOp = "eq" | "contains" | "gt" | "gte" | "lt" | "lte" | "empty" | "any";
+
+/**  區塊內的一個項目。 */
+export type FormItem = FormItem_Serialize | FormItem_Deserialize;
+
+/**  區塊內的一個項目。 */
+export type FormItem_Deserialize = 
+/**  主表的欄位。 */
+{ type: "field"; 
+/**  欄位代碼。 */
+field: string; 
+/**  佔用的欄數（1 到所在區塊的 `columns`），省略時為 1。 */
+span?: number } | 
+/**  空白佔位。 */
+{ type: "spacer"; 
+/**  佔用的欄數（1 到所在區塊的 `columns`），省略時為 1。 */
+span?: number } | 
+/**  系統區塊，一律佔滿整列。 */
+{ type: "block"; 
+/**  系統區塊代碼，例如 `record_no`、`lines:goods_receipt_line`。 */
+block: string };
+
+/**  區塊內的一個項目。 */
+export type FormItem_Serialize = 
+/**  主表的欄位。 */
+{ type: "field"; 
+/**  欄位代碼。 */
+field: string; 
+/**  佔用的欄數（1 到所在區塊的 `columns`），省略時為 1。 */
+span: number } | 
+/**  空白佔位。 */
+{ type: "spacer"; 
+/**  佔用的欄數（1 到所在區塊的 `columns`），省略時為 1。 */
+span: number } | 
+/**  系統區塊，一律佔滿整列。 */
+{ type: "block"; 
+/**  系統區塊代碼，例如 `record_no`、`lines:goods_receipt_line`。 */
+block: string };
+
+/**  資料類別的表單版面（`GET`、`PUT`、`DELETE` 的回應）。 */
+export type FormLayout = FormLayout_Serialize | FormLayout_Deserialize;
+
+/**  版面設定（`form_layouts.config`）。 */
+export type FormLayoutConfig = FormLayoutConfig_Serialize | FormLayoutConfig_Deserialize;
+
+/**  版面設定（`form_layouts.config`）。 */
+export type FormLayoutConfig_Deserialize = {
+	/**  區塊，依由上而下的顯示順序。 */
+	sections: FormSection_Deserialize[],
+};
+
+/**  版面設定（`form_layouts.config`）。 */
+export type FormLayoutConfig_Serialize = {
+	/**  區塊，依由上而下的顯示順序。 */
+	sections: FormSection_Serialize[],
+};
+
+/**  資料類別的表單版面（`GET`、`PUT`、`DELETE` 的回應）。 */
+export type FormLayout_Deserialize = {
+	/**  版面 id；自動產生時為 `null`。 */
+	id?: string | null,
+	/**  樂觀鎖定版本號（§9.4）；自動產生時為 `null`。 */
+	version?: number | null,
+	/**  `true`：沒有設定版面，依欄位定義自動產生。 */
+	is_default: boolean,
+	/**  正規化後的版面。 */
+	config: FormLayoutConfig_Deserialize,
+};
+
+/**  資料類別的表單版面（`GET`、`PUT`、`DELETE` 的回應）。 */
+export type FormLayout_Serialize = {
+	/**  版面 id；自動產生時為 `null`。 */
+	id: string | null,
+	/**  樂觀鎖定版本號（§9.4）；自動產生時為 `null`。 */
+	version: number | null,
+	/**  `true`：沒有設定版面，依欄位定義自動產生。 */
+	is_default: boolean,
+	/**  正規化後的版面。 */
+	config: FormLayoutConfig_Serialize,
+};
+
+/**  一個區塊。 */
+export type FormSection = FormSection_Serialize | FormSection_Deserialize;
+
+/**  一個區塊。 */
+export type FormSection_Deserialize = {
+	/**
+	 *  版面內不可重複；`^[a-z][a-z0-9_]{0,49}$`（[`OTHER_SECTION_KEY`]、[`BLOCKS_SECTION_KEY`]
+	 *  寫入時改名）。
+	 */
+	key: string,
+	/**  標題；空字串代表不顯示標題。 */
+	title?: string,
+	/**  欄數（1–[`MAX_COLUMNS`]）。 */
+	columns: number,
+	/**  是否可以收折；為 `true` 時 `title` 不可為空。 */
+	collapsible?: boolean,
+	/**  開啟表單時是否預設收折；只有 `collapsible` 時可以為 `true`。 */
+	collapsed?: boolean,
+	/**  項目，依顯示順序（由左而右、由上而下）。 */
+	items?: FormItem_Deserialize[],
+};
+
+/**  一個區塊。 */
+export type FormSection_Serialize = {
+	/**
+	 *  版面內不可重複；`^[a-z][a-z0-9_]{0,49}$`（[`OTHER_SECTION_KEY`]、[`BLOCKS_SECTION_KEY`]
+	 *  寫入時改名）。
+	 */
+	key: string,
+	/**  標題；空字串代表不顯示標題。 */
+	title: string,
+	/**  欄數（1–[`MAX_COLUMNS`]）。 */
+	columns: number,
+	/**  是否可以收折；為 `true` 時 `title` 不可為空。 */
+	collapsible: boolean,
+	/**  開啟表單時是否預設收折；只有 `collapsible` 時可以為 `true`。 */
+	collapsed: boolean,
+	/**  項目，依顯示順序（由左而右、由上而下）。 */
+	items: FormItem_Serialize[],
+};
 
 /**  公式預覽的結果。 */
 export type FormulaPreview = FormulaPreview_Serialize | FormulaPreview_Deserialize;
@@ -2305,6 +2444,23 @@ export type RowPreview = {
 	values: { [key in string]: unknown },
 	/**  計算失敗的欄位 → 錯誤原因（繁體中文）。 */
 	errors: { [key in string]: string },
+};
+
+/**  `PUT /api/v1/entities/{key}/form-layout` 的 request。 */
+export type SaveFormLayoutRequest = SaveFormLayoutRequest_Serialize | SaveFormLayoutRequest_Deserialize;
+
+/**  `PUT /api/v1/entities/{key}/form-layout` 的 request。 */
+export type SaveFormLayoutRequest_Deserialize = {
+	/**  讀取時取得的版本號；第一次建立（目前是自動產生的版面）時為 `null`。不符時 `409 CONFLICT`。 */
+	version?: number | null,
+	config: FormLayoutConfig_Deserialize,
+};
+
+/**  `PUT /api/v1/entities/{key}/form-layout` 的 request。 */
+export type SaveFormLayoutRequest_Serialize = {
+	/**  讀取時取得的版本號；第一次建立（目前是自動產生的版面）時為 `null`。不符時 `409 CONFLICT`。 */
+	version: number | null,
+	config: FormLayoutConfig_Serialize,
 };
 
 /**  `select`、`multi_select` 的選項。對應 `field_definitions.options` JSONB 陣列的元素。 */

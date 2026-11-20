@@ -21,6 +21,7 @@ use hammer_shared::exchange_rate::{
     CreateExchangeRateRequest, DeleteExchangeRateQuery, EffectiveRate, EffectiveRateQuery,
     ExchangeRate, ExchangeRateQuery, UpdateExchangeRateRequest,
 };
+use hammer_shared::form_layout::{DeleteFormLayoutQuery, FormLayout, SaveFormLayoutRequest};
 use hammer_shared::health::HealthResponse;
 use hammer_shared::inventory::{
     AllocationPreview, AllocationPreviewRequest, InventoryLot, InventoryTransaction, LotQuery,
@@ -952,6 +953,52 @@ impl ApiClient {
             .bearer_auth(token)
             .query(query);
         authed(read_empty(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/entities/{key}/form-layout`。
+    pub async fn get_form_layout(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+    ) -> Result<FormLayout, ClientError> {
+        let builder = self
+            .http
+            .get(entity_endpoint(server_url, key, None, "/form-layout")?)
+            .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `PUT /api/v1/entities/{key}/form-layout`。
+    pub async fn save_form_layout(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        req: &SaveFormLayoutRequest,
+    ) -> Result<FormLayout, ClientError> {
+        let builder = self
+            .http
+            .put(entity_endpoint(server_url, key, None, "/form-layout")?)
+            .bearer_auth(token)
+            .json(req);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `DELETE /api/v1/entities/{key}/form-layout?version=N`（還原成預設）。
+    pub async fn reset_form_layout(
+        &self,
+        server_url: &str,
+        token: &str,
+        key: &str,
+        query: &DeleteFormLayoutQuery,
+    ) -> Result<FormLayout, ClientError> {
+        let builder = self
+            .http
+            .delete(entity_endpoint(server_url, key, None, "/form-layout")?)
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
     }
 
     /// `GET /api/v1/entities/{key}/records/lookup?q=&limit=`（關聯欄位的選擇器搜尋）。
