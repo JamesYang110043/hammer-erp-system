@@ -91,6 +91,43 @@ React 介面 ──invoke──▶ Tauri command (Rust) ──reqwest──▶ A
 - 登入 token 只留在 Rust 端，不傳給前端；鑰匙圈以伺服器網址區分，切換伺服器時各自保留登入狀態。需要登入的請求收到 `401` 時，Rust 端清除 token 並回傳 `sessionExpired` 錯誤，前端回到登入頁。
 - Rust 型別用 `tauri-specta` 自動產生 TypeScript 型別，確保前後端欄位一致。
 
+### 3.4 視覺設計
+
+M9 定案（#229，三套方案比較後選定深藍）。設定集中在 `apps/desktop/src/theme.ts`，以 antd `ConfigProvider theme` 套用；`main.tsx` 與測試的 `render.tsx` 共用同一份。
+
+**色彩**
+
+| 用途 | token／常數 | 值 |
+|---|---|---|
+| 品牌主色 | `colorPrimary`、`colorInfo`、`colorLink` | `#1F4E8C`（深藍）；hover、active、淺底等色階由 antd 色彩演算法推導 |
+| 成功 | `colorSuccess` | `#2E9D5B` |
+| 警告 | `colorWarning` | `#D98A0B` |
+| 錯誤 | `colorError` | `#D64545` |
+| 內容區底色 | `colorBgLayout` | `#F3F5F8`（卡片白底，靠底色做出層次） |
+| 表頭、預設標籤底色 | `SEMANTIC_COLORS.tableHeaderBg` | `#F5F7FA` |
+| 中性灰階 | antd 預設 | 文字、邊框、分隔線沿用 antd 的中性色 token（`colorText`、`colorBorder`、`colorSplit`…） |
+| 側邊欄底色 | `BRAND_COLORS.siderBg` | `#12233D`；展開的子選單 `#0C1A2F` |
+| 側邊欄文字 | `BRAND_COLORS.siderText`／`siderItemText`／`siderMutedText` | `#E6ECF5`（標題、hover）／`#B1BAC7`（選單項目）／`#8792A2`（區塊標題等次要文字） |
+| 側邊欄選中項目 | Menu `darkItemSelectedBg` | 主色底、白字 |
+
+**其他 token**
+
+| 項目 | 值 |
+|---|---|
+| 控制項高度 | `controlHeight` 36（按鈕、輸入框、下拉選單同高；small 27、large 45）；選單項目高 40 |
+| 圓角 | `borderRadius` 6、`borderRadiusLG` 8（卡片、Modal） |
+| 陰影 | 卡片等淡陰影 `boxShadowTertiary`；浮層沿用 antd 的 `boxShadow`、`boxShadowSecondary` |
+| 間距 | 沿用 antd 的間距 token（`padding`、`margin` 系列，基準 4／8／16／24）；內容區留白 24 |
+| 字型 | `-apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", "Segoe UI", sans-serif` |
+| 數字 | 全站 `font-variant-numeric: tabular-nums`（`styles.css`），金額、數量上下對齊 |
+| 按鈕 | 不使用 antd 預設的按鈕陰影 |
+
+**規則**
+
+- 元件不寫死色碼：antd 元件用 token（`theme.useToken()`），側邊欄等 antd 沒有對應 token 的區域用 `theme.ts` 匯出的 `BRAND_COLORS`、`SEMANTIC_COLORS`。
+- 文字與背景的對比 ≥ 4.5:1（側邊欄的顏色由 `theme.test.ts` 檢查）。
+- 桌面程式預設視窗 1280 × 800、最小 1024 × 640（`tauri.conf.json`），版面以這兩個尺寸為準。
+
 ---
 
 ## 4. 專案結構

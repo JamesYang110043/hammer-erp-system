@@ -34,6 +34,7 @@ import { INVOICING_GROUP_LABEL, invoicingEntities } from '../records/invoicing';
 import { PURCHASING_GROUP_LABEL, purchasingEntities } from '../records/purchasing';
 import { SALES_GROUP_LABEL, salesEntities } from '../records/sales';
 import { MASTER_DATA_LABEL } from '../schema/entities';
+import { BRAND_COLORS } from '../theme';
 import { loadOpenKeys, saveOpenKeys, sectionOf, withSectionOpen } from './navSections';
 import type { NavSection } from './navSections';
 
@@ -159,11 +160,11 @@ export function AppLayout() {
 
   return (
     <Layout style={{ height: '100vh' }}>
-      <Sider width={200} theme="light" style={{ borderRight: `1px solid ${token.colorSplit}` }}>
+      <Sider width={200} theme="dark">
         {/* 標題固定在上方，只有選單捲動；overscroll-behavior 讓捲到底時不帶動右側內容 */}
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div style={{ padding: '16px 24px', flexShrink: 0 }}>
-            <Typography.Title level={4} style={{ margin: 0 }}>
+            <Typography.Title level={4} style={{ margin: 0, color: BRAND_COLORS.siderText }}>
               Hammer ERP
             </Typography.Title>
           </div>
@@ -173,6 +174,7 @@ export function AppLayout() {
             style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain' }}
           >
             <Menu
+              theme="dark"
               mode="inline"
               selectedKeys={[selected]}
               openKeys={[...openKeys]}
