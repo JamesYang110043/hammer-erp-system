@@ -1,19 +1,41 @@
 import {
   ApiOutlined,
+  AppstoreOutlined,
+  ContainerOutlined,
   DownOutlined,
+  FileTextOutlined,
+  FolderOutlined,
   KeyOutlined,
   LogoutOutlined,
-  UserOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  ProfileOutlined,
+  ShopOutlined,
+  ShoppingCartOutlined,
 } from '@ant-design/icons';
-import { App, Button, Dropdown, Layout, Menu, Modal, Space, Typography, theme } from 'antd';
-import type { MenuProps } from 'antd';
+import {
+  App,
+  Avatar,
+  Breadcrumb,
+  Button,
+  Dropdown,
+  Layout,
+  Menu,
+  Modal,
+  Space,
+  Tooltip,
+  theme,
+} from 'antd';
+import type { BreadcrumbProps, MenuProps } from 'antd';
 import { useEffect, useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router';
+import type { CSSProperties, ReactNode } from 'react';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 
 import { errorMessage } from '../api/client';
 import { useEntities } from '../api/schema';
 import { useCurrentUser, usePermissions } from '../auth/permission';
 import { useLogout } from '../auth/session';
+import { BrandLogo } from '../components/BrandLogo';
 import { ChangePasswordForm } from '../components/ChangePasswordForm';
 import { StatusBar } from '../components/StatusBar';
 import { PERMISSIONS } from '../bindings';
@@ -29,18 +51,41 @@ import {
 } from '../modules';
 import { INVENTORY_MODULES } from '../inventoryModules';
 import { entityIcon } from '../pages/schema/entityIcons';
-import { INVENTORY_GROUP_LABEL, inventoryEntities } from '../records/inventory';
+import { INVENTORY_GROUP_LABEL, STOCK_PATH, inventoryEntities } from '../records/inventory';
 import { INVOICING_GROUP_LABEL, invoicingEntities } from '../records/invoicing';
 import { PURCHASING_GROUP_LABEL, purchasingEntities } from '../records/purchasing';
 import { SALES_GROUP_LABEL, salesEntities } from '../records/sales';
 import { MASTER_DATA_LABEL } from '../schema/entities';
 import { BRAND_COLORS } from '../theme';
-import { loadOpenKeys, saveOpenKeys, sectionOf, withSectionOpen } from './navSections';
-import type { NavSection } from './navSections';
+import {
+  loadCollapsed,
+  loadOpenKeys,
+  navTrail,
+  saveCollapsed,
+  saveOpenKeys,
+  sectionOf,
+  withSectionOpen,
+} from './navSections';
+import type { NavNode, NavSection } from './navSections';
 
 const { Header, Sider, Content, Footer } = Layout;
 
 type MenuItem = NonNullable<MenuProps['items']>[number];
+
+/** 側邊欄寬度（展開／收合）。 */
+const SIDER_WIDTH = 216;
+const SIDER_COLLAPSED_WIDTH = 64;
+
+/** 選單項目轉成麵包屑用的結構（只取文字標籤的項目）。 */
+function toNavNodes(items: readonly MenuItem[]): NavNode[] {
+  return items.flatMap((item): NavNode[] => {
+    if (!item || !('label' in item) || typeof item.label !== 'string') {
+      return [];
+    }
+    const children = 'children' in item && item.children ? toNavNodes(item.children) : undefined;
+    return [{ key: String(item.key), label: item.label, children }];
+  });
+}
 
 /** 主畫面框架：左側模組選單、上方標題列（連線設定、使用者選單）、中間內容、底部狀態列。 */
 export function AppLayout() {
@@ -52,6 +97,9 @@ export function AppLayout() {
   const can = usePermissions();
   const logout = useLogout();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  // 側邊欄收合狀態記在本機，重新開啟程式後維持
+  const [collapsed, setCollapsed] = useState(loadCollapsed);
+  useEffect(() => saveCollapsed(collapsed), [collapsed]);
 
   // 資料類別選單需要 `record.read`；新增或修改資料類別後（invalidate `entities`）自動更新
   const canReadRecords = can(PERMISSIONS.RECORD_READ);
@@ -63,34 +111,57 @@ export function AppLayout() {
   });
   // 可收折的區塊（子選單）；沒有任何項目（例如沒有權限）的區塊不顯示
   const sections: NavSection[] = [];
-  const section = (key: string, label: string, children: MenuItem[]): MenuItem | null => {
+  // 區塊標題平常只顯示文字（較小字級、次要色）；側邊欄收合時改顯示圖示
+  const section = (
+    key: string,
+    label: string,
+    icon: ReactNode,
+    children: MenuItem[],
+  ): MenuItem | null => {
     if (children.length === 0) {
       return null;
     }
     sections.push({ key, itemKeys: children.map((c) => String(c?.key)) });
-    return { key, label, children };
+    return { key, label, children, icon: collapsed ? icon : undefined, className: 'nav-section' };
   };
-  const divider = (key: string): MenuItem => ({ type: 'divider', key });
+  const divider = (key: string): MenuItem => ({
+    type: 'divider',
+    key,
+    style: { borderColor: BRAND_COLORS.siderDivider },
+  });
   /** 區塊後面接一條分隔線；區塊不顯示時兩者都不顯示。 */
-  const sectionWithDivider = (key: string, label: string, children: MenuItem[]): MenuItem[] => {
-    const item = section(key, label, children);
+  const sectionWithDivider = (
+    key: string,
+    label: string,
+    icon: ReactNode,
+    children: MenuItem[],
+  ): MenuItem[] => {
+    const item = section(key, label, icon, children);
     return item ? [item, divider(`${key}-divider`)] : [];
   };
 
   // 系統主檔（商品、客戶、廠商…）與幣別、匯率放在選單最上方
-  const masterDataItems = sectionWithDivider(`${ENTITIES_PATH}-system`, MASTER_DATA_LABEL, [
-    ...(canReadRecords ? masterDataEntities(entities.data ?? []) : []).map(entityItem),
-    ...MASTER_DATA_MODULES.filter((m) => !m.permission || can(m.permission)).map((m): MenuItem => ({
-      key: m.path,
-      icon: m.icon,
-      label: m.label,
-    })),
-  ]);
+  const masterDataItems = sectionWithDivider(
+    `${ENTITIES_PATH}-system`,
+    MASTER_DATA_LABEL,
+    <AppstoreOutlined />,
+    [
+      ...(canReadRecords ? masterDataEntities(entities.data ?? []) : []).map(entityItem),
+      ...MASTER_DATA_MODULES.filter((m) => !m.permission || can(m.permission)).map(
+        (m): MenuItem => ({
+          key: m.path,
+          icon: m.icon,
+          label: m.label,
+        }),
+      ),
+    ],
+  );
 
   // 進貨：採購單、進貨單（docs/architecture.md §8.8）
   const purchasingItems = sectionWithDivider(
     'purchasing-group',
     PURCHASING_GROUP_LABEL,
+    <ShoppingCartOutlined />,
     (canReadRecords ? purchasingEntities(entities.data ?? []) : []).map(entityItem),
   );
 
@@ -98,6 +169,7 @@ export function AppLayout() {
   const salesItems = sectionWithDivider(
     'sales-group',
     SALES_GROUP_LABEL,
+    <ShopOutlined />,
     (canReadRecords ? salesEntities(entities.data ?? []) : []).map(entityItem),
   );
 
@@ -105,23 +177,34 @@ export function AppLayout() {
   const invoicingItems = sectionWithDivider(
     'invoicing-group',
     INVOICING_GROUP_LABEL,
+    <FileTextOutlined />,
     (canReadRecords ? invoicingEntities(entities.data ?? []) : []).map(entityItem),
   );
 
   // 庫存：盤點調整單與庫存查詢（docs/architecture.md §8.10）
-  const inventoryItems = sectionWithDivider('inventory-group', INVENTORY_GROUP_LABEL, [
-    ...(canReadRecords ? inventoryEntities(entities.data ?? []) : []).map(entityItem),
-    ...INVENTORY_MODULES.filter((m) => !m.permission || can(m.permission)).map((m): MenuItem => ({
-      key: m.path,
-      icon: m.icon,
-      label: m.label,
-    })),
-  ]);
+  const inventoryItems = sectionWithDivider(
+    'inventory-group',
+    INVENTORY_GROUP_LABEL,
+    <ContainerOutlined />,
+    [
+      ...(canReadRecords ? inventoryEntities(entities.data ?? []) : []).map(entityItem),
+      ...INVENTORY_MODULES.filter((m) => !m.permission || can(m.permission)).map((m): MenuItem => ({
+        key: m.path,
+        icon: m.icon,
+        label: m.label,
+      })),
+    ],
+  );
 
   // 自訂資料類別依種類分組（主檔、單據），組內依選單排序
   const entityItems: MenuItem[] = canReadRecords
     ? menuEntityGroups(entities.data ?? []).flatMap((g) => {
-        const item = section(`${ENTITIES_PATH}-${g.kind}`, g.label, g.entities.map(entityItem));
+        const item = section(
+          `${ENTITIES_PATH}-${g.kind}`,
+          g.label,
+          g.kind === 'master' ? <FolderOutlined /> : <ProfileOutlined />,
+          g.entities.map(entityItem),
+        );
         return item ? [item] : [];
       })
     : [];
@@ -158,30 +241,88 @@ export function AppLayout() {
   }
   useEffect(() => saveOpenKeys(openKeys), [openKeys]);
 
+  // 麵包屑：區塊 › 頁面（› 下一層，例如資料類別的欄位設定、單據明細）
+  const pageTrail = navTrail(toNavNodes(menuItems), selected);
+  const third = location.pathname.split('/')[3];
+  const subPage = (() => {
+    if (!second || (first === ENTITIES_PATH && !third)) {
+      return [];
+    }
+    if (first === ENTITIES_PATH) {
+      return [third === 'new' ? '新增' : '明細'];
+    }
+    if (first === 'schema') {
+      const label = entities.data?.find((e) => e.key === second)?.label ?? second;
+      return third === 'form-layout' ? [label, '表單版面'] : [label];
+    }
+    if (first === STOCK_PATH) {
+      return ['商品庫存'];
+    }
+    return [];
+  })();
+  const trail =
+    pageTrail.length === 0 && first === CONNECTION_SETTINGS_PATH ? ['連線設定'] : pageTrail;
+  const breadcrumbItems: BreadcrumbProps['items'] = [
+    ...trail.map((title, i) => ({
+      key: `page-${i}`,
+      // 有下一層時，頁面名稱可以點回列表
+      title:
+        i === trail.length - 1 && subPage.length > 0 ? (
+          <Link to={`/${selected}`}>{title}</Link>
+        ) : (
+          title
+        ),
+    })),
+    ...subPage.map((title, i) => ({ key: `sub-${i}`, title })),
+  ];
+
+  const navStyle = {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
+    '--nav-section-color': BRAND_COLORS.siderMutedText,
+    '--nav-section-hover-color': BRAND_COLORS.siderText,
+  } as CSSProperties;
+
+  const userName = user?.display_name ?? '';
+
   return (
     <Layout style={{ height: '100vh' }}>
-      <Sider width={200} theme="dark">
-        {/* 標題固定在上方，只有選單捲動；overscroll-behavior 讓捲到底時不帶動右側內容 */}
+      <Sider
+        width={SIDER_WIDTH}
+        collapsedWidth={SIDER_COLLAPSED_WIDTH}
+        collapsible
+        collapsed={collapsed}
+        trigger={null}
+        theme="dark"
+      >
+        {/* Logo 固定在上方，只有選單捲動；overscroll-behavior 讓捲到底時不帶動右側內容 */}
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-          <div style={{ padding: '16px 24px', flexShrink: 0 }}>
-            <Typography.Title level={4} style={{ margin: 0, color: BRAND_COLORS.siderText }}>
-              Hammer ERP
-            </Typography.Title>
-          </div>
-          <nav
-            aria-label="主選單"
-            data-testid="app-nav"
-            style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain' }}
+          <div
+            data-testid="app-logo"
+            style={{
+              height: 64,
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: collapsed ? 'center' : 'flex-start',
+              paddingInline: collapsed ? 0 : 20,
+              borderBottom: `1px solid ${BRAND_COLORS.siderDivider}`,
+            }}
           >
+            <BrandLogo color={BRAND_COLORS.siderText} collapsed={collapsed} />
+          </div>
+          <nav aria-label="主選單" data-testid="app-nav" className="app-nav" style={navStyle}>
             <Menu
               theme="dark"
               mode="inline"
               selectedKeys={[selected]}
-              openKeys={[...openKeys]}
-              onOpenChange={setOpenKeys}
+              // 收合時子選單改為浮出，展開狀態交給 antd（不影響展開時記住的區塊）
+              {...(collapsed ? {} : { openKeys: [...openKeys], onOpenChange: setOpenKeys })}
               items={menuItems}
               onClick={({ key }) => navigate(`/${key}`)}
-              style={{ borderInlineEnd: 'none' }}
+              style={{ borderInlineEnd: 'none', paddingBlock: 8 }}
             />
           </nav>
         </div>
@@ -192,11 +333,27 @@ export function AppLayout() {
             background: token.colorBgContainer,
             borderBottom: `1px solid ${token.colorSplit}`,
             display: 'flex',
-            justifyContent: 'flex-end',
+            justifyContent: 'space-between',
             alignItems: 'center',
-            paddingInline: 24,
+            gap: 16,
+            paddingInline: '12px 24px',
+            height: 56,
+            lineHeight: '56px',
           }}
         >
+          <Space size={8} style={{ minWidth: 0 }}>
+            <Tooltip title={collapsed ? '展開側邊欄' : '收合側邊欄'}>
+              <Button
+                type="text"
+                aria-label={collapsed ? '展開側邊欄' : '收合側邊欄'}
+                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                onClick={() => setCollapsed((c) => !c)}
+              />
+            </Tooltip>
+            <nav aria-label="目前位置" data-testid="app-breadcrumb">
+              <Breadcrumb items={breadcrumbItems} />
+            </nav>
+          </Space>
           <Space>
             <Button
               type={selected === CONNECTION_SETTINGS_PATH ? 'primary' : 'text'}
@@ -224,10 +381,17 @@ export function AppLayout() {
                 },
               }}
             >
-              <Button type="text" icon={<UserOutlined />} loading={logout.isPending}>
-                <Space size={4}>
-                  {user?.display_name}
-                  <DownOutlined />
+              <Button type="text" loading={logout.isPending} style={{ paddingInline: 8 }}>
+                <Space size={8}>
+                  <Avatar
+                    size={28}
+                    aria-hidden
+                    style={{ background: token.colorPrimary, fontSize: token.fontSize }}
+                  >
+                    {userName.slice(0, 1)}
+                  </Avatar>
+                  {userName}
+                  <DownOutlined style={{ fontSize: 10, color: token.colorTextTertiary }} />
                 </Space>
               </Button>
             </Dropdown>

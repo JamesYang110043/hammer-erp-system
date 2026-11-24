@@ -47,3 +47,48 @@ export function saveOpenKeys(openKeys: readonly string[]) {
     // 忽略
   }
 }
+
+/** 側邊欄收合狀態的 localStorage key。 */
+export const NAV_COLLAPSED_STORAGE_KEY = 'hammer.nav.collapsed';
+
+/** 上次的側邊欄收合狀態；沒有存過或無法存取 localStorage 時為展開（`false`）。 */
+export function loadCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(NAV_COLLAPSED_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/** 儲存側邊欄收合狀態；無法寫入時忽略。 */
+export function saveCollapsed(collapsed: boolean) {
+  try {
+    window.localStorage.setItem(NAV_COLLAPSED_STORAGE_KEY, String(collapsed));
+  } catch {
+    // 忽略
+  }
+}
+
+/** 選單項目（只取麵包屑需要的部分）。 */
+export interface NavNode {
+  key: string;
+  label: string;
+  children?: readonly NavNode[];
+}
+
+/**
+ * `selectedKey` 在選單中的位置：區塊內的項目為 `[區塊, 項目]`，最上層的項目為 `[項目]`；
+ * 不在選單中時為空清單。
+ */
+export function navTrail(nodes: readonly NavNode[], selectedKey: string): string[] {
+  for (const node of nodes) {
+    if (node.key === selectedKey) {
+      return [node.label];
+    }
+    const child = node.children?.find((c) => c.key === selectedKey);
+    if (child) {
+      return [node.label, child.label];
+    }
+  }
+  return [];
+}

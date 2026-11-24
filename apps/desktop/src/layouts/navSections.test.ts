@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  NAV_COLLAPSED_STORAGE_KEY,
   NAV_OPEN_KEYS_STORAGE_KEY,
+  loadCollapsed,
   loadOpenKeys,
+  navTrail,
+  saveCollapsed,
   saveOpenKeys,
   sectionOf,
   withSectionOpen,
@@ -55,5 +59,46 @@ describe('loadOpenKeys / saveOpenKeys', () => {
   it('drops_non_string_entries', () => {
     window.localStorage.setItem(NAV_OPEN_KEYS_STORAGE_KEY, '["master", 1, null]');
     expect(loadOpenKeys()).toEqual(['master']);
+  });
+});
+
+describe('loadCollapsed / saveCollapsed', () => {
+  it('round_trips', () => {
+    saveCollapsed(true);
+    expect(window.localStorage.getItem(NAV_COLLAPSED_STORAGE_KEY)).toBe('true');
+    expect(loadCollapsed()).toBe(true);
+    saveCollapsed(false);
+    expect(loadCollapsed()).toBe(false);
+  });
+
+  it('expanded_when_nothing_saved', () => {
+    window.localStorage.removeItem(NAV_COLLAPSED_STORAGE_KEY);
+    expect(loadCollapsed()).toBe(false);
+  });
+});
+
+describe('navTrail', () => {
+  const NODES = [
+    {
+      key: 'master',
+      label: '基本資料',
+      children: [
+        { key: 'entities/customer', label: '客戶' },
+        { key: 'exchange-rates', label: '匯率' },
+      ],
+    },
+    { key: 'users', label: '帳號管理' },
+  ];
+
+  it('returns_section_and_item', () => {
+    expect(navTrail(NODES, 'entities/customer')).toEqual(['基本資料', '客戶']);
+  });
+
+  it('returns_top_level_item_alone', () => {
+    expect(navTrail(NODES, 'users')).toEqual(['帳號管理']);
+  });
+
+  it('is_empty_outside_the_menu', () => {
+    expect(navTrail(NODES, 'connection')).toEqual([]);
   });
 });

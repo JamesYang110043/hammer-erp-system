@@ -109,6 +109,7 @@ M9 定案（#229，三套方案比較後選定深藍）。設定集中在 `apps/
 | 側邊欄底色 | `BRAND_COLORS.siderBg` | `#12233D`；展開的子選單 `#0C1A2F` |
 | 側邊欄文字 | `BRAND_COLORS.siderText`／`siderItemText`／`siderMutedText` | `#E6ECF5`（標題、hover）／`#B1BAC7`（選單項目）／`#8792A2`（區塊標題等次要文字） |
 | 側邊欄選中項目 | Menu `darkItemSelectedBg` | 主色底、白字 |
+| 側邊欄分隔線 | `BRAND_COLORS.siderDivider` | `rgba(255, 255, 255, 0.08)`（Logo 下方、區塊之間） |
 
 **其他 token**
 
@@ -121,6 +122,14 @@ M9 定案（#229，三套方案比較後選定深藍）。設定集中在 `apps/
 | 字型 | `-apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", "Segoe UI", sans-serif` |
 | 數字 | 全站 `font-variant-numeric: tabular-nums`（`styles.css`），金額、數量上下對齊 |
 | 按鈕 | 不使用 antd 預設的按鈕陰影 |
+
+**主框架**（`layouts/AppLayout.tsx`，#230）
+
+- 側邊欄寬 216、收合後 64（只顯示圖示，滑過顯示名稱；區塊改為浮出選單）；收合狀態存在 localStorage `hammer.nav.collapsed`
+- Logo（`components/BrandLogo.tsx`）：桌面程式圖示＋產品名稱，主畫面側邊欄與登入前畫面的標題列共用
+- 區塊標題（基本資料、進貨…）用 12px、`siderMutedText`；選單項目用 `siderItemText`
+- 標題列：左側收合按鈕與麵包屑（區塊 › 頁面 › 下一層），右側連線設定與使用者選單（Avatar 顯示名稱首字）
+- 卡片預設不加框線、改用 `boxShadowTertiary` 淡陰影（`theme.ts` 的 `appComponentConfig`），在 `colorBgLayout` 底色上做出層次
 
 **規則**
 

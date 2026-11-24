@@ -100,3 +100,17 @@ body,
 body {
   font-variant-numeric: tabular-nums;
 }
+
+/*
+ * 側邊欄區塊標題（基本資料、進貨…）：較小字級、次要色，與選單項目區隔
+ * （顏色由 AppLayout 依 theme.ts 的 BRAND_COLORS 以 CSS 變數傳入）
+ */
+.app-nav .ant-menu-inline > .nav-section > .ant-menu-submenu-title {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--nav-section-color);
+}
+
+.app-nav .ant-menu-inline > .nav-section > .ant-menu-submenu-title:hover {
+  color: var(--nav-section-hover-color);
+}
