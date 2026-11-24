@@ -374,7 +374,7 @@ describe('客戶聯絡人', () => {
   }
 
   it('primary_contact_is_single_choice_and_saves_with_customer', async () => {
-    const invoke = renderAt(`#/entities/customer/${ID}`, {
+    const invoke = renderAt(`#/entities/customer?selected=${ID}&mode=edit`, {
       get_record: customer,
       update_record: () => customer(),
     });
@@ -417,7 +417,7 @@ describe('客戶聯絡人', () => {
   });
 
   it('clicking_checked_primary_clears_it', async () => {
-    renderAt(`#/entities/customer/${ID}`, { get_record: customer });
+    renderAt(`#/entities/customer?selected=${ID}&mode=edit`, { get_record: customer });
     const user = userEvent.setup();
     await screen.findByRole('textbox', { name: '公司名稱' }, { timeout: PAGE_LOAD_TIMEOUT });
 
@@ -430,7 +430,7 @@ describe('客戶聯絡人', () => {
 
 describe('廠商預設幣別', () => {
   it('currency_select_lists_active_currencies_only', async () => {
-    const invoke = renderAt(`#/entities/supplier/${ID}`, {
+    const invoke = renderAt(`#/entities/supplier?selected=${ID}&mode=edit`, {
       get_record: () => record({ code: 'S001', name: '東京商事', default_currency_code: 'JPY' }),
       update_record: () => record({ code: 'S001', name: '東京商事' }, { version: 4 }),
     });

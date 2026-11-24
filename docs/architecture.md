@@ -1265,6 +1265,15 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 - 上方「編號＋名稱」標題（`record.title`），以及「編輯」「刪除」按鈕：只有 `record.write` 顯示；刪除後清除選取並重新取得左側列表
 - 網址帶的 id 已刪除或不存在（`404 NOT_FOUND`）時顯示「找不到資料」
 
+**在右側編輯與新增**（#244）
+
+- 按「編輯」（`?selected=<id>&mode=edit`）或頁首的「新增」（`?mode=new`）後，右側直接切換成表單（`RecordFormPanel`，與全頁表單共用 `RecordForm`），左側列表仍然可見；「取消」回到預覽
+- 存檔成功：編輯回到預覽，新增則選取新的那筆；左側列表重新取得
+- 有未存檔的修改時，點左側其他資料（含上下鍵）、輸入搜尋、按「新增」、按「取消」、換到其他頁都會先確認（「有未存檔的修改」：離開／留下）；關閉視窗或重新整理時由瀏覽器提示。離開提醒集中在 `useUnsavedGuard`（全頁表單與分割檢視共用，一個畫面只有一個）
+- 衝突處理、公式預覽、驗證錯誤時自動展開區塊與全頁表單相同
+- 舊網址導向分割畫面：`/entities/customer/:id`（廠商相同）→ `?selected=<id>`；`/entities/customer/new` → `?mode=new`
+- 沒有 `record.write` 時忽略 `mode`，只顯示預覽
+
 ---
 
 ### 8.8 進貨模組

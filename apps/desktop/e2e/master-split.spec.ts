@@ -16,6 +16,7 @@ import {
   customerId,
   fakeListRecords,
   manyCustomers,
+  partyRecord,
 } from '../src/test/masterSplitFixtures';
 import { CommandRejection, mockTauri } from './tauri-mock';
 
@@ -28,6 +29,7 @@ const ADMIN = {
   must_change_password: false,
 };
 
+const NEW_ID = '0196f5a0-0000-7000-8000-00000000beef';
 const ENTITIES = [PRODUCT, CUSTOMER, CUSTOMER_CONTACT, SUPPLIER];
 const FIELDS: Record<string, unknown> = {
   customer: CUSTOMER_FIELDS,
@@ -90,6 +92,28 @@ async function setup(page: Page, user: typeof ADMIN = ADMIN) {
       customers = customers.filter((c) => c.id !== id);
       return null;
     },
+    update_record: ({ id, req }) => {
+      const { data } = req as { data: Record<string, unknown> };
+      customers = customers.map((c) => {
+        if (c.id !== id) {
+          return c;
+        }
+        const merged = { ...c.data, ...data };
+        return {
+          ...c,
+          data: merged,
+          title: `${String(merged.code)} ${String(merged.name)}`,
+          version: c.version + 1,
+        };
+      });
+      return customerDetail(customers, id as string);
+    },
+    create_record: ({ req }) => {
+      const { data } = req as { data: Record<string, unknown> };
+      customers = [...customers, partyRecord(NEW_ID, data)];
+      return customerDetail(customers, NEW_ID);
+    },
+    list_currencies: () => [],
   });
 }
 
@@ -213,4 +237,77 @@ test('customer preview: viewer is read only, missing record shows not found', as
 
   await page.goto('/#/entities/customer?selected=0196f5a0-0000-7000-8000-00000000dead');
   await expect(page.getByText('找不到資料')).toBeVisible();
+});
+
+test('customer edit and new on the right side', async ({ page }) => {
+  await setup(page);
+  await page.goto(`/#/entities/customer?selected=${customerId(1)}`);
+  const list = listbox(page);
+  const preview = page.getByTestId('record-preview');
+  await preview.getByRole('button', { name: /編\s*輯/ }).click();
+
+  const panel = page.getByTestId('record-form-panel');
+  await expect(panel.getByText('編輯：C001 大華實業股份有限公司')).toBeVisible();
+  // 編輯時左側列表仍然看得到
+  await expect(list).toBeVisible();
+  const name = panel.getByRole('textbox', { name: '公司名稱' });
+  await name.fill('大華科技股份有限公司');
+  await expect(panel.getByText('未存檔')).toBeVisible();
+
+  // 未存檔時點其他資料：留下
+  await list.getByRole('option', { name: /C002/ }).click();
+  const confirm = page.getByRole('dialog').filter({ hasText: '有未存檔的修改' });
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: /留\s*下/ }).click();
+  await expect(name).toHaveValue('大華科技股份有限公司');
+
+  // 換頁（左側選單）：留下
+  await page
+    .getByRole('navigation', { name: '主選單' })
+    .getByRole('menuitem', { name: /商品/ })
+    .click();
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: /留\s*下/ }).click();
+  await expect(page).toHaveURL(/entities\/customer/);
+
+  await panel.getByRole('button', { name: /儲\s*存/ }).click();
+  await expect(preview.getByTestId('preview-title')).toHaveText('C001 大華科技股份有限公司');
+  await expect(list.getByRole('option', { name: /C001/ })).toContainText('大華科技股份有限公司');
+
+  // 新增
+  await page
+    .getByTestId('page-header')
+    .getByRole('button', { name: /新\s*增/ })
+    .click();
+  await expect(panel.getByRole('heading', { name: '新增客戶' })).toBeVisible();
+  await panel.getByRole('textbox', { name: '客戶編號' }).fill('C000');
+  await panel.getByRole('textbox', { name: '公司名稱' }).fill('新開發客戶');
+  await panel.getByRole('button', { name: /儲\s*存/ }).click();
+  await expect(preview.getByTestId('preview-title')).toHaveText('C000 新開發客戶');
+  await expect(page).toHaveURL(new RegExp(`selected=${NEW_ID}`));
+  await expect(list.getByRole('option').first()).toContainText('C000新開發客戶');
+  await expect(list.getByRole('option').first()).toHaveAttribute('aria-selected', 'true');
+});
+
+test('customer edit form screenshot with contacts', async ({ page }) => {
+  await setup(page);
+  await page.goto(`/#/entities/customer?selected=${customerId(1)}&mode=edit`);
+  const panel = page.getByTestId('record-form-panel');
+  await expect(panel.getByRole('textbox', { name: '公司名稱' })).toHaveValue(
+    '大華實業股份有限公司',
+  );
+  await expect(panel.getByRole('region', { name: '客戶聯絡人' })).toBeVisible();
+});
+
+test('old customer urls redirect to the split view', async ({ page }) => {
+  await setup(page);
+  await page.goto(`/#/entities/customer/${customerId(2)}`);
+  await expect(page.getByTestId('preview-title')).toHaveText('C002 光明電子有限公司');
+  await expect(page).toHaveURL(new RegExp(`#/entities/customer\\?selected=${customerId(2)}$`));
+
+  await page.goto('/#/entities/customer/new');
+  await expect(
+    page.getByTestId('record-form-panel').getByRole('heading', { name: '新增客戶' }),
+  ).toBeVisible();
+  await expect(listbox(page)).toBeVisible();
 });
