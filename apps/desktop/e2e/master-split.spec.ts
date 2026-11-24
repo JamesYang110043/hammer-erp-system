@@ -64,8 +64,9 @@ async function setup(page: Page, user: typeof ADMIN = ADMIN) {
       source: 'generated',
       layout: null,
       config: {
-        columns: (key === 'product' ? ['code', 'name'] : []).map((k) => ({
-          field_key: k,
+        // 與「依欄位定義」相同，不會顯示「未儲存的變更」
+        columns: ((FIELDS[key as string] ?? []) as { field_key: string }[]).map((f) => ({
+          field_key: f.field_key,
           width: null,
         })),
         sort: null,
@@ -310,4 +311,42 @@ test('old customer urls redirect to the split view', async ({ page }) => {
     page.getByTestId('record-form-panel').getByRole('heading', { name: '新增客戶' }),
   ).toBeVisible();
   await expect(listbox(page)).toBeVisible();
+});
+
+test('customer view toggle: table is remembered, row click opens split', async ({ page }) => {
+  await setup(page);
+  await page.goto('/#/entities/customer');
+  await expect(listbox(page).getByRole('option').first()).toContainText('C001');
+
+  await page.getByRole('radiogroup', { name: '檢視方式' }).getByText('表格').click();
+  await expect(page.getByRole('columnheader', { name: '客戶編號' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /欄位設定/ })).toBeVisible();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+
+  // 重新開啟頁面：記得表格
+  await page.reload();
+  await expect(page.getByRole('columnheader', { name: '客戶編號' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'C002' })).toBeVisible();
+
+  // 點一列：切回分割檢視並選取
+  await page.getByRole('cell', { name: 'C002' }).click();
+  await expect(page.getByTestId('preview-title')).toHaveText('C002 光明電子有限公司');
+  await expect(listbox(page).getByRole('option', { name: /C002/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.reload();
+  await expect(listbox(page)).toBeVisible();
+});
+
+test('customer table view keeps the toggle in the header', async ({ page }) => {
+  await setup(page);
+  await page.addInitScript(() =>
+    window.localStorage.setItem('hammer.recordView.customer', 'table'),
+  );
+  await page.goto('/#/entities/customer');
+  await expect(page.getByRole('cell', { name: 'C001' })).toBeVisible();
+  const toggle = page.getByTestId('page-header').getByRole('radiogroup', { name: '檢視方式' });
+  await expect(toggle).toBeVisible();
+  await expect(toggle.getByRole('radio', { name: /表格/ })).toBeChecked();
 });

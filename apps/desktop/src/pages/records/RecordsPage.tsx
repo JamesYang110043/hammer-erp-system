@@ -8,7 +8,8 @@ import {
 import { Alert, App, Button, Popconfirm, Select, Space, Table } from 'antd';
 import type { TableColumnsType, TableProps } from 'antd';
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import type { ReactNode } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 
 import { StatusTag } from '../../components/StatusTag';
 import { EmptyState } from '../../components/EmptyState';
@@ -56,11 +57,19 @@ import {
   sortFromTable,
 } from '../../records/query';
 import { entityIcon } from '../schema/entityIcons';
-import { usesSplitView } from '../../records/masterSplit';
+import {
+  MODE_PARAM,
+  SELECTED_PARAM,
+  loadRecordView,
+  saveRecordView,
+  usesSplitView,
+} from '../../records/masterSplit';
+import type { RecordView, SplitMode } from '../../records/masterSplit';
 import { ColumnSettingsModal } from './ColumnSettingsModal';
 import { FieldValue } from './FieldValue';
 import { FilterPanel } from './FilterPanel';
 import { MasterSplitView } from './MasterSplitView';
+import { RecordViewToggle } from './RecordViewToggle';
 import { DocumentStatusTag } from './DocumentStatusTag';
 import { SaveLayoutModal } from './SaveLayoutModal';
 
@@ -83,10 +92,13 @@ function RecordList({
   entity,
   fields,
   initial,
+  split,
 }: {
   entity: EntityDefinition;
   fields: FieldDefinition[];
   initial: DefaultViewLayout;
+  /** 可以切換到分割檢視的資料類別（§8.7）：點列、新增都在分割檢視中進行。 */
+  split?: { open: (id: string) => void; create: () => void; switchToSplit: () => void };
 }) {
   const entityKey = entity.key;
   const navigate = useNavigate();
@@ -254,6 +266,7 @@ function RecordList({
       title={entity.label}
       actions={
         <Space>
+          {split && <RecordViewToggle value="table" onChange={split.switchToSplit} />}
           <Button
             icon={<ReloadOutlined />}
             onClick={() => records.refetch()}
@@ -265,7 +278,7 @@ function RecordList({
             <Button
               type="primary"
               icon={<PlusOutlined />}
-              onClick={() => navigate(newRecordPath(entityKey))}
+              onClick={() => (split ? split.create() : navigate(newRecordPath(entityKey)))}
             >
               新增
             </Button>
@@ -353,7 +366,8 @@ function RecordList({
         scroll={{ x: 'max-content' }}
         onChange={onTableChange}
         onRow={(record) => ({
-          onClick: () => navigate(recordPath(entityKey, record.id)),
+          onClick: () =>
+            split ? split.open(record.id) : navigate(recordPath(entityKey, record.id)),
           style: { cursor: 'pointer' },
         })}
         pagination={{
@@ -421,9 +435,16 @@ export function RecordsPage() {
       </Page>
     );
   }
-  // 客戶、廠商使用分割檢視（§8.7）
+  // 客戶、廠商預設使用分割檢視，可以切換回表格（§8.7）
   if (usesSplitView(key)) {
-    return <MasterSplitView key={key} entity={detail.entity} fields={detail.fields} />;
+    return (
+      <SplitOrTable
+        key={key}
+        entity={detail.entity}
+        fields={detail.fields}
+        initial={defaultLayout.data}
+      />
+    );
   }
   return (
     <RecordList
@@ -431,6 +452,69 @@ export function RecordsPage() {
       entity={detail.entity}
       fields={detail.fields}
       initial={defaultLayout.data}
+    />
+  );
+}
+
+/**
+ * 分割檢視與表格列表的切換（§8.7）。每個資料類別記住上次選的檢視（localStorage）；
+ * 網址帶有選取或模式（`?selected=`、`?mode=`，例如從舊網址導向）時一律顯示分割檢視。
+ */
+function SplitOrTable({
+  entity,
+  fields,
+  initial,
+}: {
+  entity: EntityDefinition;
+  fields: FieldDefinition[];
+  initial: DefaultViewLayout;
+}): ReactNode {
+  const entityKey = entity.key;
+  const [view, setView] = useState<RecordView>(() => loadRecordView(entityKey));
+  const [searchParams, setSearchParams] = useSearchParams();
+  const inSplit = searchParams.has(SELECTED_PARAM) || searchParams.has(MODE_PARAM);
+
+  const change = (next: RecordView) => {
+    saveRecordView(entityKey, next);
+    setView(next);
+  };
+
+  /** 切到分割檢視，並設定選取或模式。 */
+  const openSplit = (params: { selected?: string; mode?: SplitMode }) => {
+    change('split');
+    const next = new URLSearchParams();
+    if (params.selected) {
+      next.set(SELECTED_PARAM, params.selected);
+    }
+    if (params.mode) {
+      next.set(MODE_PARAM, params.mode);
+    }
+    setSearchParams(next, { replace: true });
+  };
+
+  if (view === 'split' || inSplit) {
+    return (
+      <MasterSplitView
+        entity={entity}
+        fields={fields}
+        onSwitchToTable={() => {
+          change('table');
+          // 表格不使用選取與模式
+          setSearchParams(new URLSearchParams(), { replace: true });
+        }}
+      />
+    );
+  }
+  return (
+    <RecordList
+      entity={entity}
+      fields={fields}
+      initial={initial}
+      split={{
+        open: (id) => openSplit({ selected: id }),
+        create: () => openSplit({ mode: 'new' }),
+        switchToSplit: () => openSplit({}),
+      }}
     />
   );
 }

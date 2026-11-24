@@ -169,3 +169,30 @@ export function previewFields(fields: readonly FieldDefinition[]): FieldDefiniti
     .filter((f) => f.is_active && f.is_visible)
     .sort((a, b) => a.sort_order - b.sort_order);
 }
+
+// ---- 分割／表格檢視切換（#245） ----
+
+export type RecordView = 'split' | 'table';
+
+/** 每個資料類別上次選的檢視，存在 localStorage `hammer.recordView.<資料類別代碼>`。 */
+export const recordViewStorageKey = (entityKey: string) => `hammer.recordView.${entityKey}`;
+
+/** 上次選的檢視；沒有存過、格式錯誤或無法存取 localStorage 時為分割檢視。 */
+export function loadRecordView(entityKey: string): RecordView {
+  try {
+    return window.localStorage.getItem(recordViewStorageKey(entityKey)) === 'table'
+      ? 'table'
+      : 'split';
+  } catch {
+    return 'split';
+  }
+}
+
+/** 儲存檢視；無法寫入時忽略。 */
+export function saveRecordView(entityKey: string, view: RecordView) {
+  try {
+    window.localStorage.setItem(recordViewStorageKey(entityKey), view);
+  } catch {
+    // 忽略
+  }
+}

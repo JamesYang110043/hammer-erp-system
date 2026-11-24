@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { Record as DataRecord } from '../bindings';
 import { fieldDef } from '../test/schemaFixtures';
@@ -7,6 +7,9 @@ import {
   adjacentId,
   hasActiveField,
   isInactive,
+  loadRecordView,
+  saveRecordView,
+  splitViewPath,
   mergeRecords,
   pickerPageQuery,
   pickerSearchQueries,
@@ -128,5 +131,40 @@ describe('previewFields', () => {
       fieldDef({ field_key: 'a', sort_order: 1 }),
     ];
     expect(previewFields(fields).map((f) => f.field_key)).toEqual(['a', 'b', 'f']);
+  });
+});
+
+describe('檢視偏好', () => {
+  it('saves_per_entity_and_defaults_to_split', () => {
+    expect(loadRecordView('customer')).toBe('split');
+    saveRecordView('customer', 'table');
+    expect(loadRecordView('customer')).toBe('table');
+    expect(loadRecordView('supplier')).toBe('split');
+    window.localStorage.setItem('hammer.recordView.supplier', 'garbage');
+    expect(loadRecordView('supplier')).toBe('split');
+  });
+
+  it('ignores_storage_errors', () => {
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    try {
+      expect(loadRecordView('customer')).toBe('split');
+      expect(() => saveRecordView('customer', 'table')).not.toThrow();
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+    }
+  });
+});
+
+describe('splitViewPath', () => {
+  it('builds_query', () => {
+    expect(splitViewPath('customer')).toBe('/entities/customer');
+    expect(splitViewPath('customer', { selected: 'x' })).toBe('/entities/customer?selected=x');
+    expect(splitViewPath('supplier', { mode: 'new' })).toBe('/entities/supplier?mode=new');
   });
 });
