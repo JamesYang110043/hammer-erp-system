@@ -1,8 +1,9 @@
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Popconfirm, Space, Table, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 
+import { StatusTag } from '../../components/StatusTag';
 import { Page } from '../../components/PageHeader';
 import { apiErrorCode, errorMessage } from '../../api/client';
 import { useAllCurrencies, useUpdateCurrency } from '../../api/currencies';
@@ -65,8 +66,12 @@ export function CurrenciesPage() {
       width: 160,
       render: (_, c) => (
         <Space size={4}>
-          {c.is_base && <Tag color="blue">本位幣</Tag>}
-          {c.is_active ? <Tag color="success">啟用</Tag> : <Tag color="default">停用</Tag>}
+          {c.is_base && <StatusTag tone="info">本位幣</StatusTag>}
+          {c.is_active ? (
+            <StatusTag tone="success">啟用</StatusTag>
+          ) : (
+            <StatusTag tone="neutral">停用</StatusTag>
+          )}
         </Space>
       ),
     },

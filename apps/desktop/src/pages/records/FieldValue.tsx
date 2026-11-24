@@ -1,6 +1,7 @@
 import { ExclamationCircleOutlined } from '@ant-design/icons';
 import { Checkbox, Space, Tag, Tooltip, Typography } from 'antd';
 
+import { OptionColorTag } from '../../components/StatusTag';
 import type { FieldDefinition, Record as DataRecord } from '../../bindings';
 import {
   DELETED_SUFFIX,
@@ -18,7 +19,7 @@ import { MISSING_ATTACHMENT_TEXT } from './FileInput';
 
 function OptionTag({ field, value }: { field: FieldDefinition; value: string }) {
   const option = findOption(field, value);
-  return <Tag color={option?.color ?? undefined}>{option?.label ?? value}</Tag>;
+  return <OptionColorTag color={option?.color}>{option?.label ?? value}</OptionColorTag>;
 }
 
 /**

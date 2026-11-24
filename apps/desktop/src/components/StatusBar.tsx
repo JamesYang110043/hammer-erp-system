@@ -1,12 +1,13 @@
 import { Badge, Space, Tooltip, Typography } from 'antd';
-import type { BadgeProps } from 'antd';
 
 import { errorMessage } from '../api/client';
 import { useHealth, useServerUrl } from '../api/queries';
 import { CLIENT_VERSION } from '../bindings';
+import { TONE_BADGE_STATUS } from '../status';
+import type { StatusTone } from '../status';
 
 interface Indicator {
-  status: BadgeProps['status'];
+  tone: StatusTone;
   text: string;
   detail?: string;
 }
@@ -18,23 +19,23 @@ export function StatusBar() {
 
   let indicator: Indicator;
   if (health.isPending) {
-    indicator = { status: 'processing', text: '連線中…' };
+    indicator = { tone: 'info', text: '連線中…' };
   } else if (health.isError) {
-    indicator = { status: 'error', text: '未連線', detail: errorMessage(health.error) };
+    indicator = { tone: 'danger', text: '未連線', detail: errorMessage(health.error) };
   } else if (health.data.database !== 'ok') {
     indicator = {
-      status: 'warning',
+      tone: 'warning',
       text: '已連線（資料庫異常）',
       detail: '伺服器正常，但無法連線到資料庫',
     };
   } else {
-    indicator = { status: 'success', text: '已連線' };
+    indicator = { tone: 'success', text: '已連線' };
   }
 
   return (
     <Space size="large" style={{ width: '100%', justifyContent: 'space-between' }}>
       <Tooltip title={indicator.detail}>
-        <Badge status={indicator.status} text={indicator.text} />
+        <Badge status={TONE_BADGE_STATUS[indicator.tone]} text={indicator.text} />
       </Tooltip>
       <Space size="large">
         {serverUrl.data && <Typography.Text type="secondary">{serverUrl.data}</Typography.Text>}

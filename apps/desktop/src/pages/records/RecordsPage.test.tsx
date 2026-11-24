@@ -184,8 +184,8 @@ describe('動態列表', () => {
     expect(row.getByText('1,234,567.50')).toBeInTheDocument();
     expect(row.getByText('2026-11-20')).toBeInTheDocument();
     expect(row.getByRole('checkbox', { name: '完成' })).toBeChecked();
-    expect(row.getByText('處理中')).toHaveClass('ant-tag-blue');
-    expect(row.getByText('急件')).toHaveClass('ant-tag-red');
+    expect(row.getByText('處理中')).toHaveAttribute('data-color', 'blue');
+    expect(row.getByText('急件')).toHaveAttribute('data-color', 'red');
     expect(row.getByText('保固')).toBeInTheDocument();
 
     expect(recordQueries(invoke)[0]).toEqual({ key: 'repair', query: EMPTY_QUERY });

@@ -52,6 +52,7 @@ import { useEffect, useMemo, useReducer, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
+import { StatusTag } from '../../components/StatusTag';
 import { EmptyState } from '../../components/EmptyState';
 import { Page } from '../../components/PageHeader';
 import { apiErrorCode, errorMessage } from '../../api/client';
@@ -326,8 +327,8 @@ function Designer({
       tags={
         (layout.is_default || dirty) && (
           <>
-            {layout.is_default && <Tag>預設</Tag>}
-            {dirty && <Tag color="orange">未存檔</Tag>}
+            {layout.is_default && <StatusTag tone="neutral">預設</StatusTag>}
+            {dirty && <StatusTag tone="warning">未存檔</StatusTag>}
           </>
         )
       }

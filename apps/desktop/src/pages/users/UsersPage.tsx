@@ -1,8 +1,9 @@
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Popconfirm, Space, Table, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 
+import { StatusTag } from '../../components/StatusTag';
 import { Page } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
 import { mutationErrorMessage } from '../../api/errors';
@@ -14,15 +15,15 @@ import { EditUserModal } from './EditUserModal';
 import { ResetPasswordModal } from './ResetPasswordModal';
 
 /** 帳號狀態：停用優先於鎖定。 */
-function StatusTag({ user }: { user: User }) {
+function UserStatusTag({ user }: { user: User }) {
   if (!user.is_active) {
-    return <Tag color="default">停用</Tag>;
+    return <StatusTag tone="neutral">停用</StatusTag>;
   }
   if (user.is_locked) {
     const until = user.locked_until ? `（至 ${formatTaipei(user.locked_until, 'HH:mm')}）` : '';
-    return <Tag color="error">鎖定{until}</Tag>;
+    return <StatusTag tone="danger">鎖定{until}</StatusTag>;
   }
-  return <Tag color="success">正常</Tag>;
+  return <StatusTag tone="success">正常</StatusTag>;
 }
 
 /** 帳號管理頁（需要 `user.manage`）。 */
@@ -46,8 +47,8 @@ export function UsersPage() {
       key: 'status',
       render: (_, user) => (
         <Space size={4}>
-          <StatusTag user={user} />
-          {user.must_change_password && <Tag color="warning">待改密碼</Tag>}
+          <UserStatusTag user={user} />
+          {user.must_change_password && <StatusTag tone="warning">待改密碼</StatusTag>}
         </Space>
       ),
     },

@@ -129,7 +129,7 @@ test('stock adjustment: create, post and void', async ({ page }) => {
   // 列表：單號、狀態標籤；已作廢的單據沒有刪除按鈕
   await page.getByRole('button', { name: /返回列表/ }).click();
   const row = page.getByRole('row', { name: /ADJ202611-0001/ });
-  await expect(row.locator('.ant-tag-red', { hasText: '已作廢' })).toBeVisible();
+  await expect(row.locator('.ant-tag[data-tone="danger"]', { hasText: '已作廢' })).toBeVisible();
   await expect(row.getByRole('button', { name: /刪\s?除/ })).toHaveCount(0);
   // 盤點調整單的狀態篩選只有草稿、已過帳、已作廢（採購單的狀態不列出）
   await page
@@ -290,7 +290,7 @@ test('sales order: partially shipped can only be closed', async ({ page }) => {
   // 列表：部分出貨的標籤；狀態篩選是訂單的狀態
   await page.goto('/#/entities/sales_order');
   const row = page.getByRole('row', { name: /SO202611-0001/ });
-  await expect(row.locator('.ant-tag-gold', { hasText: '部分出貨' })).toBeVisible();
+  await expect(row.locator('.ant-tag[data-tone="warning"]', { hasText: '部分出貨' })).toBeVisible();
   await page
     .locator('.ant-select', { has: page.getByRole('combobox', { name: '狀態篩選' }) })
     .click();
@@ -318,4 +318,33 @@ test('sales order: partially shipped can only be closed', async ({ page }) => {
   );
   await expect(actions(page).getByRole('button', { name: CLOSE_BUTTON })).toHaveCount(0);
   await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+test('status tags look the same in the list and in the form', async ({ page }) => {
+  const state: { current: DataRecord | null } = { current: null };
+  await mockDocument(page, ADMIN, state);
+  for (const [status, label] of [
+    ['draft', '草稿'],
+    ['posted', '已過帳'],
+    ['void', '已作廢'],
+  ] as const) {
+    state.current = adjustment(status);
+    const colors = (tag: ReturnType<Page['locator']>) =>
+      tag.evaluate((el) => {
+        const s = getComputedStyle(el);
+        return [s.color, s.backgroundColor, s.borderTopColor];
+      });
+
+    // 重新載入，不沿用上一輪的查詢快取
+    await page.goto('/#/entities/stock_adjustment');
+    await page.reload();
+    const inList = page.getByRole('row').locator('.ant-tag', { hasText: label });
+    await expect(inList).toBeVisible();
+    const listColors = await colors(inList);
+
+    await page.goto(`/#/entities/stock_adjustment/${ADJUSTMENT_ID}`);
+    const inForm = page.locator('.page-header .ant-tag', { hasText: label });
+    await expect(inForm).toBeVisible();
+    expect(await colors(inForm)).toEqual(listColors);
+  }
 });

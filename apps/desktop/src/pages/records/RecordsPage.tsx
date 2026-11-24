@@ -5,11 +5,12 @@ import {
   SaveOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Popconfirm, Select, Space, Table, Tag } from 'antd';
+import { Alert, App, Button, Popconfirm, Select, Space, Table } from 'antd';
 import type { TableColumnsType, TableProps } from 'antd';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
+import { StatusTag } from '../../components/StatusTag';
 import { EmptyState } from '../../components/EmptyState';
 import { Page } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
@@ -297,7 +298,7 @@ function RecordList({
             ...(layouts.data ?? []).map((l) => ({ value: l.id, label: layoutLabel(l) })),
           ]}
         />
-        {dirty && <Tag color="orange">未儲存的變更</Tag>}
+        {dirty && <StatusTag tone="warning">未儲存的變更</StatusTag>}
         {canEditCurrent && (
           <Button
             icon={<SaveOutlined />}

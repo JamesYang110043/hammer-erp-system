@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { App, Button, Form, Input, Modal, Space, Table, Tag, Typography } from 'antd';
+import { App, Button, Form, Input, Modal, Space, Table, Typography } from 'antd';
 import { useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
+import { StatusTag } from '../../components/StatusTag';
 import { SectionTitle } from '../../components/SectionTitle';
 import { ShipmentAllocationContext } from './shipmentAllocation';
 
@@ -287,7 +288,7 @@ export function ShipmentLotCell({
   } else {
     content = (
       <Space size={4} wrap>
-        <Tag color={a.manual ? 'blue' : 'default'}>{a.manual ? '手動' : '先進先出'}</Tag>
+        <StatusTag tone={a.manual ? 'info' : 'neutral'}>{a.manual ? '手動' : '先進先出'}</StatusTag>
         {a.allocations.length > 0 && <Typography.Text>{allocationText(a)}</Typography.Text>}
         {a.shortage && (
           <Typography.Text type="danger">不足 {formatQty(a.shortage)}</Typography.Text>

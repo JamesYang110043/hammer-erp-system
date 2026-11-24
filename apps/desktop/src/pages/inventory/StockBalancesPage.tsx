@@ -4,6 +4,7 @@ import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 
+import { StatusTag } from '../../components/StatusTag';
 import { NumberText } from '../../components/NumberText';
 import { Page } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
@@ -67,9 +68,9 @@ const columns: TableColumnsType<StockBalance> = [
     width: 140,
     render: (_, row) =>
       row.below_safety_stock ? (
-        <Tag color="red" icon={<WarningOutlined />}>
+        <StatusTag tone="danger" icon={<WarningOutlined />}>
           {BELOW_SAFETY_STOCK_TEXT}
-        </Tag>
+        </StatusTag>
       ) : null,
   },
 ];
