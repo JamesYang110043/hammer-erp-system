@@ -95,11 +95,79 @@ function plainSection(key: string, title: string, items: FormItem[]): FormSectio
 const fieldItem = (field: string): FormItem => ({ type: 'field', field, span: 1 });
 const blockItem = (block: string): FormItem => ({ type: 'block', block });
 
+/** 分組預設版面每個區塊的欄數（`hammer_shared::form_layout::PRESET_COLUMNS`）。 */
+export const PRESET_COLUMNS = 2;
+
+interface PresetSection {
+  key: string;
+  title: string;
+  /** `[欄位代碼, span]`，依顯示順序。 */
+  fields: readonly (readonly [string, number])[];
+}
+
 /**
- * 沒有設定版面（或讀取失敗）時的版面：一個單欄、沒有標題的區塊，依序為欄位之前的系統區塊、
- * 欄位、欄位之後的系統區塊（與伺服器的 `generated_config` 相同）。
+ * 沒有設定版面時使用的分組預設版面（與 `hammer_shared::form_layout::preset_sections` 相同，
+ * 共用測試資料 `crates/shared/testdata/generated_form_layouts.json`）：客戶、廠商。
+ */
+export function presetSections(entityKey: string): PresetSection[] | undefined {
+  if (entityKey !== 'customer' && entityKey !== 'supplier') {
+    return undefined;
+  }
+  const supplier = entityKey === 'supplier';
+  const one = (...keys: string[]) => keys.map((k) => [k, 1] as const);
+  return [
+    {
+      key: 'basic',
+      title: '基本資料',
+      fields: [
+        ...one('code', 'name', 'short_name', 'tax_id', 'phone', 'fax', 'email', 'address'),
+        ...(supplier ? one('country') : []),
+        ...one('is_active'),
+      ],
+    },
+    { key: 'invoice', title: '發票資訊', fields: one('invoice_title', 'invoice_address') },
+    {
+      key: 'terms',
+      title: '交易條件',
+      fields: [
+        ...one('payment_terms_days', 'credit_limit'),
+        ...(supplier ? one('default_currency_code', 'bank_info') : []),
+      ],
+    },
+    { key: 'other', title: '其他', fields: [['notes', PRESET_COLUMNS]] },
+  ];
+}
+
+/**
+ * 沒有設定版面（或讀取失敗）時的版面（與伺服器的 `generated_config` 相同）：
+ *
+ * - 客戶、廠商（{@link presetSections}）：分組、2 欄的區塊，略過不能顯示的欄位與沒有欄位的
+ *   區塊，再依 {@link resolveFormLayout} 附加單號、未列出的欄位（含自訂欄位）與明細表
+ * - 其他資料類別：一個單欄、沒有標題的區塊，依序為欄位之前的系統區塊、欄位、欄位之後的系統區塊
  */
 export function generatedFormLayout(content: FormContent): FormLayoutConfig {
+  const preset = presetSections(content.entityKey);
+  if (preset) {
+    const shown = new Set(content.fieldKeys);
+    const sections = preset.flatMap((p): FormSection[] => {
+      const items = p.fields
+        .filter(([key]) => shown.has(key))
+        .map(([field, span]): FormItem => ({ type: 'field', field, span }));
+      return items.length > 0
+        ? [
+            {
+              key: p.key,
+              title: p.title,
+              columns: PRESET_COLUMNS,
+              collapsible: false,
+              collapsed: false,
+              items,
+            },
+          ]
+        : [];
+    });
+    return resolveFormLayout({ sections }, content);
+  }
   const blocks = systemBlocks(content.entityKey, content.detailKeys);
   const items = [
     ...blocks.filter((b) => b.placement === 'top').map((b) => blockItem(b.code)),

@@ -1,4 +1,5 @@
 import react from '@vitejs/plugin-react';
+import { searchForWorkspaceRoot } from 'vite';
 import { defineConfig } from 'vitest/config';
 
 // Tauri 開發時使用的設定，見 https://v2.tauri.app/start/frontend/vite/
@@ -16,6 +17,10 @@ export default defineConfig({
     watch: {
       // Rust 端由 Tauri 監看，Vite 不需要
       ignored: ['**/src-tauri/**'],
+    },
+    fs: {
+      // 單元測試讀取與伺服器共用的測試資料（src/records/formLayout.test.ts）
+      allow: [searchForWorkspaceRoot(process.cwd()), '../../crates/shared/testdata'],
     },
   },
   envPrefix: ['VITE_', 'TAURI_ENV_'],

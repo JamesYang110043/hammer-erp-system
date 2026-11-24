@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
+// 與伺服器共用的測試資料（#254）
+import sharedLayouts from '../../../../crates/shared/testdata/generated_form_layouts.json?raw';
+
 import {
   BLOCKS_SECTION_KEY,
   OTHER_SECTION_KEY,
   generatedFormLayout,
   linesBlockDetail,
+  presetSections,
   resolveFormLayout,
   systemBlocks,
 } from './formLayout';
@@ -129,5 +133,35 @@ describe('resolveFormLayout', () => {
     expect(resolved.sections[0]!.columns).toBe(4);
     expect(resolved.sections[0]!.collapsed).toBe(false);
     expect(resolved.sections[0]!.items[1]).toEqual(f('a', 4));
+  });
+});
+
+/** 與伺服器共用的測試資料（#254）：`crates/shared/testdata/generated_form_layouts.json`。 */
+interface SharedCase {
+  name: string;
+  entity_key: string;
+  detail_keys: string[];
+  fields: { field_key: string; sort_order: number; is_active: boolean; is_visible: boolean }[];
+  expected: FormLayoutConfig;
+}
+const SHARED_CASES = (JSON.parse(sharedLayouts) as { cases: SharedCase[] }).cases;
+
+describe('分組預設版面（客戶、廠商）', () => {
+  it.each(SHARED_CASES.map((c) => [c.name, c] as const))('%s', (_, c) => {
+    // 畫面上能顯示的欄位：有效且顯示，依 sort_order
+    const fieldKeys = c.fields
+      .filter((x) => x.is_active && x.is_visible)
+      .sort((x, y) => x.sort_order - y.sort_order)
+      .map((x) => x.field_key);
+    const content = { entityKey: c.entity_key, fieldKeys, detailKeys: c.detail_keys };
+    const generated = generatedFormLayout(content);
+    expect(generated).toEqual(c.expected);
+    // 讀取時再整理一次也不變
+    expect(resolveFormLayout(generated, content)).toEqual(generated);
+  });
+
+  it('other_entities_keep_single_column', () => {
+    expect(presetSections('product')).toBeUndefined();
+    expect(generatedFormLayout({ ...CONTENT, entityKey: 'product' }).sections).toHaveLength(1);
   });
 });

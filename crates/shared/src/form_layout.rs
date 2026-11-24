@@ -118,6 +118,72 @@ pub fn system_blocks(entity_key: &str, detail_keys: &[&str]) -> Vec<(String, Blo
     blocks
 }
 
+/// 分組預設版面的一個區塊（見 [`preset_sections`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetSection {
+    pub key: &'static str,
+    pub title: &'static str,
+    /// `(欄位代碼, span)`，依顯示順序。
+    pub fields: Vec<(&'static str, i32)>,
+}
+
+/// 分組預設版面每個區塊的欄數。
+pub const PRESET_COLUMNS: i32 = 2;
+
+/// 沒有設定版面時使用的分組預設版面（§7.7「沒有設定版面」；目前只有客戶、廠商）：
+/// 每個區塊 [`PRESET_COLUMNS`] 欄、不可收折。其他資料類別回傳 `None`（單欄的自動產生版面）。
+///
+/// 產生版面時略過停用、不顯示的欄位與沒有欄位的區塊，再依「讀取時的處理」附加系統區塊與
+/// 未列出的欄位。桌面程式 `records/formLayout.ts` 的 `PRESET_SECTIONS` 必須與這裡相同
+///（共用測試資料 `crates/shared/testdata/generated_form_layouts.json`）。
+pub fn preset_sections(entity_key: &str) -> Option<Vec<PresetSection>> {
+    let supplier = match entity_key {
+        "customer" => false,
+        "supplier" => true,
+        _ => return None,
+    };
+    let mut basic = vec![
+        ("code", 1),
+        ("name", 1),
+        ("short_name", 1),
+        ("tax_id", 1),
+        ("phone", 1),
+        ("fax", 1),
+        ("email", 1),
+        ("address", 1),
+    ];
+    if supplier {
+        basic.push(("country", 1));
+    }
+    basic.push(("is_active", 1));
+    let mut terms = vec![("payment_terms_days", 1), ("credit_limit", 1)];
+    if supplier {
+        terms.extend([("default_currency_code", 1), ("bank_info", 1)]);
+    }
+    Some(vec![
+        PresetSection {
+            key: "basic",
+            title: "基本資料",
+            fields: basic,
+        },
+        PresetSection {
+            key: "invoice",
+            title: "發票資訊",
+            fields: vec![("invoice_title", 1), ("invoice_address", 1)],
+        },
+        PresetSection {
+            key: "terms",
+            title: "交易條件",
+            fields: terms,
+        },
+        PresetSection {
+            key: "other",
+            title: "其他",
+            fields: vec![("notes", PRESET_COLUMNS)],
+        },
+    ])
+}
+
 /// 區塊內的一個項目。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]

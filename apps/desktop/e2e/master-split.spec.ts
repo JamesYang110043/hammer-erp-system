@@ -51,8 +51,10 @@ const VIEWER = {
 async function setup(
   page: Page,
   user: typeof ADMIN = ADMIN,
-  formLayout: typeof CUSTOMER_FORM_LAYOUT = CUSTOMER_FORM_LAYOUT,
+  formLayout: typeof CUSTOMER_FORM_LAYOUT | null = CUSTOMER_FORM_LAYOUT,
+  fieldOverrides: Record<string, unknown> = {},
 ) {
+  const fieldsOf = (key: string) => fieldOverrides[key] ?? FIELDS[key] ?? [];
   // 4 筆固定的客戶＋80 筆一般客戶（啟用中 83 筆），超過一頁（50 筆）；刪除後從清單移除
   let customers = manyCustomers(80);
   let layout = formLayout;
@@ -65,14 +67,14 @@ async function setup(
     list_all_entities: () => ENTITIES,
     get_entity: ({ key }) => ({
       entity: ENTITIES.find((e) => e.key === key),
-      fields: FIELDS[key as string] ?? [],
+      fields: fieldsOf(key as string),
     }),
     get_default_layout: ({ key }) => ({
       source: 'generated',
       layout: null,
       config: {
         // 與「依欄位定義」相同，不會顯示「未儲存的變更」
-        columns: ((FIELDS[key as string] ?? []) as { field_key: string }[]).map((f) => ({
+        columns: (fieldsOf(key as string) as { field_key: string }[]).map((f) => ({
           field_key: f.field_key,
           width: null,
         })),
@@ -95,10 +97,15 @@ async function setup(
       }
       return r;
     },
-    get_form_layout: () => layout,
+    get_form_layout: () => {
+      if (!layout) {
+        throw new CommandRejection({ kind: 'network', message: '無法連線' });
+      }
+      return layout;
+    },
     save_form_layout: ({ req }) => {
-      const { config } = req as { config: typeof layout.config };
-      layout = { ...layout, version: (layout.version ?? 0) + 1, config };
+      const { config } = req as { config: typeof CUSTOMER_FORM_LAYOUT.config };
+      layout = { ...CUSTOMER_FORM_LAYOUT, ...layout, version: (layout?.version ?? 0) + 1, config };
       return layout;
     },
     delete_record: ({ id }) => {
@@ -526,3 +533,83 @@ test('viewer does not see adjust form layout', async ({ page }) => {
   await expect(preview.getByTestId('preview-title')).toBeVisible();
   await expect(preview.getByRole('button', { name: /調整表單版面/ })).toHaveCount(0);
 });
+
+// 客戶的分組預設版面（#254）：讀取版面失敗時由前端產生，與伺服器相同
+const FULL_CUSTOMER_FIELDS = [
+  ...CUSTOMER_FIELDS.filter((f) => f.field_key !== 'is_active'),
+  ...(
+    [
+      ['fax', '傳真', 60],
+      ['email', 'Email', 70],
+      ['address', '聯絡地址', 80],
+      ['invoice_title', '發票抬頭', 90],
+      ['invoice_address', '發票地址', 100],
+      ['payment_terms_days', '付款天數', 110],
+      ['credit_limit', '信用額度', 120],
+    ] as const
+  ).map(([field_key, label, sort_order]) => ({
+    ...CUSTOMER_FIELDS[0]!,
+    id: `f-customer-${field_key}`,
+    field_key,
+    label,
+    sort_order,
+    is_required: false,
+    data_type:
+      field_key === 'payment_terms_days'
+        ? 'integer'
+        : field_key === 'credit_limit'
+          ? 'money'
+          : 'text',
+    decimal_places: field_key === 'credit_limit' ? 2 : null,
+  })),
+  CUSTOMER_FIELDS.find((f) => f.field_key === 'is_active')!,
+  {
+    ...CUSTOMER_FIELDS[0]!,
+    id: 'f-customer-notes',
+    field_key: 'notes',
+    label: '備註',
+    data_type: 'long_text' as const,
+    is_required: false,
+    sort_order: 140,
+  },
+  {
+    ...CUSTOMER_FIELDS[0]!,
+    id: 'f-customer-region',
+    field_key: 'region',
+    label: '業務區域',
+    is_system: false,
+    is_required: false,
+    sort_order: 200,
+  },
+];
+
+for (const viewport of [1440, 1280]) {
+  test(`customer default layout is grouped in two columns at ${viewport}px`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport, height: 1000 });
+    await setup(page, ADMIN, null, { customer: FULL_CUSTOMER_FIELDS });
+    await page.goto(`/#/entities/customer?selected=${customerId(1)}`);
+    const preview = page.getByTestId('record-preview');
+    await expect(preview.getByTestId('preview-title')).toHaveText('C001 大華實業股份有限公司');
+
+    const titles = await preview
+      .locator('section[data-section]')
+      .evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
+    // 最後是沒有標題的系統區塊（聯絡人明細）
+    expect(titles).toEqual(['基本資料', '發票資訊', '交易條件', '其他', '其他欄位', null]);
+    await expect(
+      preview
+        .locator('section[data-section="_blocks"]')
+        .getByRole('region', { name: '客戶聯絡人' }),
+    ).toBeVisible();
+    const box = async (field: string) =>
+      (await preview.locator(`[data-item="${field}"]`).boundingBox())!;
+    // 2 欄：編號｜名稱 同一列；備註佔滿整列；自訂欄位在「其他欄位」
+    const [code, name, notes] = [await box('code'), await box('name'), await box('notes')];
+    expect(Math.abs(code.y - name.y)).toBeLessThan(2);
+    expect(name.x).toBeGreaterThan(code.x);
+    expect(notes.width).toBeGreaterThan(code.width * 2);
+    await expect(
+      preview.getByRole('region', { name: '其他欄位' }).locator('[data-item="region"]'),
+    ).toBeVisible();
+  });
+}

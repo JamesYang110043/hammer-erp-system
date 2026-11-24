@@ -441,3 +441,113 @@ async fn detail_and_unknown_entities_are_not_found(pool: PgPool) {
         assert_error(status, &body, ErrorCode::NotFound);
     }
 }
+
+/// 客戶、廠商沒有設定版面時為分組、2 欄的預設版面（#254）；還原成預設後回到分組版面。
+#[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
+async fn customer_and_supplier_use_grouped_default_layout(pool: PgPool) {
+    let admin = token_for(&pool, "admin", role::ADMIN).await;
+    let customer = get_layout(&pool, &admin, "customer").await;
+    assert!(customer.is_default);
+    assert_eq!(
+        outline(&customer),
+        json!([
+            [
+                "basic",
+                [
+                    "record_no",
+                    "code",
+                    "name",
+                    "short_name",
+                    "tax_id",
+                    "phone",
+                    "fax",
+                    "email",
+                    "address",
+                    "is_active"
+                ]
+            ],
+            ["invoice", ["invoice_title", "invoice_address"]],
+            ["terms", ["payment_terms_days", "credit_limit"]],
+            ["other", ["notes"]],
+            ["_blocks", ["lines:customer_contact"]],
+        ])
+    );
+    let sections = &customer.config.sections;
+    assert_eq!(
+        sections
+            .iter()
+            .map(|s| s.title.as_str())
+            .collect::<Vec<_>>(),
+        ["基本資料", "發票資訊", "交易條件", "其他", ""]
+    );
+    assert!(
+        sections[..4]
+            .iter()
+            .all(|s| s.columns == 2 && !s.collapsible)
+    );
+    assert_eq!(
+        serde_json::to_value(&sections[3].items[0]).unwrap(),
+        json!({ "type": "field", "field": "notes", "span": 2 })
+    );
+
+    let supplier = get_layout(&pool, &admin, "supplier").await;
+    assert!(supplier.is_default);
+    assert_eq!(
+        outline(&supplier),
+        json!([
+            [
+                "basic",
+                [
+                    "record_no",
+                    "code",
+                    "name",
+                    "short_name",
+                    "tax_id",
+                    "phone",
+                    "fax",
+                    "email",
+                    "address",
+                    "country",
+                    "is_active"
+                ]
+            ],
+            ["invoice", ["invoice_title", "invoice_address"]],
+            [
+                "terms",
+                [
+                    "payment_terms_days",
+                    "credit_limit",
+                    "default_currency_code",
+                    "bank_info"
+                ]
+            ],
+            ["other", ["notes"]],
+            ["_blocks", ["lines:supplier_contact"]],
+        ])
+    );
+
+    // 自訂版面後還原成預設：回到分組版面
+    let (status, body) = call(
+        &pool,
+        Method::PUT,
+        &uri("customer"),
+        &admin,
+        Some(json!({ "version": null, "config": { "sections": [
+            { "key": "all", "columns": 1, "items": [{ "type": "field", "field": "name" }] }
+        ] } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = call(
+        &pool,
+        Method::DELETE,
+        &format!("{}?version=1", uri("customer")),
+        &admin,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let reset: FormLayout = serde_json::from_value(body).unwrap();
+    assert!(reset.is_default);
+    assert_eq!(reset.config, customer.config);
+}
