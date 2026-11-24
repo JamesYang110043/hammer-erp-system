@@ -265,3 +265,25 @@ test('editor cannot open the designer', async ({ page }) => {
   await expect(page.getByText('沒有權限')).toBeVisible();
   await expect(page.getByRole('menuitem', { name: '資料類別' })).toHaveCount(0);
 });
+
+// 預覽的呈現方式（#252）：非分割檢視的資料類別沒有寬度切換
+test('preview switches between form and read only, no width switch for other entities', async ({
+  page,
+}) => {
+  await mockServer(page);
+  await page.goto('/#/schema/repair/form-layout');
+  await expect(page.getByTestId('layout-applies-to')).toHaveText(
+    '這份版面套用在：新增、編輯與檢視的表單。',
+  );
+  await page.getByText('預覽', { exact: true }).click();
+  const preview = page.getByRole('region', { name: '表單預覽' });
+  await expect(preview.locator('[data-item="name"] input')).toBeDisabled();
+  await expect(page.getByRole('radiogroup', { name: '預覽寬度' })).toHaveCount(0);
+  await expect(page.getByText('分割檢視右側', { exact: true })).toHaveCount(0);
+
+  await page.getByText('唯讀預覽', { exact: true }).click();
+  await expect(preview.getByRole('textbox')).toHaveCount(0);
+  await expect(preview.locator('[data-item="name"]')).toContainText('客戶名稱範例');
+  await expect(preview.locator('[data-item="record_no"]')).toContainText('單號範例');
+  await expect(preview.getByText('明細：零件')).toBeVisible();
+});

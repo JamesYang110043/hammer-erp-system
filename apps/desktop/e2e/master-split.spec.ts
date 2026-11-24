@@ -18,6 +18,7 @@ import {
   manyCustomers,
   partyRecord,
 } from '../src/test/masterSplitFixtures';
+import { SPLIT_DETAIL_PREVIEW_WIDTH } from '../src/records/splitPreviewWidth';
 import { CommandRejection, mockTauri } from './tauri-mock';
 
 const ADMIN = {
@@ -60,6 +61,7 @@ async function setup(
     setup_status: () => ({ needs_setup: false }),
     current_user: () => user,
     list_entities: () => ENTITIES,
+    list_all_entities: () => ENTITIES,
     get_entity: ({ key }) => ({
       entity: ENTITIES.find((e) => e.key === key),
       fields: FIELDS[key as string] ?? [],
@@ -428,3 +430,56 @@ for (const { viewport, three } of [
     }
   });
 }
+
+// 設計器預覽：唯讀預覽與分割檢視右側寬度，與實際的右側預覽一致（#252）
+test('form layout designer previews the split view right side', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setup(page);
+
+  // 實際的右側預覽
+  await page.goto(`/#/entities/customer?selected=${customerId(1)}`);
+  const preview = page.getByTestId('record-preview');
+  await expect(preview.locator('[data-item="name"]')).toBeVisible();
+  const detail = (await page.locator('.master-split-detail').boundingBox())!;
+  expect(Math.round(detail.width), '右側寬度常數').toBe(SPLIT_DETAIL_PREVIEW_WIDTH);
+  const realGrid = (await preview.locator('.form-layout-container').first().boundingBox())!;
+  const realName = (await preview.locator('[data-item="name"]').boundingBox())!;
+  const realTax = (await preview.locator('[data-item="tax_id"]').boundingBox())!;
+
+  await page.goto('/#/schema/customer/form-layout');
+  await expect(page.getByTestId('layout-applies-to')).toHaveText(
+    '這份版面套用在：新增、編輯與檢視的表單、分割檢視右側的唯讀預覽、分割檢視右側的編輯與新增。',
+  );
+  await page.getByText('預覽', { exact: true }).click();
+  const designerPreview = page.getByRole('region', { name: '表單預覽' });
+  // 預設：編輯表單、整頁
+  await expect(designerPreview.locator('[data-item="name"] input')).toBeDisabled();
+  await expect(page.getByTestId('split-preview-frame')).toHaveCount(0);
+
+  // 唯讀預覽、分割檢視右側：寬度與欄位位置與實際的右側預覽相同
+  await page.getByText('唯讀預覽', { exact: true }).click();
+  await page.getByText('分割檢視右側', { exact: true }).click();
+  const frame = page.getByTestId('split-preview-frame');
+  await expect(frame).toBeVisible();
+  expect(Math.round((await frame.boundingBox())!.width)).toBe(SPLIT_DETAIL_PREVIEW_WIDTH);
+  await expect(designerPreview.getByRole('textbox')).toHaveCount(0);
+  await expect(frame.locator('[data-item="name"]')).toContainText('公司名稱範例');
+  const grid = (await frame.locator('.form-layout-container').first().boundingBox())!;
+  const name = (await frame.locator('[data-item="name"]').boundingBox())!;
+  const tax = (await frame.locator('[data-item="tax_id"]').boundingBox())!;
+  expect(Math.abs(grid.width - realGrid.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(name.width - realName.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(tax.width - realTax.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(name.height - realName.height)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: test.info().outputPath('readonly-split.png') });
+
+  // 編輯表單、分割檢視右側
+  await page.getByText('編輯表單', { exact: true }).click();
+  await expect(frame.locator('[data-item="name"] input')).toBeDisabled();
+  await page.screenshot({ path: test.info().outputPath('form-split.png') });
+
+  // 整頁：不再限制寬度
+  await page.getByText('整頁', { exact: true }).click();
+  await expect(page.getByTestId('split-preview-frame')).toHaveCount(0);
+  expect((await designerPreview.boundingBox())!.width).toBeGreaterThan(SPLIT_DETAIL_PREVIEW_WIDTH);
+});

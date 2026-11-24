@@ -1,5 +1,5 @@
 import { DeleteOutlined, EditOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Popconfirm, Space, Spin, Table, Typography, theme } from 'antd';
+import { Alert, App, Button, Popconfirm, Space, Spin, Table, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
@@ -20,20 +20,7 @@ import { FORM_BLOCKS } from '../../records/formLayout';
 import { detailEntitiesOf, showsRecordNo } from '../../records/lines';
 import { previewFields } from '../../records/masterSplit';
 import { FieldValue } from './FieldValue';
-import { FormLayoutRenderer } from './FormLayoutRenderer';
-
-/** 唯讀預覽的一個欄位：上方標籤、下方格式化後的值。 */
-function PreviewItem({ label, children }: { label: string; children: ReactNode }) {
-  const { token } = theme.useToken();
-  return (
-    <div className="preview-item" style={{ marginBottom: token.marginSM }}>
-      <div style={{ color: token.colorTextSecondary, fontSize: token.fontSizeSM, marginBottom: 2 }}>
-        {label}
-      </div>
-      <div style={{ minHeight: token.controlHeightSM, wordBreak: 'break-word' }}>{children}</div>
-    </div>
-  );
-}
+import { PreviewItem, ReadonlyLayout } from './ReadonlyLayout';
 
 /** 明細子表（聯絡人等）的唯讀表格。 */
 function PreviewLines({
@@ -76,7 +63,7 @@ function PreviewLines({
 /**
  * 分割檢視右側的唯讀預覽（docs/architecture.md §8.7）。
  *
- * - 欄位依表單版面（§7.7）排列，值以 {@link FieldValue} 格式化；明細子表（聯絡人）以唯讀表格顯示
+ * - 欄位依表單版面（§7.7）以 {@link ReadonlyLayout} 排列，值以 {@link FieldValue} 格式化；明細子表（聯絡人）以唯讀表格顯示
  * - 上方「編號＋名稱」標題，有 `record.write` 時顯示「編輯」「刪除」
  * - 資料不存在或已刪除時顯示「找不到資料」
  */
@@ -142,7 +129,6 @@ export function RecordPreview({
     );
   }
 
-  const byKey = new Map(shown.map((f) => [f.field_key, f]));
   const remove = () =>
     deleteRecord.mutateAsync(data).then(
       () => {
@@ -194,16 +180,12 @@ export function RecordPreview({
           </Space>
         )}
       </div>
-      <FormLayoutRenderer
+      <ReadonlyLayout
         config={layout}
-        renderField={(fieldKey) => {
-          const field = byKey.get(fieldKey);
-          return field ? (
-            <PreviewItem label={field.label}>
-              <FieldValue field={field} value={data.data[fieldKey]} record={data} />
-            </PreviewItem>
-          ) : null;
-        }}
+        fields={shown}
+        renderValue={(field) => (
+          <FieldValue field={field} value={data.data[field.field_key]} record={data} />
+        )}
         renderBlock={renderBlock}
       />
     </div>

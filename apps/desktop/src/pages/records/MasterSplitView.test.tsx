@@ -58,6 +58,7 @@ function renderAt(
   const invoke = mockCommands({
     ...startupCommands(user),
     list_entities: () => ENTITIES,
+    list_all_entities: () => ENTITIES,
     get_entity: ({ key }) => ({
       entity: ENTITIES.find((e) => e.key === key),
       fields: FIELDS[key as string] ?? [],
@@ -515,5 +516,43 @@ describe('分割／表格檢視切換', () => {
     expect(
       await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT }),
     ).toHaveTextContent('C001');
+  });
+});
+
+describe('表單版面設計器的預覽（#252）', () => {
+  it('read_only_preview_shares_the_split_view_look_with_sample_values', async () => {
+    const user = userEvent.setup();
+    renderAt('#/schema/customer/form-layout');
+    await screen.findByText('表單版面：客戶', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    expect(screen.getByTestId('layout-applies-to')).toHaveTextContent('分割檢視右側的唯讀預覽');
+
+    await user.click(screen.getByText('預覽', { exact: true }));
+    // 預設為編輯表單、整頁
+    const preview = screen.getByRole('region', { name: '表單預覽' });
+    expect(preview).toHaveAttribute('data-preview-kind', 'form');
+    expect(preview).toHaveAttribute('data-preview-width', 'full');
+    expect(within(preview).getAllByRole('textbox').length).toBeGreaterThan(0);
+
+    await user.click(screen.getByText('唯讀預覽', { exact: true }));
+    await user.click(screen.getByText('分割檢視右側', { exact: true }));
+    const readonly = screen.getByRole('region', { name: '表單預覽' });
+    expect(readonly).toHaveAttribute('data-preview-kind', 'readonly');
+    expect(readonly).toHaveAttribute('data-preview-width', 'split');
+    expect(screen.getByTestId('split-preview-frame')).toBeInTheDocument();
+    // 與 RecordPreview 相同的欄位呈現（.preview-item），值為範例
+    const items = readonly.querySelectorAll('.preview-item');
+    expect(items.length).toBeGreaterThan(0);
+    expect(within(readonly).queryByRole('textbox')).not.toBeInTheDocument();
+    expect(within(readonly).getByText('公司名稱範例')).toBeInTheDocument();
+    expect(within(readonly).getByRole('checkbox', { name: '啟用' })).toBeDisabled();
+  });
+
+  it('other_entities_have_no_width_switch', async () => {
+    const user = userEvent.setup();
+    renderAt('#/schema/product/form-layout');
+    await screen.findByText('表單版面：商品', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    await user.click(screen.getByText('預覽', { exact: true }));
+    expect(screen.getByText('唯讀預覽', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText('分割檢視右側', { exact: true })).not.toBeInTheDocument();
   });
 });
