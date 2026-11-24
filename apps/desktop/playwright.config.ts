@@ -27,7 +27,21 @@ export default defineConfig({
     screenshot: process.env.E2E_SCREENSHOT ? 'on' : 'only-on-failure',
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // 深色模式（#234）：系統為深色、外觀為預設的「跟隨系統」，主要畫面再跑一次並截圖
+    {
+      name: 'chromium-dark',
+      use: { ...devices['Desktop Chrome'], colorScheme: 'dark' },
+      testMatch: [
+        'auth-layout.spec.ts',
+        'documents.spec.ts',
+        'form-layout.spec.ts',
+        'form-layout-designer.spec.ts',
+        'page-style.spec.ts',
+      ],
+    },
+  ],
   webServer: {
     command: 'pnpm dev',
     url: `http://localhost:${PORT}`,

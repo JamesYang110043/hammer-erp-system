@@ -2,8 +2,6 @@
 import '@ant-design/v5-patch-for-react-19';
 
 import { QueryClientProvider } from '@tanstack/react-query';
-import { App as AntApp, ConfigProvider } from 'antd';
-import zhTW from 'antd/locale/zh_TW';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-tw';
 import { StrictMode } from 'react';
@@ -11,7 +9,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './App';
 import { createQueryClient } from './api/queryClient';
-import { appComponentConfig, appTheme } from './theme';
+import { AppThemeProvider } from './components/AppThemeProvider';
 import './styles.css';
 
 dayjs.locale('zh-tw');
@@ -25,12 +23,10 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <ConfigProvider locale={zhTW} theme={appTheme} {...appComponentConfig}>
-      <AntApp>
-        <QueryClientProvider client={queryClient}>
-          <App />
-        </QueryClientProvider>
-      </AntApp>
-    </ConfigProvider>
+    <AppThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </AppThemeProvider>
   </StrictMode>,
 );
