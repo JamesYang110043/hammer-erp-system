@@ -4,16 +4,20 @@ import type { Page } from '@playwright/test';
 import type { RecordListQuery_Deserialize as RecordListQuery } from '../src/bindings';
 import {
   CUSTOMER,
+  CUSTOMER_CONTACT,
+  CUSTOMER_CONTACT_FIELDS,
   CUSTOMER_FIELDS,
+  CUSTOMER_FORM_LAYOUT,
   PRODUCT,
   PRODUCT_FIELDS,
   SUPPLIER,
   SUPPLIER_FIELDS,
+  customerDetail,
   customerId,
   fakeListRecords,
   manyCustomers,
 } from '../src/test/masterSplitFixtures';
-import { mockTauri } from './tauri-mock';
+import { CommandRejection, mockTauri } from './tauri-mock';
 
 const ADMIN = {
   id: '0196f5a0-0000-7000-8000-000000000001',
@@ -24,22 +28,31 @@ const ADMIN = {
   must_change_password: false,
 };
 
-const ENTITIES = [PRODUCT, CUSTOMER, SUPPLIER];
+const ENTITIES = [PRODUCT, CUSTOMER, CUSTOMER_CONTACT, SUPPLIER];
 const FIELDS: Record<string, unknown> = {
   customer: CUSTOMER_FIELDS,
   supplier: SUPPLIER_FIELDS,
   product: PRODUCT_FIELDS,
+  customer_contact: CUSTOMER_CONTACT_FIELDS,
 };
 
-/** 4 筆固定的客戶＋80 筆一般客戶（啟用中 83 筆），超過一頁（50 筆）。 */
-const CUSTOMERS = manyCustomers(80);
+const VIEWER = {
+  ...ADMIN,
+  id: '0196f5a0-0000-7000-8000-000000000002',
+  username: 'viewer',
+  display_name: '李唯讀',
+  role: 'viewer',
+  permissions: ['record.read'],
+};
 
-async function setup(page: Page) {
+async function setup(page: Page, user: typeof ADMIN = ADMIN) {
+  // 4 筆固定的客戶＋80 筆一般客戶（啟用中 83 筆），超過一頁（50 筆）；刪除後從清單移除
+  let customers = manyCustomers(80);
   await mockTauri(page, {
     get_server_url: () => 'http://localhost:8080',
     health_check: () => ({ status: 'ok', version: '0.1.0', database: 'ok' }),
     setup_status: () => ({ needs_setup: false }),
-    current_user: () => ADMIN,
+    current_user: () => user,
     list_entities: () => ENTITIES,
     get_entity: ({ key }) => ({
       entity: ENTITIES.find((e) => e.key === key),
@@ -59,7 +72,24 @@ async function setup(page: Page) {
     }),
     list_layouts: () => [],
     list_records: ({ key, query }) =>
-      fakeListRecords(key === 'customer' ? CUSTOMERS : [], query as RecordListQuery),
+      fakeListRecords(key === 'customer' ? customers : [], query as RecordListQuery),
+    get_record: ({ id }) => {
+      const r = customerDetail(customers, id as string);
+      if (!r) {
+        throw new CommandRejection({
+          kind: 'api',
+          code: 'NOT_FOUND',
+          message: '找不到資料',
+          details: null,
+        });
+      }
+      return r;
+    },
+    get_form_layout: () => CUSTOMER_FORM_LAYOUT,
+    delete_record: ({ id }) => {
+      customers = customers.filter((c) => c.id !== id);
+      return null;
+    },
   });
 }
 
@@ -117,14 +147,14 @@ test('customer split view: arrow keys and selection survives reload', async ({ p
   await page.keyboard.press('ArrowDown');
   await expect(list.getByRole('option', { name: /C004/ })).toHaveAttribute('aria-selected', 'true');
   await expect(page).toHaveURL(new RegExp(`selected=${customerId(4)}`));
-  await expect(page.getByTestId('detail-title')).toHaveText('C004 Global Trading Co.');
+  await expect(page.getByTestId('preview-title')).toHaveText('C004 Global Trading Co.');
 
   await page.reload();
   await expect(listbox(page).getByRole('option', { name: /C004/ })).toHaveAttribute(
     'aria-selected',
     'true',
   );
-  await expect(page.getByTestId('detail-title')).toHaveText('C004 Global Trading Co.');
+  await expect(page.getByTestId('preview-title')).toHaveText('C004 Global Trading Co.');
 });
 
 test('supplier uses split view, product keeps the table', async ({ page }) => {
@@ -136,4 +166,51 @@ test('supplier uses split view, product keeps the table', async ({ page }) => {
   await page.goto('/#/entities/product');
   await expect(page.getByRole('columnheader', { name: '料號' })).toBeVisible();
   await expect(page.getByRole('listbox')).toHaveCount(0);
+});
+
+test('customer preview: form layout, contacts, delete', async ({ page }) => {
+  await setup(page);
+  await page.goto(`/#/entities/customer?selected=${customerId(1)}`);
+
+  const preview = page.getByTestId('record-preview');
+  await expect(preview.getByTestId('preview-title')).toHaveText('C001 大華實業股份有限公司');
+  await expect(preview.getByRole('region', { name: '基本資料' })).toBeVisible();
+  // 2 欄：名稱在左、編號在右（同一列）
+  const name = await preview.locator('[data-item="name"]').boundingBox();
+  const code = await preview.locator('[data-item="code"]').boundingBox();
+  expect(code!.x).toBeGreaterThan(name!.x);
+  expect(Math.abs(code!.y - name!.y)).toBeLessThan(2);
+  const contacts = preview.getByRole('region', { name: '客戶聯絡人' });
+  await expect(contacts.locator('tbody tr.ant-table-row')).toHaveCount(2);
+  await expect(contacts).toContainText('王小明');
+  await expect(preview.getByRole('button', { name: /編\s*輯/ })).toBeVisible();
+
+  // 刪除另一筆：選取清除、列表更新
+  await page
+    .getByRole('listbox', { name: '客戶列表' })
+    .getByRole('option', { name: /C002/ })
+    .click();
+  await expect(preview.getByTestId('preview-title')).toHaveText('C002 光明電子有限公司');
+  await preview.getByRole('button', { name: /刪\s*除/ }).click();
+  await page
+    .locator('.ant-popconfirm')
+    .getByRole('button', { name: /刪\s*除/ })
+    .click();
+  await expect(page.getByText('請從左側選擇客戶')).toBeVisible();
+  await expect(page).not.toHaveURL(/selected=/);
+  await expect(page.getByTestId('picker-total')).toHaveText('共 82 筆');
+  await expect(listbox(page).getByRole('option', { name: /C002/ })).toHaveCount(0);
+});
+
+test('customer preview: viewer is read only, missing record shows not found', async ({ page }) => {
+  await setup(page, VIEWER);
+  await page.goto(`/#/entities/customer?selected=${customerId(1)}`);
+  const preview = page.getByTestId('record-preview');
+  await expect(preview.getByTestId('preview-title')).toHaveText('C001 大華實業股份有限公司');
+  await expect(preview.getByRole('button', { name: /編\s*輯/ })).toHaveCount(0);
+  await expect(preview.getByRole('button', { name: /刪\s*除/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /新\s*增/ })).toHaveCount(0);
+
+  await page.goto('/#/entities/customer?selected=0196f5a0-0000-7000-8000-00000000dead');
+  await expect(page.getByText('找不到資料')).toBeVisible();
 });

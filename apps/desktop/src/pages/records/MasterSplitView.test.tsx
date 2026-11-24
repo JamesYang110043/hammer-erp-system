@@ -4,20 +4,26 @@ import { describe, expect, it } from 'vitest';
 
 import { App } from '../../App';
 import type {
+  CurrentUser,
   DefaultViewLayout_Serialize as DefaultViewLayout,
+  Record as DataRecord,
   RecordListQuery_Deserialize as RecordListQuery,
 } from '../../bindings';
-import { ADMIN, startupCommands } from '../../test/fixtures';
-import { mockCommands } from '../../test/ipc';
+import { ADMIN, VIEWER, startupCommands } from '../../test/fixtures';
+import { commandError, mockCommands } from '../../test/ipc';
 import type { CommandHandler } from '../../test/ipc';
 import {
   CUSTOMER,
+  CUSTOMER_CONTACT,
+  CUSTOMER_CONTACT_FIELDS,
   CUSTOMER_FIELDS,
+  CUSTOMER_FORM_LAYOUT,
   NAMED_CUSTOMERS,
   PRODUCT,
   PRODUCT_FIELDS,
   SUPPLIER,
   SUPPLIER_FIELDS,
+  customerDetail,
   customerId,
   fakeListRecords,
 } from '../../test/masterSplitFixtures';
@@ -29,7 +35,9 @@ const FIELDS: Record<string, typeof CUSTOMER_FIELDS> = {
   customer: CUSTOMER_FIELDS,
   supplier: SUPPLIER_FIELDS,
   product: PRODUCT_FIELDS,
+  customer_contact: CUSTOMER_CONTACT_FIELDS,
 };
+const ENTITIES = [CUSTOMER, CUSTOMER_CONTACT, SUPPLIER, PRODUCT];
 
 const GENERATED: DefaultViewLayout = {
   source: 'generated',
@@ -37,19 +45,33 @@ const GENERATED: DefaultViewLayout = {
   config: { columns: [], sort: null, filters: [] },
 };
 
-function renderAt(hash: string, extra: Record<string, CommandHandler> = {}) {
+function renderAt(
+  hash: string,
+  extra: Record<string, CommandHandler> = {},
+  user: CurrentUser = ADMIN,
+) {
   window.location.hash = hash;
+  // 刪除後列表與單筆查詢都看不到那筆
+  let customers: DataRecord[] = [...NAMED_CUSTOMERS];
   const invoke = mockCommands({
-    ...startupCommands(ADMIN),
-    list_entities: () => [CUSTOMER, SUPPLIER, PRODUCT],
+    ...startupCommands(user),
+    list_entities: () => ENTITIES,
     get_entity: ({ key }) => ({
-      entity: [CUSTOMER, SUPPLIER, PRODUCT].find((e) => e.key === key),
+      entity: ENTITIES.find((e) => e.key === key),
       fields: FIELDS[key as string] ?? [],
     }),
     get_default_layout: () => GENERATED,
     list_layouts: () => [],
     list_records: ({ key, query }) =>
-      fakeListRecords(key === 'customer' ? NAMED_CUSTOMERS : [], query as RecordListQuery),
+      fakeListRecords(key === 'customer' ? customers : [], query as RecordListQuery),
+    get_record: ({ id }) =>
+      customerDetail(customers, id as string) ??
+      commandError({ kind: 'api', code: 'NOT_FOUND', message: '找不到資料', details: null }),
+    get_form_layout: () => CUSTOMER_FORM_LAYOUT,
+    delete_record: ({ id }) => {
+      customers = customers.filter((c) => c.id !== id);
+      return null;
+    },
     ...extra,
   });
   renderWithProviders(<App />);
@@ -163,7 +185,9 @@ describe('分割檢視', () => {
       'aria-selected',
       'true',
     );
-    expect(screen.getByTestId('detail-title')).toHaveTextContent('C001 大華實業股份有限公司');
+    expect(await screen.findByTestId('preview-title')).toHaveTextContent(
+      'C001 大華實業股份有限公司',
+    );
 
     await user.keyboard('{ArrowDown}');
     await waitFor(() => expect(window.location.hash).toContain(`selected=${customerId(2)}`));
@@ -186,5 +210,79 @@ describe('分割檢視', () => {
       'aria-activedescendant',
       `master-picker-option-${customerId(2)}`,
     );
+  });
+});
+
+describe('右側唯讀預覽', () => {
+  const preview = () => screen.getByTestId('record-preview');
+
+  /** 預覽中依畫面順序的欄位標籤。 */
+  const labels = () =>
+    Array.from(preview().querySelectorAll('.preview-item > div:first-child')).map(
+      (el) => el.textContent,
+    );
+
+  it('fields_follow_form_layout_and_contacts_are_listed', async () => {
+    renderAt(`#/entities/customer?selected=${customerId(1)}`);
+    expect(
+      await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toHaveTextContent('C001 大華實業股份有限公司');
+
+    // 依版面：名稱在編號前面；區塊標題
+    expect(labels()).toEqual(['公司名稱', '客戶編號', '統一編號', '簡稱', '啟用', '電話']);
+    expect(within(preview()).getByRole('region', { name: '基本資料' })).toBeInTheDocument();
+    expect(within(preview()).getByRole('region', { name: '聯絡資訊' })).toBeInTheDocument();
+    expect(within(preview()).getByText('12345675')).toBeInTheDocument();
+    // 勾選欄位以唯讀勾選框顯示
+    expect(within(preview()).getByRole('checkbox', { name: '啟用' })).toBeDisabled();
+
+    // 聯絡人唯讀表格
+    const contacts = within(preview()).getByRole('region', { name: '客戶聯絡人' });
+    const rows = contacts.querySelectorAll('tbody tr.ant-table-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('王小明採購經理0912-345-678');
+    expect(within(contacts).queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('viewer_has_no_edit_or_delete', async () => {
+    renderAt(`#/entities/customer?selected=${customerId(1)}`, {}, VIEWER);
+    await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    expect(within(preview()).queryByRole('button', { name: /編\s*輯/ })).not.toBeInTheDocument();
+    expect(within(preview()).queryByRole('button', { name: /刪\s*除/ })).not.toBeInTheDocument();
+  });
+
+  it('admin_sees_edit_and_delete', async () => {
+    renderAt(`#/entities/customer?selected=${customerId(1)}`);
+    await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    expect(within(preview()).getByRole('button', { name: /編\s*輯/ })).toBeInTheDocument();
+    expect(within(preview()).getByRole('button', { name: /刪\s*除/ })).toBeInTheDocument();
+  });
+
+  it('delete_clears_selection_and_refreshes_list', async () => {
+    const invoke = renderAt(`#/entities/customer?selected=${customerId(2)}`);
+    await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    await waitForOptions();
+    const user = userEvent.setup();
+
+    await user.click(within(preview()).getByRole('button', { name: /刪\s*除/ }));
+    await screen.findByText('確定要刪除這筆資料？');
+    const popup = document.querySelector<HTMLElement>('.ant-popconfirm')!;
+    await user.click(within(popup).getByRole('button', { name: /刪\s*除/ }));
+
+    await waitFor(() => expect(window.location.hash).not.toContain('selected='));
+    expect(await screen.findByText('請從左側選擇客戶')).toBeInTheDocument();
+    await waitFor(() => expect(optionTexts().some((t) => t?.includes('C002'))).toBe(false));
+    expect(invoke).toHaveBeenCalledWith('delete_record', {
+      key: 'customer',
+      id: customerId(2),
+      version: 1,
+    });
+  });
+
+  it('missing_record_shows_not_found', async () => {
+    renderAt('#/entities/customer?selected=0196f5a0-0000-7000-8000-00000000dead');
+    expect(
+      await screen.findByText('找不到資料', {}, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toBeInTheDocument();
   });
 });

@@ -10,6 +10,7 @@ import {
   mergeRecords,
   pickerPageQuery,
   pickerSearchQueries,
+  previewFields,
   searchFieldKeys,
   usesSplitView,
 } from './masterSplit';
@@ -114,5 +115,18 @@ describe('adjacentId', () => {
     expect(adjacentId(items, null, 1)).toBe('1');
     expect(adjacentId(items, 'missing', -1)).toBe('1');
     expect(adjacentId([], null, 1)).toBeUndefined();
+  });
+});
+
+describe('previewFields', () => {
+  it('active_visible_fields_including_formula_sorted', () => {
+    const fields = [
+      fieldDef({ field_key: 'b', sort_order: 2 }),
+      fieldDef({ field_key: 'hidden', is_visible: false, sort_order: 0 }),
+      fieldDef({ field_key: 'off', is_active: false, sort_order: 0 }),
+      fieldDef({ field_key: 'f', data_type: 'formula', sort_order: 3 }),
+      fieldDef({ field_key: 'a', sort_order: 1 }),
+    ];
+    expect(previewFields(fields).map((f) => f.field_key)).toEqual(['a', 'b', 'f']);
   });
 });
