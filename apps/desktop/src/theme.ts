@@ -1,4 +1,7 @@
 import type { ConfigProviderProps, ThemeConfig } from 'antd';
+import { createElement } from 'react';
+
+import { EmptyState } from './components/EmptyState';
 
 /**
  * 全站 antd 主題（main.tsx 與測試的 render.tsx 共用），定案見 docs/architecture.md「視覺設計」。
@@ -39,6 +42,8 @@ export const SEMANTIC_COLORS = {
   bgLayout: '#F3F5F8',
   /** 表格表頭、預設標籤底色 */
   tableHeaderBg: '#F5F7FA',
+  /** 表格列 hover 底色（帶一點主色調，與表頭區隔） */
+  tableRowHoverBg: '#F0F4FA',
 } as const;
 
 /** 中文介面的字型順序；數字另以 `tabular-nums` 對齊（見 styles.css）。 */
@@ -79,7 +84,12 @@ export const appTheme: ThemeConfig = {
     },
     Button: { primaryShadow: 'none', defaultShadow: 'none', dangerShadow: 'none' },
     Card: { headerFontSize: 16 },
-    Table: { headerBg: SEMANTIC_COLORS.tableHeaderBg, headerSplitColor: 'transparent' },
+    Table: {
+      headerBg: SEMANTIC_COLORS.tableHeaderBg,
+      headerSplitColor: 'transparent',
+      rowHoverBg: SEMANTIC_COLORS.tableRowHoverBg,
+      // 選取列沿用主色推導的淺底（colorPrimaryBg），不另外指定
+    },
     Tag: { defaultBg: SEMANTIC_COLORS.tableHeaderBg },
   },
 };
@@ -87,8 +97,11 @@ export const appTheme: ThemeConfig = {
 /**
  * 與主題一起套用的元件預設值（main.tsx 與測試的 render.tsx 共用）。
  *
- * 卡片不加框線、改用淡陰影（`boxShadowTertiary`），在內容區的淺灰底上做出層次。
+ * - 卡片不加框線、改用淡陰影（`boxShadowTertiary`），在內容區的淺灰底上做出層次
+ * - 沒有資料時的畫面統一用 `EmptyState`
  */
 export const appComponentConfig = {
   card: { variant: 'borderless' },
-} satisfies Pick<ConfigProviderProps, 'card'>;
+  // 表格、清單、下拉選單沒有資料時：一致的空狀態（components/EmptyState.tsx）
+  renderEmpty: () => createElement(EmptyState, { compact: true }),
+} satisfies Pick<ConfigProviderProps, 'card' | 'renderEmpty'>;

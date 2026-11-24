@@ -298,7 +298,7 @@ test('sales order: product fills sale price, preview matches server, confirm', a
 
   // 確認 → 已確認，可以結案或作廢
   await p
-    .locator('.ant-card-extra')
+    .locator('.page-header-actions')
     .getByRole('button', { name: /確\s?認/ })
     .click();
   await expect(p.getByRole('dialog')).toContainText('之後可以據以出貨');
@@ -306,9 +306,13 @@ test('sales order: product fills sale price, preview matches server, confirm', a
     .getByRole('dialog')
     .getByRole('button', { name: /確\s?認/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已確認' })).toBeVisible();
-  await expect(p.locator('.ant-card-extra').getByRole('button', { name: /結\s?案/ })).toBeVisible();
-  await expect(p.locator('.ant-card-extra').getByRole('button', { name: /作\s?廢/ })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已確認' })).toBeVisible();
+  await expect(
+    p.locator('.page-header-actions').getByRole('button', { name: /結\s?案/ }),
+  ).toBeVisible();
+  await expect(
+    p.locator('.page-header-actions').getByRole('button', { name: /作\s?廢/ }),
+  ).toBeVisible();
   await expect(p.getByRole('dialog')).toHaveCount(0);
   await settled(p);
   await p.screenshot({ path: test.info().outputPath('order-confirmed.png'), fullPage: true });
@@ -627,7 +631,7 @@ test('shipment from order: suggested lots, pick lots, quantity checks, post, use
   });
 
   // 過帳失敗（庫存不足）：列出不足的商品並標示是哪一列
-  const postButton = p.locator('.ant-card-extra').getByRole('button', { name: /過\s?帳/ });
+  const postButton = p.locator('.page-header-actions').getByRole('button', { name: /過\s?帳/ });
   await postButton.click();
   await p
     .getByRole('dialog')
@@ -656,7 +660,7 @@ test('shipment from order: suggested lots, pick lots, quantity checks, post, use
     .getByRole('dialog')
     .getByRole('button', { name: /過\s?帳/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已過帳' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已過帳' })).toBeVisible();
   await expect(p.getByRole('textbox', { name: '銷貨成本', exact: true })).toHaveValue('855.00');
 
   // 實際扣用的批號與成本

@@ -91,6 +91,19 @@ export function isNumericType(field: FieldDefinition): boolean {
   return data_type === 'integer' || data_type === 'decimal' || data_type === 'money';
 }
 
+/**
+ * 顯示用的數值文字是否為負數（`"-1,234.50"`、`"-0.5"`）；`"-0"`、`"-0.00"` 不算。
+ *
+ * 只看字串，不轉成浮點數（D9）。
+ */
+export function isNegativeNumber(text: string): boolean {
+  const m = /^-([\d,]*)(?:\.(\d*))?$/.exec(text.trim());
+  if (!m) {
+    return false;
+  }
+  return /[1-9]/.test(`${m[1]}${m[2] ?? ''}`);
+}
+
 /** 已刪除的關聯資料加在標題後面的文字。 */
 export const DELETED_SUFFIX = '（已刪除）';
 

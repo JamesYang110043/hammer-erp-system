@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, LayoutOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { LayoutOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { DragEndEvent } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
 import { Alert, App, Button, Card, Popconfirm, Space, Table, Tag, Typography } from 'antd';
@@ -6,6 +6,7 @@ import type { TableColumnsType } from 'antd';
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
+import { PageHeader } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
 import { mutationErrorMessage } from '../../api/errors';
 import {
@@ -190,20 +191,13 @@ export function FieldsPage() {
   const nextSortOrder = fields.reduce((max, f) => Math.max(max, f.sort_order + 1), 0);
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Card
-        title={
-          <Space>
-            <Button
-              type="text"
-              icon={<ArrowLeftOutlined />}
-              aria-label={parent ? `回到「${parent.label}」` : '回到資料類別列表'}
-              onClick={() => navigate(parent ? `/schema/${parent.key}` : '/schema')}
-            />
-            {entity.data ? `欄位定義：${entity.data.entity.label}` : '欄位定義'}
-          </Space>
-        }
-        extra={
+    <div className="page">
+      <PageHeader
+        onBack={() => navigate(parent ? `/schema/${parent.key}` : '/schema')}
+        backLabel={parent ? `回到「${parent.label}」` : '回到資料類別列表'}
+        title={entity.data ? `欄位定義：${entity.data.entity.label}` : '欄位定義'}
+        description="拖曳左側把手調整欄位順序；停用的欄位資料會保留。"
+        actions={
           <Space>
             <Button
               icon={<ReloadOutlined />}
@@ -231,7 +225,8 @@ export function FieldsPage() {
             </Button>
           </Space>
         }
-      >
+      />
+      <Card>
         {entity.isError && (
           <Alert
             showIcon
@@ -240,9 +235,6 @@ export function FieldsPage() {
             style={{ marginBottom: 16 }}
           />
         )}
-        <Typography.Paragraph type="secondary">
-          拖曳左側把手調整欄位順序；停用的欄位資料會保留。
-        </Typography.Paragraph>
         <SortableTableContext ids={fields.map((f) => f.id)} onDragEnd={onDragEnd}>
           <Table<FieldDefinition>
             rowKey="id"
@@ -267,6 +259,6 @@ export function FieldsPage() {
         />
       </Card>
       {hasDetails && current && <DetailEntitiesCard parent={current} />}
-    </Space>
+    </div>
   );
 }

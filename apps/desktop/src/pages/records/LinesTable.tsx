@@ -2,6 +2,7 @@ import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, Form, Radio, Table, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 
+import { SectionTitle } from '../../components/SectionTitle';
 import type { Attachment } from '../../api/attachments';
 import type { FieldDefinition, RelationRef } from '../../bindings';
 import { isNumericType } from '../../records/display';
@@ -248,7 +249,7 @@ export function LinesTable({
         }
         return (
           <section aria-label={entity.label} style={{ marginBottom: 24 }}>
-            <Typography.Title level={5}>{entity.label}</Typography.Title>
+            <SectionTitle>{entity.label}</SectionTitle>
             <Table<Row>
               size="small"
               bordered

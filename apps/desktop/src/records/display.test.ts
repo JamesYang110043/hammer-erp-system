@@ -5,6 +5,7 @@ import {
   formatDecimal,
   formatFieldText,
   groupThousands,
+  isNegativeNumber,
   isNumericType,
   relationLabel,
   valueField,
@@ -84,5 +85,22 @@ describe('公式欄位', () => {
     expect(valueField(fieldDef({ data_type: 'formula' })).data_type).toBe('text');
     const text = fieldDef();
     expect(valueField(text)).toBe(text);
+  });
+});
+
+describe('isNegativeNumber', () => {
+  it('detects_negative_formatted_numbers', () => {
+    expect(isNegativeNumber('-1,234.50')).toBe(true);
+    expect(isNegativeNumber('-0.5')).toBe(true);
+    expect(isNegativeNumber(formatDecimal('-1234.5', 2))).toBe(true);
+  });
+
+  it('zero_positive_and_text_are_not_negative', () => {
+    expect(isNegativeNumber('-0')).toBe(false);
+    expect(isNegativeNumber('-0.00')).toBe(false);
+    expect(isNegativeNumber('1,234.50')).toBe(false);
+    expect(isNegativeNumber('0')).toBe(false);
+    expect(isNegativeNumber('-abc')).toBe(false);
+    expect(isNegativeNumber('')).toBe(false);
   });
 });

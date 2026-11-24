@@ -281,13 +281,13 @@ test('purchase invoice from goods receipts: seller, amounts, register, allowance
   });
 
   // 登錄
-  const action = (name: RegExp) => p.locator('.ant-card-extra').getByRole('button', { name });
+  const action = (name: RegExp) => p.locator('.page-header-actions').getByRole('button', { name });
   await action(/登\s?錄/).click();
   await p
     .getByRole('dialog')
     .getByRole('button', { name: /登\s?錄/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已登錄' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已登錄' })).toBeVisible();
   await expect(p.getByText(/此單據已登錄，不能修改。登錄時間：/)).toBeVisible();
   await expect(p.getByRole('dialog')).toHaveCount(0);
   await settled(p);
@@ -321,7 +321,7 @@ test('purchase invoice from goods receipts: seller, amounts, register, allowance
     .getByRole('dialog')
     .getByRole('button', { name: /開\s?立/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已開立' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已開立' })).toBeVisible();
   await expect(p.getByRole('dialog')).toHaveCount(0);
   await settled(p);
   await p.screenshot({ path: test.info().outputPath('purchase-allowance-issued.png') });
@@ -375,11 +375,13 @@ test('customs certificate lists receipts separately and cannot be allowed', asyn
 
   // 已登錄的海關繳納證沒有「開立折讓」
   await p.goto(`/#/entities/purchase_invoice/${PURCHASE_INVOICE_ID}`);
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已登錄' })).toBeVisible();
-  await expect(p.locator('.ant-card-extra').getByRole('button', { name: /作\s?廢/ })).toBeVisible();
-  await expect(p.locator('.ant-card-extra').getByRole('button', { name: /開立折讓/ })).toHaveCount(
-    0,
-  );
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已登錄' })).toBeVisible();
+  await expect(
+    p.locator('.page-header-actions').getByRole('button', { name: /作\s?廢/ }),
+  ).toBeVisible();
+  await expect(
+    p.locator('.page-header-actions').getByRole('button', { name: /開立折讓/ }),
+  ).toHaveCount(0);
 });
 
 test('goods receipt shows its purchase invoices', async ({ page: p }) => {

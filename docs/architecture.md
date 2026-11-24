@@ -105,6 +105,7 @@ M9 定案（#229，三套方案比較後選定深藍）。設定集中在 `apps/
 | 錯誤 | `colorError` | `#D64545` |
 | 內容區底色 | `colorBgLayout` | `#F3F5F8`（卡片白底，靠底色做出層次） |
 | 表頭、預設標籤底色 | `SEMANTIC_COLORS.tableHeaderBg` | `#F5F7FA` |
+| 表格列 hover | `SEMANTIC_COLORS.tableRowHoverBg` | `#F0F4FA`；選取列沿用主色推導的 `colorPrimaryBg` |
 | 中性灰階 | antd 預設 | 文字、邊框、分隔線沿用 antd 的中性色 token（`colorText`、`colorBorder`、`colorSplit`…） |
 | 側邊欄底色 | `BRAND_COLORS.siderBg` | `#12233D`；展開的子選單 `#0C1A2F` |
 | 側邊欄文字 | `BRAND_COLORS.siderText`／`siderItemText`／`siderMutedText` | `#E6ECF5`（標題、hover）／`#B1BAC7`（選單項目）／`#8792A2`（區塊標題等次要文字） |
@@ -136,9 +137,18 @@ M9 定案（#229，三套方案比較後選定深藍）。設定集中在 `apps/
 - 登入、建立管理者、強制改密碼、連線失敗共用；寬視窗左右分欄：左側品牌區塊（`siderBg` → 主色漸層、圖示、系統名稱、標語），右側表單卡片（`boxShadowSecondary`）
 - 視窗寬度 ≤ 880px 時隱藏品牌區塊，Logo 移到卡片上方；右上角保留連線設定
 
+**頁面元件**（#232）
+
+| 元件 | 用途 |
+|---|---|
+| `components/PageHeader.tsx` | 頁面標題列：左側（返回按鈕）圖示＋標題（20px）＋標籤、說明文字，右側動作列；`Page` = `PageHeader` 加一張放內容的卡片。各頁一律使用，不再用 Card 的 `title`／`extra` 當頁面標題 |
+| `components/SectionTitle.tsx` | 頁面內的區塊標題（表單區塊、明細表、群組）：左側 3px 主色色條，`extra` 放右側工具列 |
+| `components/NumberText.tsx` | 數字、金額：`tabular-nums`，負數為錯誤色；表格欄位另設 `align: 'right'` |
+| `components/EmptyState.tsx` | 空狀態（沒有資料、沒有權限、找不到、已停用、尚未開放）：圖示＋標題＋引導文字；表格等元件的「沒有資料」以 ConfigProvider `renderEmpty` 使用精簡版 |
+
 **規則**
 
-- 元件不寫死色碼：antd 元件用 token（`theme.useToken()`），側邊欄等 antd 沒有對應 token 的區域用 `theme.ts` 匯出的 `BRAND_COLORS`、`SEMANTIC_COLORS`。
+- 元件不寫死色碼：antd 元件用 token（`theme.useToken()`），側邊欄等 antd 沒有對應 token 的區域用 `theme.ts` 匯出的 `BRAND_COLORS`、`SEMANTIC_COLORS`；`src/` 內的色碼只出現在 `theme.ts`。
 - 文字與背景的對比 ≥ 4.5:1（側邊欄的顏色由 `theme.test.ts` 檢查）。
 - 桌面程式預設視窗 1280 × 800、最小 1024 × 640（`tauri.conf.json`），版面以這兩個尺寸為準。
 

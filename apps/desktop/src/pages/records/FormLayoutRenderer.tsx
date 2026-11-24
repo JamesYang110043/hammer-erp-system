@@ -1,7 +1,8 @@
-import { Collapse, Typography } from 'antd';
+import { Collapse } from 'antd';
 import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 
+import { SectionTitle } from '../../components/SectionTitle';
 import { FORM_BLOCKS, sectionFieldKeys } from '../../records/formLayout';
 import type { FormItem, FormLayoutConfig, FormSection } from '../../records/formLayout';
 
@@ -100,11 +101,7 @@ export function FormLayoutRenderer({
         }
         return (
           <section key={section.key} aria-label={label} data-section={section.key}>
-            {label && (
-              <Typography.Title level={5} style={{ marginTop: 0 }}>
-                {label}
-              </Typography.Title>
-            )}
+            {label && <SectionTitle>{label}</SectionTitle>}
             {grid}
           </section>
         );

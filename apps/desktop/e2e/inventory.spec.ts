@@ -212,9 +212,9 @@ test('opening stock: enter, post and check inventory', async ({ page: p }) => {
       ],
     },
   });
-  await p.locator('.ant-card-extra').getByRole('button', { name: POST_BUTTON }).click();
+  await p.locator('.page-header-actions').getByRole('button', { name: POST_BUTTON }).click();
   await p.getByRole('dialog').getByRole('button', { name: POST_BUTTON }).click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已過帳' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已過帳' })).toBeVisible();
 
   // 庫存查詢：低於安全庫存的商品有標示
   await p.getByRole('menuitem', { name: /庫存查詢/ }).click();

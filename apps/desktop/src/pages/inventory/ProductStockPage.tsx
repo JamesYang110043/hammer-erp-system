@@ -4,6 +4,9 @@ import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 
+import { NumberText } from '../../components/NumberText';
+import { PageHeader } from '../../components/PageHeader';
+import { SectionTitle } from '../../components/SectionTitle';
 import { errorMessage } from '../../api/client';
 import { useInventoryTransactions, useProductLots } from '../../api/inventory';
 import { useRecord } from '../../api/records';
@@ -74,7 +77,7 @@ function lotColumns(
       title: '單位成本',
       dataIndex: 'unit_cost_twd',
       align: 'right',
-      render: (v: string) => formatUnitCost(v),
+      render: (v: string) => <NumberText>{formatUnitCost(v)}</NumberText>,
     },
   ];
 }
@@ -104,7 +107,7 @@ const txnColumns: TableColumnsType<InventoryTransaction> = [
     title: '單位成本',
     dataIndex: 'unit_cost_twd',
     align: 'right',
-    render: (v: string) => formatUnitCost(v),
+    render: (v: string) => <NumberText>{formatUnitCost(v)}</NumberText>,
   },
   {
     title: '來源單據',
@@ -165,10 +168,10 @@ export function ProductStockPage() {
   const error = product.error ?? lots.error;
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card
+    <div className="page">
+      <PageHeader
         title={title}
-        extra={
+        actions={
           <Space>
             <Button
               icon={<ReloadOutlined />}
@@ -185,24 +188,26 @@ export function ProductStockPage() {
             </Button>
           </Space>
         }
-      >
+      />
+      <Card>
         {error && (
           <Alert showIcon type="error" message={errorMessage(error)} style={{ marginBottom: 16 }} />
         )}
-        <Space style={{ marginBottom: 8 }}>
-          <Typography.Title level={5} style={{ margin: 0 }}>
-            批號
-          </Typography.Title>
-          <Checkbox
-            checked={includeEmpty}
-            onChange={(e) => {
-              setIncludeEmpty(e.target.checked);
-              setLotPage(1);
-            }}
-          >
-            含已用完的批號
-          </Checkbox>
-        </Space>
+        <SectionTitle
+          extra={
+            <Checkbox
+              checked={includeEmpty}
+              onChange={(e) => {
+                setIncludeEmpty(e.target.checked);
+                setLotPage(1);
+              }}
+            >
+              含已用完的批號
+            </Checkbox>
+          }
+        >
+          批號
+        </SectionTitle>
         <Table<InventoryLot>
           aria-label="批號"
           rowKey="id"
@@ -297,6 +302,6 @@ export function ProductStockPage() {
           }}
         />
       </Card>
-    </Space>
+    </div>
   );
 }

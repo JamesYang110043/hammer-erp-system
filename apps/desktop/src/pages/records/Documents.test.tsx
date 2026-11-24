@@ -53,9 +53,9 @@ async function waitForForm() {
   return screen.findByRole('textbox', { name: '單號' }, { timeout: PAGE_LOAD_TIMEOUT });
 }
 
-/** 表單右上角的按鈕區（確認對話框關閉時有動畫，jsdom 中會留在畫面上，不能用 screen 查詢）。 */
+/** 頁面標題列右側的按鈕區（確認對話框關閉時有動畫，jsdom 中會留在畫面上，不能用 screen 查詢）。 */
 function actions() {
-  return within(document.querySelector<HTMLElement>('.ant-card-extra')!);
+  return within(document.querySelector<HTMLElement>('.page-header-actions')!);
 }
 
 /** 確認對話框（antd Modal.confirm）。 */

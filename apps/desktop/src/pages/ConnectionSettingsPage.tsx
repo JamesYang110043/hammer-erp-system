@@ -1,6 +1,7 @@
-import { Alert, App, Button, Card, Form, Input, Space, Spin } from 'antd';
+import { Alert, App, Button, Form, Input, Space, Spin } from 'antd';
 import { useEffect } from 'react';
 
+import { Page } from '../components/PageHeader';
 import { errorMessage } from '../api/client';
 import { useSaveServerUrl, useServerUrl, useTestConnection } from '../api/queries';
 
@@ -41,7 +42,7 @@ export function ConnectionSettingsPage() {
   }
 
   return (
-    <Card title="連線設定" style={{ maxWidth: 640 }}>
+    <Page title="連線設定" cardProps={{ style: { maxWidth: 640 } }}>
       <Form form={form} layout="vertical" onFinish={handleSave} onValuesChange={() => test.reset()}>
         <Form.Item
           label="伺服器網址"
@@ -76,6 +77,6 @@ export function ConnectionSettingsPage() {
       )}
       {test.isError && <Alert showIcon type="error" message={errorMessage(test.error)} />}
       {save.isError && <Alert showIcon type="error" message={errorMessage(save.error)} />}
-    </Card>
+    </Page>
   );
 }

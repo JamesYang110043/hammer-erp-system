@@ -3,7 +3,6 @@ import {
   Alert,
   App,
   Button,
-  Card,
   DatePicker,
   Form,
   Popconfirm,
@@ -12,11 +11,11 @@ import {
   Table,
   Tag,
   Tooltip,
-  Typography,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 
+import { Page } from '../../components/PageHeader';
 import { apiErrorCode, errorMessage } from '../../api/client';
 import { useAllCurrencies } from '../../api/currencies';
 import { useDeleteExchangeRate, useExchangeRates } from '../../api/exchangeRates';
@@ -132,9 +131,10 @@ export function ExchangeRatesPage() {
   }
 
   return (
-    <Card
+    <Page
       title="匯率"
-      extra={
+      description="匯率為 1 單位外幣兌換的新台幣金額。"
+      actions={
         <Space>
           <Button icon={<ReloadOutlined />} onClick={reload} loading={rates.isFetching}>
             重新整理
@@ -147,9 +147,6 @@ export function ExchangeRatesPage() {
         </Space>
       }
     >
-      <Typography.Paragraph type="secondary">
-        匯率為 1 單位外幣兌換的新台幣金額。
-      </Typography.Paragraph>
       <Form form={form} layout="inline" onFinish={search} style={{ marginBottom: 16, rowGap: 8 }}>
         <Form.Item label="幣別" name="currencyCode">
           <Select
@@ -218,6 +215,6 @@ export function ExchangeRatesPage() {
           onReload={reload}
         />
       )}
-    </Card>
+    </Page>
   );
 }
