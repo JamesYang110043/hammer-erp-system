@@ -49,7 +49,7 @@ import {
   theme,
 } from 'antd';
 import { useEffect, useMemo, useReducer, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
 import { StatusTag } from '../../components/StatusTag';
@@ -86,7 +86,16 @@ import type {
   DesignerState,
 } from '../../records/formLayoutDesigner';
 import { detailEntitiesOf } from '../../records/lines';
+import {
+  SPLIT_DETAIL_PREVIEW_WIDTH,
+  hasSplitPreview,
+  layoutAppliesTo,
+  sampleValue,
+} from '../../records/formLayoutPreview';
+import type { PreviewKind, PreviewWidth } from '../../records/formLayoutPreview';
+import { FieldValue } from '../records/FieldValue';
 import { FormLayoutRenderer } from '../records/FormLayoutRenderer';
+import { PreviewItem, ReadonlyLayout } from '../records/ReadonlyLayout';
 
 /** 系統區塊的名稱（§7.7）。 */
 function blockLabel(code: string, details: readonly EntityDefinition[]): string {
@@ -257,6 +266,9 @@ function Designer({
   const { message } = App.useApp();
   const [state, dispatch] = useReducer(designerReducer, layout.config, toDesign);
   const [mode, setMode] = useState<'design' | 'preview'>('design');
+  const [previewKind, setPreviewKind] = useState<PreviewKind>('form');
+  const [previewWidth, setPreviewWidth] = useState<PreviewWidth>('full');
+  const splitPreview = hasSplitPreview(entityKey);
   const [conflict, setConflict] = useState(false);
   const save = useSaveFormLayout(entityKey);
   const reset = useResetFormLayout(entityKey);
@@ -370,14 +382,45 @@ function Designer({
         />
       )}
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Segmented
-          value={mode}
-          onChange={(v) => setMode(v as 'design' | 'preview')}
-          options={[
-            { value: 'design', label: '設計' },
-            { value: 'preview', label: '預覽' },
-          ]}
-        />
+        <Typography.Paragraph
+          type="secondary"
+          style={{ margin: 0 }}
+          data-testid="layout-applies-to"
+        >
+          這份版面套用在：{layoutAppliesTo(entityKey).join('、')}。
+        </Typography.Paragraph>
+        <Space wrap size="middle">
+          <Segmented
+            value={mode}
+            onChange={(v) => setMode(v as 'design' | 'preview')}
+            options={[
+              { value: 'design', label: '設計' },
+              { value: 'preview', label: '預覽' },
+            ]}
+          />
+          {mode === 'preview' && (
+            <Segmented
+              aria-label="預覽方式"
+              value={previewKind}
+              onChange={(v) => setPreviewKind(v as PreviewKind)}
+              options={[
+                { value: 'form', label: '編輯表單' },
+                { value: 'readonly', label: '唯讀預覽' },
+              ]}
+            />
+          )}
+          {mode === 'preview' && splitPreview && (
+            <Segmented
+              aria-label="預覽寬度"
+              value={previewWidth}
+              onChange={(v) => setPreviewWidth(v as PreviewWidth)}
+              options={[
+                { value: 'full', label: '整頁' },
+                { value: 'split', label: '分割檢視右側' },
+              ]}
+            />
+          )}
+        </Space>
         {mode === 'design' ? (
           <>
             <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
@@ -396,7 +439,13 @@ function Designer({
             </Button>
           </>
         ) : (
-          <LayoutPreview state={state} schema={schema} fields={visibleFields} />
+          <LayoutPreview
+            state={state}
+            schema={schema}
+            fields={visibleFields}
+            kind={previewKind}
+            width={splitPreview ? previewWidth : 'full'}
+          />
         )}
       </Space>
       <Modal
@@ -825,15 +874,25 @@ function ItemChip({
   );
 }
 
-/** 預覽：以實際的表單版面元件呈現（欄位為停用的輸入框，系統區塊為佔位）。 */
+/**
+ * 預覽：以實際的表單版面元件呈現。
+ *
+ * - 編輯表單：欄位為停用的輸入框
+ * - 唯讀預覽：與分割檢視右側的 `RecordPreview` 共用 {@link ReadonlyLayout}，值為範例
+ * - 系統區塊（單號以外）為佔位；寬度為「分割檢視右側」時以 1440px 視窗的右側寬度呈現
+ */
 function LayoutPreview({
   state,
   schema,
   fields,
+  kind,
+  width,
 }: {
   state: DesignerState;
   schema: DesignerSchema;
   fields: FieldDefinition[];
+  kind: PreviewKind;
+  width: PreviewWidth;
 }) {
   const { token } = theme.useToken();
   const config = useMemo(
@@ -846,26 +905,21 @@ function LayoutPreview({
     [state, schema, fields],
   );
   const byKey = new Map(fields.map((f) => [f.field_key, f]));
-  const renderBlock = (code: string): ReactNode =>
-    code === FORM_BLOCKS.recordNo ? (
-      <Form.Item label="單號">
-        <Input style={{ maxWidth: 320 }} placeholder="存檔後產生" />
-      </Form.Item>
-    ) : (
-      <div
-        style={{
-          marginBottom: 24,
-          padding: '16px 12px',
-          border: `1px dashed ${token.colorBorder}`,
-          borderRadius: 6,
-          textAlign: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">{blockLabel(code, schema.details)}</Typography.Text>
-      </div>
-    );
-  return (
-    <section aria-label="表單預覽">
+  const placeholder = (code: string) => (
+    <div
+      style={{
+        marginBottom: kind === 'form' ? 24 : 16,
+        padding: '16px 12px',
+        border: `1px dashed ${token.colorBorder}`,
+        borderRadius: 6,
+        textAlign: 'center',
+      }}
+    >
+      <Typography.Text type="secondary">{blockLabel(code, schema.details)}</Typography.Text>
+    </div>
+  );
+  const content =
+    kind === 'form' ? (
       <Form layout="vertical" disabled>
         <FormLayoutRenderer
           config={config}
@@ -877,9 +931,59 @@ function LayoutPreview({
               </Form.Item>
             ) : null;
           }}
-          renderBlock={renderBlock}
+          renderBlock={(code) =>
+            code === FORM_BLOCKS.recordNo ? (
+              <Form.Item label="單號">
+                <Input style={{ maxWidth: 320 }} placeholder="存檔後產生" />
+              </Form.Item>
+            ) : (
+              placeholder(code)
+            )
+          }
         />
       </Form>
+    ) : (
+      <ReadonlyLayout
+        config={config}
+        fields={fields}
+        renderValue={(field) => <SampleValue field={field} />}
+        renderBlock={(code) =>
+          code === FORM_BLOCKS.recordNo ? (
+            <PreviewItem label="單號">
+              <Typography.Text type="secondary">單號範例</Typography.Text>
+            </PreviewItem>
+          ) : (
+            placeholder(code)
+          )
+        }
+      />
+    );
+  return (
+    <section aria-label="表單預覽" data-preview-kind={kind} data-preview-width={width}>
+      {width === 'split' ? (
+        // 與分割檢視右側相同的卡片與寬度
+        <Card
+          data-testid="split-preview-frame"
+          style={{ width: SPLIT_DETAIL_PREVIEW_WIDTH, maxWidth: '100%' }}
+        >
+          {content}
+        </Card>
+      ) : (
+        content
+      )}
     </section>
   );
+}
+
+/** 唯讀預覽的範例值：依欄位型態格式化；關聯、附件顯示佔位文字。 */
+function SampleValue({ field }: { field: FieldDefinition }) {
+  const value = sampleValue(field);
+  if (value === undefined) {
+    return (
+      <Typography.Text type="secondary">
+        {field.data_type === 'file' ? '附件範例' : `${field.label}範例`}
+      </Typography.Text>
+    );
+  }
+  return <FieldValue field={field} value={value} />;
 }
