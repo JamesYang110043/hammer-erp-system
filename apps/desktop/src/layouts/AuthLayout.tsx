@@ -1,8 +1,9 @@
 import { ApiOutlined } from '@ant-design/icons';
-import { Button, Card, Layout, Modal, Typography, theme } from 'antd';
+import { Button, Card, Layout, Modal, theme } from 'antd';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { BrandLogo } from '../components/BrandLogo';
 import { StatusBar } from '../components/StatusBar';
 import { ConnectionSettingsPage } from '../pages/ConnectionSettingsPage';
 
@@ -29,9 +30,7 @@ export function AuthLayout({ title, children }: { title: string; children: React
           paddingInline: 24,
         }}
       >
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          Hammer ERP
-        </Typography.Title>
+        <BrandLogo />
         <Button type="text" icon={<ApiOutlined />} onClick={() => setSettingsOpen(true)}>
           連線設定
         </Button>

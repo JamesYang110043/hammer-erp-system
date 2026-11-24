@@ -1,4 +1,4 @@
-import type { ThemeConfig } from 'antd';
+import type { ConfigProviderProps, ThemeConfig } from 'antd';
 
 /**
  * 全站 antd 主題（main.tsx 與測試的 render.tsx 共用），定案見 docs/architecture.md「視覺設計」。
@@ -26,6 +26,8 @@ export const BRAND_COLORS = {
   siderItemText: '#B1BAC7',
   /** 側邊欄區塊標題等次要文字 */
   siderMutedText: '#8792A2',
+  /** 側邊欄內的分隔線（Logo 下方、區塊之間） */
+  siderDivider: 'rgba(255, 255, 255, 0.08)',
 } as const;
 
 /** 語意色與中性色（不隨主色改變）。 */
@@ -81,3 +83,12 @@ export const appTheme: ThemeConfig = {
     Tag: { defaultBg: SEMANTIC_COLORS.tableHeaderBg },
   },
 };
+
+/**
+ * 與主題一起套用的元件預設值（main.tsx 與測試的 render.tsx 共用）。
+ *
+ * 卡片不加框線、改用淡陰影（`boxShadowTertiary`），在內容區的淺灰底上做出層次。
+ */
+export const appComponentConfig = {
+  card: { variant: 'borderless' },
+} satisfies Pick<ConfigProviderProps, 'card'>;

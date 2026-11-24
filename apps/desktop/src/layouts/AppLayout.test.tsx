@@ -10,7 +10,7 @@ import { mockCommands } from '../test/ipc';
 import { navSectionItems, navSectionTitle, openNavSection, sideNav } from '../test/nav';
 import { renderWithProviders } from '../test/render';
 import { REPAIR } from '../test/schemaFixtures';
-import { NAV_OPEN_KEYS_STORAGE_KEY } from './navSections';
+import { NAV_COLLAPSED_STORAGE_KEY, NAV_OPEN_KEYS_STORAGE_KEY } from './navSections';
 
 const PAGE_LOAD_TIMEOUT = 5000;
 
@@ -128,5 +128,46 @@ describe('左側選單區塊收折', () => {
     expect(within(sideNav()).getByRole('menuitem', { name: /帳號管理/ })).toBeInTheDocument();
     expect(within(sideNav()).queryByRole('menuitem', { name: '基本資料' })).not.toBeInTheDocument();
     expect(within(sideNav()).queryByRole('menuitem', { name: '進貨' })).not.toBeInTheDocument();
+  });
+});
+
+describe('側邊欄收合與麵包屑', () => {
+  const breadcrumb = () => screen.getByRole('navigation', { name: '目前位置' });
+
+  it('collapse_state_survives_reopening', async () => {
+    const first = await renderAt('#/entities/customer');
+    const user = userEvent.setup();
+    expect(within(screen.getByTestId('app-logo')).getByText('Hammer ERP')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '收合側邊欄' }));
+    // 收合後只剩圖示，名稱不顯示
+    await waitFor(() =>
+      expect(within(screen.getByTestId('app-logo')).queryByText('Hammer ERP')).toBeNull(),
+    );
+    expect(window.localStorage.getItem(NAV_COLLAPSED_STORAGE_KEY)).toBe('true');
+
+    first.unmount();
+    await renderAt('#/entities/customer');
+    expect(screen.getByRole('button', { name: '展開側邊欄' })).toBeInTheDocument();
+    window.localStorage.removeItem(NAV_COLLAPSED_STORAGE_KEY);
+  });
+
+  it('breadcrumb_shows_section_and_page', async () => {
+    await renderAt('#/entities/customer');
+    await waitFor(() => expect(breadcrumb()).toHaveTextContent('基本資料/客戶'));
+
+    window.location.hash = '#/entities/purchase_order/new';
+    await waitFor(() => expect(breadcrumb()).toHaveTextContent('進貨/採購單/新增'));
+    // 有下一層時，頁面名稱可以點回列表
+    expect(within(breadcrumb()).getByRole('link', { name: '採購單' })).toHaveAttribute(
+      'href',
+      '#/entities/purchase_order',
+    );
+
+    window.location.hash = '#/users';
+    await waitFor(() => expect(breadcrumb()).toHaveTextContent('帳號管理'));
+
+    window.location.hash = '#/connection';
+    await waitFor(() => expect(breadcrumb()).toHaveTextContent('連線設定'));
   });
 });

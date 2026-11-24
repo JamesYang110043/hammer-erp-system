@@ -6,7 +6,7 @@ import zhTW from 'antd/locale/zh_TW';
 import type { ReactElement, ReactNode } from 'react';
 
 import { createQueryClient } from '../api/queryClient';
-import { appTheme } from '../theme';
+import { appComponentConfig, appTheme } from '../theme';
 
 /** 以與 main.tsx 相同的 Provider（antd 繁中語系與主題、TanStack Query）渲染元件。 */
 export function renderWithProviders(ui: ReactElement, options?: Omit<RenderOptions, 'wrapper'>) {
@@ -14,7 +14,7 @@ export function renderWithProviders(ui: ReactElement, options?: Omit<RenderOptio
   const queryClient = createQueryClient();
   function Wrapper({ children }: { children: ReactNode }) {
     return (
-      <ConfigProvider locale={zhTW} theme={appTheme}>
+      <ConfigProvider locale={zhTW} theme={appTheme} {...appComponentConfig}>
         <AntApp>
           <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
         </AntApp>
