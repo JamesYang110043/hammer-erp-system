@@ -1,64 +1,35 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  DEFAULT_PRESET,
-  THEME_PRESETS,
-  buildTheme,
-  customPalette,
-  mixHex,
-  normalizeHex,
-  resolvePalette,
-} from './theme';
+import { BRAND_COLORS, CONTROL_HEIGHT, appTheme } from './theme';
 
-describe('normalizeHex', () => {
-  it('accepts 6-digit hex with or without #', () => {
-    expect(normalizeHex('1f4e8c')).toBe('#1F4E8C');
-    expect(normalizeHex(' #0f8b8d ')).toBe('#0F8B8D');
+/** WCAG 相對亮度對比（docs/architecture.md「視覺設計」：文字對比 ≥ 4.5:1）。 */
+function contrast(a: string, b: string) {
+  const lum = (hex: string) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => {
+      const c = Number.parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * bl!;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
+describe('appTheme', () => {
+  it('keeps the control height and applies the navy brand color', () => {
+    expect(appTheme.token?.controlHeight).toBe(CONTROL_HEIGHT);
+    expect(appTheme.token?.colorPrimary).toBe('#1F4E8C');
+    expect(appTheme.components?.Menu?.darkItemSelectedBg).toBe(BRAND_COLORS.primary);
+    expect(appTheme.components?.Layout?.siderBg).toBe(BRAND_COLORS.siderBg);
   });
 
-  it('rejects anything else', () => {
-    expect(normalizeHex('navy')).toBeNull();
-    expect(normalizeHex('#fff')).toBeNull();
-    expect(normalizeHex('#1F4E8CFF')).toBeNull();
-  });
-});
-
-describe('mixHex', () => {
-  it('mixes toward the target color', () => {
-    expect(mixHex('#FFFFFF', '#000000', 0)).toBe('#FFFFFF');
-    expect(mixHex('#FFFFFF', '#000000', 1)).toBe('#000000');
-    expect(mixHex('#FF0000', '#0000FF', 0.5)).toBe('#800080');
-  });
-});
-
-describe('resolvePalette', () => {
-  const navy = THEME_PRESETS.navy;
-
-  it('always uses the default preset outside dev mode', () => {
-    expect(resolvePalette(false, '?theme=teal', 'teal')).toBe(THEME_PRESETS[DEFAULT_PRESET]);
-  });
-
-  it('prefers the URL over the stored choice', () => {
-    expect(resolvePalette(true, '?theme=teal', 'navy')).toBe(THEME_PRESETS.teal);
-    expect(resolvePalette(true, '', 'teal')).toBe(THEME_PRESETS.teal);
-  });
-
-  it('derives a palette from a custom hex color', () => {
-    expect(resolvePalette(true, '?theme=8e3b8a', null)).toEqual(customPalette('#8E3B8A'));
-  });
-
-  it('falls back to the default for unknown values', () => {
-    expect(resolvePalette(true, '?theme=pink', null)).toBe(navy);
-    expect(resolvePalette(true, '', null)).toBe(navy);
-  });
-});
-
-describe('buildTheme', () => {
-  it('keeps the control height and applies the brand color', () => {
-    const theme = buildTheme(THEME_PRESETS.teal);
-    expect(theme.token?.controlHeight).toBe(36);
-    expect(theme.token?.colorPrimary).toBe('#0F8B8D');
-    expect(theme.components?.Menu?.darkItemSelectedBg).toBe('#0F8B8D');
-    expect(theme.components?.Layout?.siderBg).toBe(THEME_PRESETS.teal.siderBg);
+  it('sidebar text has enough contrast on the sidebar background', () => {
+    for (const bg of [BRAND_COLORS.siderBg, BRAND_COLORS.siderSubBg]) {
+      expect(contrast(BRAND_COLORS.siderText, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(BRAND_COLORS.siderItemText, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(BRAND_COLORS.siderMutedText, bg)).toBeGreaterThanOrEqual(4.5);
+    }
+    // 選中項目：白字在主色上
+    expect(contrast('#FFFFFF', BRAND_COLORS.primary)).toBeGreaterThanOrEqual(4.5);
   });
 });
