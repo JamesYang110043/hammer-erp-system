@@ -25,11 +25,13 @@ import {
   SUPPLIER_FIELDS,
   customerDetail,
   customerId,
+  partyRecord,
   fakeListRecords,
 } from '../../test/masterSplitFixtures';
 import { renderWithProviders } from '../../test/render';
 
 const PAGE_LOAD_TIMEOUT = 5000;
+const NEW_ID = '0196f5a0-0000-7000-8000-00000000beef';
 
 const FIELDS: Record<string, typeof CUSTOMER_FIELDS> = {
   customer: CUSTOMER_FIELDS,
@@ -71,6 +73,26 @@ function renderAt(
     delete_record: ({ id }) => {
       customers = customers.filter((c) => c.id !== id);
       return null;
+    },
+    update_record: ({ id, req }) => {
+      const { data } = req as { data: Record<string, unknown> };
+      customers = customers.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              data: { ...c.data, ...data },
+              title: `${String({ ...c.data, ...data }.code)} ${String({ ...c.data, ...data }.name)}`,
+              version: c.version + 1,
+            }
+          : c,
+      );
+      return customerDetail(customers, id as string);
+    },
+    create_record: ({ req }) => {
+      const { data } = req as { data: Record<string, unknown> };
+      const created = partyRecord(NEW_ID, data);
+      customers = [...customers, created];
+      return customerDetail(customers, NEW_ID);
     },
     ...extra,
   });
@@ -284,5 +306,146 @@ describe('右側唯讀預覽', () => {
     expect(
       await screen.findByText('找不到資料', {}, { timeout: PAGE_LOAD_TIMEOUT }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('在右側編輯與新增', () => {
+  const panel = () => screen.getByTestId('record-form-panel');
+  const nameInput = () => within(panel()).getByRole('textbox', { name: '公司名稱' });
+
+  async function openEdit(user: ReturnType<typeof userEvent.setup>) {
+    await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    await user.click(screen.getByRole('button', { name: /編\s*輯/ }));
+    await screen.findByTestId('record-form-panel', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    // 左側列表仍然看得到
+    expect(listbox()).toBeInTheDocument();
+  }
+
+  it('edit_saves_and_returns_to_preview_with_updated_list', async () => {
+    const invoke = renderAt(`#/entities/customer?selected=${customerId(1)}`);
+    const user = userEvent.setup();
+    await waitForOptions();
+    await openEdit(user);
+    expect(window.location.hash).toContain('mode=edit');
+    expect(within(panel()).getByText('編輯：C001 大華實業股份有限公司')).toBeInTheDocument();
+
+    await user.clear(nameInput());
+    await user.type(nameInput(), '大華科技');
+    await user.click(within(panel()).getByRole('button', { name: /儲\s*存/ }));
+
+    expect(
+      await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toHaveTextContent('C001 大華科技');
+    expect(window.location.hash).not.toContain('mode=');
+    await waitFor(() => expect(optionTexts()[0]).toContain('C001大華科技'));
+    expect(invoke).toHaveBeenCalledWith('update_record', {
+      key: 'customer',
+      id: customerId(1),
+      req: { version: 1, data: { name: '大華科技' } },
+    });
+  });
+
+  it('cancel_returns_to_preview', async () => {
+    renderAt(`#/entities/customer?selected=${customerId(1)}`);
+    const user = userEvent.setup();
+    await openEdit(user);
+    await user.click(within(panel()).getByRole('button', { name: /取\s*消/ }));
+    expect(await screen.findByTestId('preview-title')).toHaveTextContent('C001');
+  });
+
+  it('new_opens_on_the_right_and_selects_created_record', async () => {
+    const invoke = renderAt(`#/entities/customer?selected=${customerId(2)}`);
+    const user = userEvent.setup();
+    await waitForOptions();
+
+    await user.click(screen.getByRole('button', { name: /新\s*增/ }));
+    await screen.findByTestId('record-form-panel', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    expect(within(panel()).getByText('新增客戶')).toBeInTheDocument();
+    await user.type(within(panel()).getByRole('textbox', { name: '客戶編號' }), 'C900');
+    await user.type(nameInput(), '新客戶');
+    await user.click(within(panel()).getByRole('button', { name: /儲\s*存/ }));
+
+    expect(
+      await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toHaveTextContent('C900 新客戶');
+    await waitFor(() => expect(window.location.hash).toContain(`selected=${NEW_ID}`));
+    expect(window.location.hash).not.toContain('mode=');
+    await waitFor(() => expect(optionTexts().some((t) => t?.includes('C900新客戶'))).toBe(true));
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'create_record')).toHaveLength(1);
+  });
+
+  /**
+   * 「有未存檔的修改」確認視窗按下 `button`。關閉的確認視窗在測試環境中會留在 DOM，
+   * 所以以數量判斷這次是否有跳出新的視窗。
+   */
+  let answered = 0;
+  const unsavedDialogs = () =>
+    screen.queryAllByRole('dialog').filter((d) => d.textContent?.includes('有未存檔的修改'));
+  async function answerUnsaved(user: ReturnType<typeof userEvent.setup>, button: RegExp) {
+    await waitFor(() => expect(unsavedDialogs().length).toBe(answered + 1));
+    answered += 1;
+    const dialog = unsavedDialogs().at(-1)!;
+    await user.click(within(dialog).getByRole('button', { name: button }));
+  }
+
+  it('unsaved_changes_confirm_before_switching_and_stay_keeps_them', async () => {
+    answered = 0;
+    renderAt(`#/entities/customer?selected=${customerId(1)}`);
+    const user = userEvent.setup();
+    await waitForOptions();
+    await openEdit(user);
+    await user.type(nameInput(), '（改）');
+
+    // 點其他資料：跳出確認，選「留下」後修改還在
+    await user.click(within(listbox()).getByRole('option', { name: /C002/ }));
+    await answerUnsaved(user, /留\s*下/);
+    expect(nameInput()).toHaveValue('大華實業股份有限公司（改）');
+    expect(window.location.hash).toContain(`selected=${customerId(1)}`);
+
+    // 搜尋、新增也要確認
+    await user.type(screen.getByRole('textbox', { name: '搜尋客戶' }), 'x');
+    await answerUnsaved(user, /留\s*下/);
+    expect(screen.getByRole('textbox', { name: '搜尋客戶' })).toHaveValue('');
+    await user.click(
+      within(screen.getByTestId('page-header')).getByRole('button', { name: /新\s*增/ }),
+    );
+    await answerUnsaved(user, /留\s*下/);
+    expect(window.location.hash).toContain('mode=edit');
+
+    // 再點一次，選「離開」：切換到 C002 的預覽
+    await user.click(within(listbox()).getByRole('option', { name: /C002/ }));
+    await answerUnsaved(user, /離\s*開/);
+    expect(await screen.findByTestId('preview-title')).toHaveTextContent('C002');
+    expect(screen.queryByTestId('record-form-panel')).not.toBeInTheDocument();
+  });
+
+  it('conflict_shows_reload_prompt', async () => {
+    renderAt(`#/entities/customer?selected=${customerId(1)}`, {
+      update_record: () =>
+        commandError({ kind: 'api', code: 'CONFLICT', message: '版本不符', details: null }),
+    });
+    const user = userEvent.setup();
+    await openEdit(user);
+    await user.type(nameInput(), '2');
+    await user.click(within(panel()).getByRole('button', { name: /儲\s*存/ }));
+
+    expect(await screen.findByText('資料已被其他人修改')).toBeInTheDocument();
+    expect(within(panel()).getByRole('button', { name: /重新載入/ })).toBeInTheDocument();
+  });
+
+  it('old_record_url_redirects_to_split_view', async () => {
+    renderAt(`#/entities/customer/${customerId(2)}`);
+    expect(
+      await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toHaveTextContent('C002');
+    expect(window.location.hash).toBe(`#/entities/customer?selected=${customerId(2)}`);
+  });
+
+  it('old_new_url_opens_new_form_in_split_view', async () => {
+    renderAt('#/entities/supplier/new');
+    await screen.findByTestId('record-form-panel', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    expect(screen.getByText('新增廠商')).toBeInTheDocument();
+    expect(screen.getByRole('listbox', { name: '廠商列表' })).toBeInTheDocument();
+    expect(window.location.hash).toBe('#/entities/supplier?mode=new');
   });
 });

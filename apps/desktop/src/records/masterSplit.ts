@@ -34,6 +34,30 @@ export const SEARCH_FIELD_KEYS: readonly string[] = [
 /** 網址中選取資料的參數：`?selected=<id>`。 */
 export const SELECTED_PARAM = 'selected';
 
+/** 網址中右側的模式參數：`?mode=edit`（編輯選取的資料）、`?mode=new`（新增）。 */
+export const MODE_PARAM = 'mode';
+export type SplitMode = 'edit' | 'new';
+
+export function splitMode(value: string | null): SplitMode | undefined {
+  return value === 'edit' || value === 'new' ? value : undefined;
+}
+
+/** 分割檢視的路徑：`/entities/<key>?selected=<id>&mode=<mode>`。 */
+export function splitViewPath(
+  entityKey: string,
+  { selected, mode }: { selected?: string; mode?: SplitMode } = {},
+): string {
+  const params = new URLSearchParams();
+  if (selected) {
+    params.set(SELECTED_PARAM, selected);
+  }
+  if (mode) {
+    params.set(MODE_PARAM, mode);
+  }
+  const query = params.toString();
+  return `/entities/${entityKey}${query ? `?${query}` : ''}`;
+}
+
 /** 搜尋框停止輸入多久（毫秒）後查詢。 */
 export const PICKER_SEARCH_DELAY_MS = 300;
 

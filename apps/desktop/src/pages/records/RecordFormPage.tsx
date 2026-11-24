@@ -2,19 +2,21 @@ import {
   ArrowLeftOutlined,
   AuditOutlined,
   CheckCircleOutlined,
+  CloseOutlined,
   FileDoneOutlined,
   ReloadOutlined,
   SaveOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Form, Input, Modal, Space, Tooltip, Typography } from 'antd';
+import { Alert, App, Button, Form, Input, Space, Spin, Tooltip, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useBlocker, useNavigate, useParams } from 'react-router';
+import { Navigate, useNavigate, useParams } from 'react-router';
 
 import { StatusTag } from '../../components/StatusTag';
 import { EmptyState } from '../../components/EmptyState';
 import { Page } from '../../components/PageHeader';
+import type { PageHeaderProps } from '../../components/PageHeader';
 import { CommandError, apiErrorCode, errorMessage } from '../../api/client';
 import {
   useCreateRecord,
@@ -136,6 +138,8 @@ import {
 } from '../../records/sales';
 import { formatQty } from '../../records/documents';
 import { RecordFieldInput } from './RecordFieldInput';
+import { splitViewPath, usesSplitView } from '../../records/masterSplit';
+import { useUnsavedGuard } from './useUnsavedGuard';
 
 /** 樂觀鎖定衝突（409）的提示（docs/architecture.md §9.4）。 */
 export const RECORD_CONFLICT_MESSAGE = '資料已被其他人修改';
@@ -208,6 +212,8 @@ function RecordForm({
   layout,
   record,
   onReload,
+  panel,
+  onDirtyChange,
 }: {
   entity: EntityDefinition;
   fields: FieldDefinition[];
@@ -219,6 +225,10 @@ function RecordForm({
   layout?: FormLayoutConfig;
   record?: DataRecord;
   onReload: () => void;
+  /** 放在分割檢視右側時，存檔與取消由外部處理（見 {@link RecordFormPanel}）。 */
+  panel?: RecordFormPanelActions;
+  /** 未存檔狀態改變時（同步呼叫；離開提醒由外部的 {@link useUnsavedGuard} 處理）。 */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const entityKey = entity.key;
   const navigate = useNavigate();
@@ -328,27 +338,17 @@ function RecordForm({
 
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
-  // 離開提醒在導覽當下讀取；存檔成功後要立刻導覽，不能等 state 更新
-  const dirtyRef = useRef(false);
-  const markDirty = (value: boolean) => {
-    dirtyRef.current = value;
-    setDirty(value);
-  };
-
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      dirtyRef.current && currentLocation.pathname !== nextLocation.pathname,
-  );
-
-  // 關閉視窗或重新整理時也提醒
+  // 離開提醒在導覽當下讀取；存檔成功後要立刻導覽，所以同步通知外部，不能等 state 更新
+  const dirtyChangeRef = useRef(onDirtyChange);
   useEffect(() => {
-    if (!dirty) {
-      return;
-    }
-    const onBeforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [dirty]);
+    dirtyChangeRef.current = onDirtyChange;
+  }, [onDirtyChange]);
+  const markDirty = (value: boolean) => {
+    setDirty(value);
+    dirtyChangeRef.current?.(value);
+  };
+  // 表單重設（重新載入、換一筆）或關閉時，外部的未存檔狀態也清除
+  useEffect(() => () => dirtyChangeRef.current?.(false), []);
 
   const onValuesChange = () => {
     const values = form.getFieldsValue(true) as FormValues;
@@ -538,7 +538,11 @@ function RecordForm({
           onSuccess: (saved) => {
             markDirty(false);
             message.success('已新增');
-            navigate(recordPath(entityKey, saved.id), { replace: true });
+            if (panel) {
+              panel.onSaved(saved);
+            } else {
+              navigate(recordPath(entityKey, saved.id), { replace: true });
+            }
           },
           onError: onSaveError,
         },
@@ -551,16 +555,18 @@ function RecordForm({
       message.info('沒有需要儲存的修改');
       return;
     }
-    updateRecord.mutate(
-      { id: record.id, req: { version: record.version, data, ...(lines ? { lines } : {}) } },
-      {
-        onSuccess: () => {
-          markDirty(false);
-          message.success('已儲存');
-        },
-        onError: onSaveError,
-      },
-    );
+    // 存檔成功時快取更新，父元件會以新的 key 重設本元件；`mutate` 的回呼在元件卸載後不會執行，
+    // 所以用 Promise 確保存檔後的處理（回到預覽）一定會執行
+    updateRecord
+      .mutateAsync({
+        id: record.id,
+        req: { version: record.version, data, ...(lines ? { lines } : {}) },
+      })
+      .then((saved) => {
+        markDirty(false);
+        message.success('已儲存');
+        panel?.onSaved(saved);
+      }, onSaveError);
   };
 
   const displayedByKey = new Map(displayed.map((f) => [f.field_key, f]));
@@ -701,10 +707,12 @@ function RecordForm({
 
   const title = record ? entity.label : `新增${entity.label}`;
 
+  const Frame = panel ? PanelFrame : Page;
+
   return (
-    <Page
+    <Frame
       icon={entityIcon(entity.icon)}
-      title={title}
+      title={panel && record ? `編輯：${record.title}` : title}
       tags={
         (status || dirty) && (
           <>
@@ -737,9 +745,18 @@ function RecordForm({
               開立折讓
             </Button>
           )}
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(recordListPath(entityKey))}>
-            返回列表
-          </Button>
+          {panel ? (
+            <Button icon={<CloseOutlined />} onClick={panel.onCancel}>
+              取消
+            </Button>
+          ) : (
+            <Button
+              icon={<ArrowLeftOutlined />}
+              onClick={() => navigate(recordListPath(entityKey))}
+            >
+              返回列表
+            </Button>
+          )}
         </Space>
       }
     >
@@ -885,30 +902,56 @@ function RecordForm({
           onCancel={() => setVoidOpen(false)}
         />
       )}
-      <Modal
-        open={blocker.state === 'blocked'}
-        title="有未存檔的修改"
-        okText="離開"
-        okButtonProps={{ danger: true }}
-        cancelText="留下"
-        onOk={() => blocker.proceed?.()}
-        onCancel={() => blocker.reset?.()}
-      >
-        離開後，目前的修改不會儲存。確定要離開？
-      </Modal>
-    </Page>
+    </Frame>
+  );
+}
+
+/** 分割檢視右側的表單：存檔成功、取消時由外部處理。 */
+export interface RecordFormPanelActions {
+  /** 存檔成功（新增或修改）後，`saved` 為伺服器回傳的資料。 */
+  onSaved: (saved: DataRecord) => void;
+  onCancel: () => void;
+}
+
+/** 分割檢視右側的表單外框：與 `Page` 相同的參數，標題列較小、不另外包卡片。 */
+function PanelFrame({
+  title,
+  tags,
+  actions,
+  children,
+}: PageHeaderProps & { children?: ReactNode }) {
+  return (
+    <div data-testid="record-form-panel">
+      <div className="preview-header">
+        <Space size={8} wrap>
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            {title}
+          </Typography.Title>
+          {tags}
+        </Space>
+        {actions}
+      </div>
+      {children}
+    </div>
   );
 }
 
 /**
- * 新增資料（`/entities/:key/new`，需要 `record.write`）與檢視、編輯資料
- * （`/entities/:key/:id`，需要 `record.read`；沒有 `record.write` 時只能檢視）。
- *
- * 表單依欄位定義產生：有效且設定為顯示的欄位，依表單版面（§7.7）排列；沒有設定版面時依欄位排序。
- * 驗證規則與伺服器相同。
+ * 載入欄位定義、明細子表、表單版面與資料後顯示 {@link RecordForm}。`id` 為 `undefined` 時是新增。
  */
-export function RecordFormPage() {
-  const { key = '', id } = useParams();
+function RecordFormLoader({
+  entityKey,
+  id,
+  panel,
+  onDirtyChange,
+}: {
+  entityKey: string;
+  id: string | undefined;
+  panel?: RecordFormPanelActions;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
+  const key = entityKey;
+  const Frame = panel ? PanelFrame : Page;
   const entity = useEntity(key);
   const entities = useEntities();
   const record = useRecord(key, id);
@@ -940,9 +983,9 @@ export function RecordFormPage() {
   const error = entity.error ?? entities.error ?? detailDefs.error ?? record.error;
   if (error) {
     return (
-      <Page title="資料">
+      <Frame title="資料">
         <Alert showIcon type="error" message={errorMessage(error)} />
-      </Page>
+      </Frame>
     );
   }
   if (
@@ -952,14 +995,20 @@ export function RecordFormPage() {
     formLayout.isPending ||
     (id !== undefined && !record.data)
   ) {
-    return <Page title="資料" loading />;
+    return panel ? (
+      <div style={{ padding: 24, textAlign: 'center' }}>
+        <Spin />
+      </div>
+    ) : (
+      <Page title="資料" loading />
+    );
   }
   const detail = entity.data;
   if (!detail.entity.is_active) {
     return (
-      <Page title={detail.entity.label}>
+      <Frame title={detail.entity.label}>
         <EmptyState kind="disabled" title="此資料類別已停用" description="請洽管理者重新啟用" />
-      </Page>
+      </Frame>
     );
   }
   return (
@@ -973,6 +1022,61 @@ export function RecordFormPage() {
       layout={formLayout.data?.config}
       record={record.data}
       onReload={() => void record.refetch()}
+      panel={panel}
+      onDirtyChange={onDirtyChange}
     />
   );
+}
+
+/**
+ * 分割檢視（§8.7）右側的新增、編輯表單。未存檔的提醒由分割檢視的 {@link useUnsavedGuard} 處理。
+ */
+export function RecordFormPanel({
+  entityKey,
+  id,
+  onSaved,
+  onCancel,
+  onDirtyChange,
+}: RecordFormPanelActions & {
+  entityKey: string;
+  id: string | undefined;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
+  const panel = useMemo(() => ({ onSaved, onCancel }), [onSaved, onCancel]);
+  return (
+    <RecordFormLoader entityKey={entityKey} id={id} panel={panel} onDirtyChange={onDirtyChange} />
+  );
+}
+
+/** 全頁表單：有未存檔的修改時，換頁、關閉視窗前提醒。 */
+function FullPageRecordForm({ entityKey, id }: { entityKey: string; id: string | undefined }) {
+  const guard = useUnsavedGuard();
+  return (
+    <>
+      <RecordFormLoader entityKey={entityKey} id={id} onDirtyChange={guard.setDirty} />
+      {guard.blockerModal}
+    </>
+  );
+}
+
+/**
+ * 新增資料（`/entities/:key/new`，需要 `record.write`）與檢視、編輯資料
+ * （`/entities/:key/:id`，需要 `record.read`；沒有 `record.write` 時只能檢視）。
+ *
+ * 表單依欄位定義產生：有效且設定為顯示的欄位，依表單版面（§7.7）排列；沒有設定版面時依欄位排序。
+ * 驗證規則與伺服器相同。
+ *
+ * 使用分割檢視的資料類別（客戶、廠商，§8.7）導向分割畫面：`/:id` 選取那筆，`/new` 開啟新增。
+ */
+export function RecordFormPage() {
+  const { key = '', id } = useParams();
+  if (usesSplitView(key)) {
+    return (
+      <Navigate
+        replace
+        to={splitViewPath(key, id === undefined ? { mode: 'new' } : { selected: id })}
+      />
+    );
+  }
+  return <FullPageRecordForm key={`${key}:${id ?? 'new'}`} entityKey={key} id={id} />;
 }

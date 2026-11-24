@@ -2,7 +2,7 @@ import { PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Input, Segmented, Spin, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useSearchParams } from 'react-router';
 
 import { errorMessage } from '../../api/client';
 import { useMasterPicker } from '../../api/records';
@@ -12,12 +12,13 @@ import type { EntityDefinition, FieldDefinition, Record as DataRecord } from '..
 import { EmptyState } from '../../components/EmptyState';
 import { PageHeader } from '../../components/PageHeader';
 import { StatusTag } from '../../components/StatusTag';
-import { newRecordPath, recordPath } from '../../modules';
 import {
   NAME_FIELD,
   PICKER_PAGE_SIZE,
   PICKER_SEARCH_DELAY_MS,
+  MODE_PARAM,
   SELECTED_PARAM,
+  splitMode,
   TAX_ID_FIELD,
   adjacentId,
   hasActiveField,
@@ -25,9 +26,12 @@ import {
   recordCode,
   searchFieldKeys,
 } from '../../records/masterSplit';
+import type { SplitMode } from '../../records/masterSplit';
 import { useDebouncedValue } from '../../utils/useDebouncedValue';
 import { entityIcon } from '../schema/entityIcons';
 import { RecordPreview } from './RecordPreview';
+import { RecordFormPanel } from './RecordFormPage';
+import { useUnsavedGuard } from './useUnsavedGuard';
 
 /** 左側列表的寬度。 */
 export const PICKER_WIDTH = 320;
@@ -122,11 +126,14 @@ export function MasterSplitView({
   fields: FieldDefinition[];
 }) {
   const entityKey = entity.key;
-  const navigate = useNavigate();
   const { token } = theme.useToken();
   const canWrite = usePermission(PERMISSIONS.RECORD_WRITE);
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get(SELECTED_PARAM);
+  const mode = canWrite ? splitMode(searchParams.get(MODE_PARAM)) : undefined;
+  // 右側編輯、新增中有未存檔的修改時，換選取、搜尋、新增、換頁前先確認
+  const guard = useUnsavedGuard();
+  const { confirmDiscard } = guard;
   // 連續按上下鍵時，網址還沒更新前就要以剛選的那筆為準
   const latestSelected = useRef(selectedId);
   useEffect(() => {
@@ -151,13 +158,25 @@ export function MasterSplitView({
   const listRef = useRef<HTMLDivElement>(null);
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = picker;
 
-  const select = useCallback(
-    (id: string) => {
-      latestSelected.current = id;
+  /** 修改網址的選取與模式；`null` 為移除，`undefined` 為不變。 */
+  const updateParams = useCallback(
+    (patch: { selected?: string | null; mode?: SplitMode | null }) => {
+      if (patch.selected !== undefined) {
+        latestSelected.current = patch.selected;
+      }
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          next.set(SELECTED_PARAM, id);
+          for (const [param, value] of [
+            [SELECTED_PARAM, patch.selected],
+            [MODE_PARAM, patch.mode],
+          ] as const) {
+            if (value === null) {
+              next.delete(param);
+            } else if (value !== undefined) {
+              next.set(param, value);
+            }
+          }
           return next;
         },
         { replace: true },
@@ -166,18 +185,43 @@ export function MasterSplitView({
     [setSearchParams],
   );
 
+  /** 選取一筆（回到唯讀預覽）。編輯中再點同一筆不動作。 */
+  const select = useCallback(
+    (id: string) => {
+      if (id === latestSelected.current && mode !== 'new') {
+        return;
+      }
+      confirmDiscard(() => updateParams({ selected: id, mode: null }));
+    },
+    [confirmDiscard, updateParams, mode],
+  );
+
   /** 清除選取（刪除選取的資料之後）。 */
-  const clearSelection = useCallback(() => {
-    latestSelected.current = null;
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete(SELECTED_PARAM);
-        return next;
-      },
-      { replace: true },
-    );
-  }, [setSearchParams]);
+  const clearSelection = useCallback(
+    () => updateParams({ selected: null, mode: null }),
+    [updateParams],
+  );
+
+  const changeSearch = (value: string) => {
+    if (!guard.isDirty()) {
+      setSearch(value);
+      return;
+    }
+    // 放棄修改才搜尋，並回到預覽
+    confirmDiscard(() => {
+      setSearch(value);
+      updateParams({ mode: null });
+    });
+  };
+
+  const onSaved = useCallback(
+    (saved: DataRecord) => updateParams({ selected: saved.id, mode: null }),
+    [updateParams],
+  );
+  const onCancel = useCallback(
+    () => confirmDiscard(() => updateParams({ mode: null })),
+    [confirmDiscard, updateParams],
+  );
 
   /** 捲動到接近底部（或列表還沒填滿可視範圍）時載入下一頁。 */
   const loadMoreIfNeeded = useCallback(() => {
@@ -198,6 +242,12 @@ export function MasterSplitView({
       document.getElementById(optionId(selectedId))?.scrollIntoView?.({ block: 'nearest' });
     }
   }, [selectedId]);
+
+  // 換選取或切換預覽、編輯時，右側從頂端開始顯示
+  const detailRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    detailRef.current?.scrollTo?.({ top: 0 });
+  }, [selectedId, mode]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') {
@@ -231,7 +281,7 @@ export function MasterSplitView({
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
-                onClick={() => navigate(newRecordPath(entityKey))}
+                onClick={() => confirmDiscard(() => updateParams({ mode: 'new' }))}
               >
                 新增
               </Button>
@@ -260,7 +310,7 @@ export function MasterSplitView({
               placeholder="搜尋編號、名稱、簡稱、統編"
               aria-label={`搜尋${entity.label}`}
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => changeSearch(e.target.value)}
             />
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               {showActiveFilter ? (
@@ -328,15 +378,33 @@ export function MasterSplitView({
             )}
           </div>
         </Card>
-        <Card className="master-split-detail">
-          {selectedId ? (
+        <Card className="master-split-detail" ref={detailRef}>
+          {mode === 'new' ? (
+            <RecordFormPanel
+              key="new"
+              entityKey={entityKey}
+              id={undefined}
+              onSaved={onSaved}
+              onCancel={onCancel}
+              onDirtyChange={guard.setDirty}
+            />
+          ) : mode === 'edit' && selectedId ? (
+            <RecordFormPanel
+              key={`edit:${selectedId}`}
+              entityKey={entityKey}
+              id={selectedId}
+              onSaved={onSaved}
+              onCancel={onCancel}
+              onDirtyChange={guard.setDirty}
+            />
+          ) : selectedId ? (
             <RecordPreview
               // 換選取時重新建立（不保留上一筆的狀態）
               key={selectedId}
               entity={entity}
               fields={fields}
               id={selectedId}
-              onEdit={() => navigate(recordPath(entityKey, selectedId))}
+              onEdit={() => updateParams({ mode: 'edit' })}
               onDeleted={clearSelection}
             />
           ) : (
@@ -344,6 +412,7 @@ export function MasterSplitView({
           )}
         </Card>
       </div>
+      {guard.blockerModal}
     </div>
   );
 }
