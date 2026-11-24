@@ -95,3 +95,8 @@ body,
     display: none;
   }
 }
+
+/* 數字等寬，金額、數量上下對齊（docs/architecture.md 視覺設計） */
+body {
+  font-variant-numeric: tabular-nums;
+}

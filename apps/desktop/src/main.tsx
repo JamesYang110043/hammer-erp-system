@@ -11,6 +11,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './App';
 import { createQueryClient } from './api/queryClient';
+import { DevThemeSwitcher } from './components/DevThemeSwitcher';
 import { appTheme } from './theme';
 import './styles.css';
 
@@ -29,6 +30,8 @@ createRoot(root).render(
       <AntApp>
         <QueryClientProvider client={queryClient}>
           <App />
+          {/* 主色方案比較（#229），正式版不顯示 */}
+          {import.meta.env.DEV && <DevThemeSwitcher />}
         </QueryClientProvider>
       </AntApp>
     </ConfigProvider>
