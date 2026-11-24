@@ -1,0 +1,495 @@
+{
+  "_comment": "客戶、廠商的分組預設表單版面（#254，docs/architecture.md §7.7）。伺服器（hammer_core::form_layouts::generated_config）與桌面程式（records/formLayout.ts 的 generatedFormLayout）依 fields、detail_keys 產生的版面都必須等於 expected。fields 只列出產生版面需要的屬性。",
+  "cases": [
+    {
+      "name": "customer: all fields, custom field appended, contacts last",
+      "entity_key": "customer",
+      "detail_keys": [
+        "customer_contact"
+      ],
+      "fields": [
+        {
+          "field_key": "code",
+          "sort_order": 10,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "name",
+          "sort_order": 20,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "short_name",
+          "sort_order": 30,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "tax_id",
+          "sort_order": 40,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "phone",
+          "sort_order": 50,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "fax",
+          "sort_order": 60,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "email",
+          "sort_order": 70,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "address",
+          "sort_order": 80,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "invoice_title",
+          "sort_order": 90,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "invoice_address",
+          "sort_order": 100,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "payment_terms_days",
+          "sort_order": 110,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "credit_limit",
+          "sort_order": 120,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "is_active",
+          "sort_order": 130,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "notes",
+          "sort_order": 140,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "region",
+          "sort_order": 150,
+          "is_active": true,
+          "is_visible": true
+        }
+      ],
+      "expected": {
+        "sections": [
+          {
+            "key": "basic",
+            "title": "基本資料",
+            "columns": 2,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "block",
+                "block": "record_no"
+              },
+              {
+                "type": "field",
+                "field": "code",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "name",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "short_name",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "tax_id",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "phone",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "fax",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "email",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "address",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "is_active",
+                "span": 1
+              }
+            ]
+          },
+          {
+            "key": "invoice",
+            "title": "發票資訊",
+            "columns": 2,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "field",
+                "field": "invoice_title",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "invoice_address",
+                "span": 1
+              }
+            ]
+          },
+          {
+            "key": "terms",
+            "title": "交易條件",
+            "columns": 2,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "field",
+                "field": "payment_terms_days",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "credit_limit",
+                "span": 1
+              }
+            ]
+          },
+          {
+            "key": "other",
+            "title": "其他",
+            "columns": 2,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "field",
+                "field": "notes",
+                "span": 2
+              }
+            ]
+          },
+          {
+            "key": "_other",
+            "title": "其他欄位",
+            "columns": 1,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "field",
+                "field": "region",
+                "span": 1
+              }
+            ]
+          },
+          {
+            "key": "_blocks",
+            "title": "",
+            "columns": 1,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "block",
+                "block": "lines:customer_contact"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "supplier: inactive and hidden fields skipped, empty section dropped",
+      "entity_key": "supplier",
+      "detail_keys": [
+        "supplier_contact"
+      ],
+      "fields": [
+        {
+          "field_key": "code",
+          "sort_order": 10,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "name",
+          "sort_order": 20,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "short_name",
+          "sort_order": 30,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "tax_id",
+          "sort_order": 40,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "phone",
+          "sort_order": 50,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "fax",
+          "sort_order": 60,
+          "is_active": false,
+          "is_visible": true
+        },
+        {
+          "field_key": "email",
+          "sort_order": 70,
+          "is_active": true,
+          "is_visible": false
+        },
+        {
+          "field_key": "address",
+          "sort_order": 80,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "invoice_title",
+          "sort_order": 90,
+          "is_active": false,
+          "is_visible": true
+        },
+        {
+          "field_key": "invoice_address",
+          "sort_order": 100,
+          "is_active": false,
+          "is_visible": true
+        },
+        {
+          "field_key": "payment_terms_days",
+          "sort_order": 110,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "credit_limit",
+          "sort_order": 120,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "default_currency_code",
+          "sort_order": 130,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "country",
+          "sort_order": 140,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "bank_info",
+          "sort_order": 150,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "is_active",
+          "sort_order": 160,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "notes",
+          "sort_order": 170,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "rating",
+          "sort_order": 180,
+          "is_active": true,
+          "is_visible": true
+        },
+        {
+          "field_key": "old_note",
+          "sort_order": 190,
+          "is_active": false,
+          "is_visible": true
+        }
+      ],
+      "expected": {
+        "sections": [
+          {
+            "key": "basic",
+            "title": "基本資料",
+            "columns": 2,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "block",
+                "block": "record_no"
+              },
+              {
+                "type": "field",
+                "field": "code",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "name",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "short_name",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "tax_id",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "phone",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "address",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "country",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "is_active",
+                "span": 1
+              }
+            ]
+          },
+          {
+            "key": "terms",
+            "title": "交易條件",
+            "columns": 2,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "field",
+                "field": "payment_terms_days",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "credit_limit",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "default_currency_code",
+                "span": 1
+              },
+              {
+                "type": "field",
+                "field": "bank_info",
+                "span": 1
+              }
+            ]
+          },
+          {
+            "key": "other",
+            "title": "其他",
+            "columns": 2,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "field",
+                "field": "notes",
+                "span": 2
+              }
+            ]
+          },
+          {
+            "key": "_other",
+            "title": "其他欄位",
+            "columns": 1,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "field",
+                "field": "rating",
+                "span": 1
+              }
+            ]
+          },
+          {
+            "key": "_blocks",
+            "title": "",
+            "columns": 1,
+            "collapsible": false,
+            "collapsed": false,
+            "items": [
+              {
+                "type": "block",
+                "block": "lines:supplier_contact"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

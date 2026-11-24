@@ -64,6 +64,8 @@ jobs:
               - 'apps/desktop/src/**'
               - 'apps/desktop/e2e/**'
               - 'apps/desktop/public/**'
+              # 前端單元測試共用的測試資料（src/records/formLayout.test.ts）
+              - 'crates/shared/testdata/**'
               - '.github/workflows/ci.yml'
 
   rust-lint:

@@ -22,7 +22,8 @@ use hammer_db::sqlx::{PgConnection, PgPool, PgTransaction};
 use hammer_shared::form_layout::{
     BLOCKS_SECTION_KEY, BlockPlacement, FormItem, FormLayout, FormLayoutConfig, FormSection,
     MAIN_SECTION_KEY, MAX_COLUMNS, MAX_ITEMS, MAX_SECTION_KEY_CHARS, MAX_SECTION_TITLE_CHARS,
-    MAX_SECTIONS, OTHER_SECTION_KEY, OTHER_SECTION_TITLE, SaveFormLayoutRequest, system_blocks,
+    MAX_SECTIONS, OTHER_SECTION_KEY, OTHER_SECTION_TITLE, PRESET_COLUMNS, SaveFormLayoutRequest,
+    preset_sections, system_blocks,
 };
 use hammer_shared::schema::{EntityDefinition, EntityKind, FieldDefinition};
 use hammer_shared::{Id, audit as action, new_id, permission};
@@ -453,10 +454,44 @@ pub fn sanitize_config(schema: &FormSchema<'_>, config: FormLayoutConfig) -> For
     FormLayoutConfig { sections }
 }
 
-/// 沒有設定版面時依欄位定義產生（與 M8 之前的畫面相同）：一個單欄、沒有標題的
-/// [`MAIN_SECTION_KEY`] 區塊，依序為欄位之前的系統區塊、有效且顯示的欄位（依 `sort_order`）、
-/// 欄位之後的系統區塊。
+/// 沒有設定版面時依欄位定義產生：
+///
+/// - 有分組預設版面（[`preset_sections`]，客戶、廠商）：預設的區塊（2 欄），略過停用、不顯示的
+///   欄位與沒有欄位的區塊，再依 [`sanitize_config`] 附加單號、未列出的欄位（含自訂欄位）與
+///   明細表
+/// - 其他資料類別（與 M8 之前的畫面相同）：一個單欄、沒有標題的 [`MAIN_SECTION_KEY`] 區塊，
+///   依序為欄位之前的系統區塊、有效且顯示的欄位（依 `sort_order`）、欄位之後的系統區塊
 pub fn generated_config(schema: &FormSchema<'_>) -> FormLayoutConfig {
+    if let Some(preset) = preset_sections(schema.entity_key) {
+        let visible: HashSet<&str> = schema
+            .visible_fields()
+            .into_iter()
+            .map(|f| f.field_key.as_str())
+            .collect();
+        let sections = preset
+            .into_iter()
+            .filter_map(|p| {
+                let items: Vec<FormItem> = p
+                    .fields
+                    .iter()
+                    .filter(|(key, _)| visible.contains(key))
+                    .map(|&(key, span)| FormItem::Field {
+                        field: key.to_owned(),
+                        span,
+                    })
+                    .collect();
+                (!items.is_empty()).then(|| FormSection {
+                    key: p.key.to_owned(),
+                    title: p.title.to_owned(),
+                    columns: PRESET_COLUMNS,
+                    collapsible: false,
+                    collapsed: false,
+                    items,
+                })
+            })
+            .collect();
+        return sanitize_config(schema, FormLayoutConfig { sections });
+    }
     let (top, bottom): (Vec<_>, Vec<_>) = schema
         .blocks()
         .into_iter()
@@ -1035,6 +1070,65 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    /// 與桌面程式（`records/formLayout.ts` 的 `generatedFormLayout`）共用的測試資料：
+    /// 客戶、廠商的分組預設版面必須等於 `expected`（#254）。
+    #[test]
+    fn shared_preset_cases_match_expected() {
+        let doc: Value = serde_json::from_str(include_str!(
+            "../../shared/testdata/generated_form_layouts.json"
+        ))
+        .unwrap();
+        for case in doc["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let fields: Vec<FieldDefinition> = case["fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| {
+                    let mut def = field(
+                        v["field_key"].as_str().unwrap(),
+                        i32::try_from(v["sort_order"].as_i64().unwrap()).unwrap(),
+                    );
+                    def.is_active = v["is_active"].as_bool().unwrap();
+                    def.is_visible = v["is_visible"].as_bool().unwrap();
+                    def
+                })
+                .collect();
+            let detail_keys: Vec<&str> = case["detail_keys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            let schema = FormSchema {
+                entity_key: case["entity_key"].as_str().unwrap(),
+                fields: &fields,
+                detail_keys: &detail_keys,
+            };
+            let expected: FormLayoutConfig =
+                serde_json::from_value(case["expected"].clone()).unwrap();
+            let generated = generated_config(&schema);
+            assert_eq!(generated, expected, "{name}");
+            // 產生的版面寫回時也合法，讀取時不再變動
+            assert!(validate_config(&schema, &generated).is_ok(), "{name}");
+            assert_eq!(
+                sanitize_config(&schema, generated.clone()),
+                generated,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_entities_keep_single_column_generated_config() {
+        assert!(preset_sections("product").is_none());
+        let fields = fields();
+        let generated = generated_config(&schema("product", &fields));
+        assert_eq!(generated.sections.len(), 1);
+        assert_eq!(generated.sections[0].key, MAIN_SECTION_KEY);
+        assert_eq!(generated.sections[0].columns, 1);
     }
 
     #[test]
