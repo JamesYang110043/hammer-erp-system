@@ -47,7 +47,11 @@ const VIEWER = {
   permissions: ['record.read'],
 };
 
-async function setup(page: Page, user: typeof ADMIN = ADMIN) {
+async function setup(
+  page: Page,
+  user: typeof ADMIN = ADMIN,
+  formLayout: typeof CUSTOMER_FORM_LAYOUT = CUSTOMER_FORM_LAYOUT,
+) {
   // 4 筆固定的客戶＋80 筆一般客戶（啟用中 83 筆），超過一頁（50 筆）；刪除後從清單移除
   let customers = manyCustomers(80);
   await mockTauri(page, {
@@ -88,7 +92,7 @@ async function setup(page: Page, user: typeof ADMIN = ADMIN) {
       }
       return r;
     },
-    get_form_layout: () => CUSTOMER_FORM_LAYOUT,
+    get_form_layout: () => formLayout,
     delete_record: ({ id }) => {
       customers = customers.filter((c) => c.id !== id);
       return null;
@@ -350,3 +354,77 @@ test('customer table view keeps the toggle in the header', async ({ page }) => {
   await expect(toggle).toBeVisible();
   await expect(toggle.getByRole('radio', { name: /表格/ })).toBeChecked();
 });
+
+// 分割檢視右側寬度約 630–790px：4 欄、3 欄的區塊逐步減少欄數，不直接退回單欄（#251）
+const WIDE_CUSTOMER_LAYOUT: typeof CUSTOMER_FORM_LAYOUT = {
+  ...CUSTOMER_FORM_LAYOUT,
+  config: {
+    sections: [
+      {
+        key: 'four',
+        title: '四欄區塊',
+        columns: 4,
+        collapsible: false,
+        collapsed: false,
+        items: [
+          { type: 'field', field: 'code', span: 1 },
+          { type: 'field', field: 'name', span: 3 },
+          { type: 'field', field: 'short_name', span: 1 },
+          { type: 'spacer', span: 1 },
+          { type: 'field', field: 'tax_id', span: 1 },
+        ],
+      },
+      {
+        key: 'three',
+        title: '三欄區塊',
+        columns: 3,
+        collapsible: false,
+        collapsed: false,
+        items: [
+          { type: 'field', field: 'phone', span: 1 },
+          { type: 'spacer', span: 1 },
+          { type: 'field', field: 'is_active', span: 1 },
+        ],
+      },
+      CUSTOMER_FORM_LAYOUT.config.sections[2]!,
+    ],
+  },
+};
+
+for (const { viewport, three } of [
+  { viewport: 1440, three: 3 },
+  { viewport: 1280, three: 2 },
+]) {
+  test(`split view right side reduces columns at ${viewport}px`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport, height: 900 });
+    await setup(page, ADMIN, WIDE_CUSTOMER_LAYOUT);
+
+    for (const mode of ['preview', 'edit'] as const) {
+      await page.goto(
+        `/#/entities/customer?selected=${customerId(1)}${mode === 'edit' ? '&mode=edit' : ''}`,
+      );
+      const side = page.getByTestId(mode === 'edit' ? 'record-form-panel' : 'record-preview');
+      await expect(side.locator('[data-item="name"]')).toBeVisible();
+      const columns = (key: string) =>
+        side
+          .locator(`[data-section="${key}"] .form-layout-grid`)
+          .evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length);
+      expect(await columns('four'), `${mode}：4 欄區塊`).toBe(2);
+      expect(await columns('three'), `${mode}：3 欄區塊`).toBe(three);
+
+      // 4 欄 → 2 欄：編號｜公司名稱（3 欄改為佔滿整列，換到下一列）；簡稱｜統一編號（空白格不顯示）
+      const box = async (field: string) =>
+        (await side.locator(`[data-item="${field}"]`).boundingBox())!;
+      const [code, name, short, tax] = [
+        await box('code'),
+        await box('name'),
+        await box('short_name'),
+        await box('tax_id'),
+      ];
+      expect(name.y, `${mode}：公司名稱在編號下方`).toBeGreaterThan(code.y + code.height - 1);
+      expect(name.width, `${mode}：公司名稱佔滿整列`).toBeGreaterThan(code.width * 2);
+      expect(Math.abs(short.y - tax.y), `${mode}：簡稱｜統一編號`).toBeLessThan(2);
+      expect(tax.x).toBeGreaterThan(short.x);
+    }
+  });
+}

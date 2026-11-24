@@ -33,7 +33,10 @@ body,
 /*
  * 表單版面（src/pages/records/FormLayoutRenderer.tsx，docs/architecture.md §7.7）：
  * 區塊內為 N 欄的格線，項目以 --span 佔用欄數；系統區塊（明細表等）佔滿整列。
- * 寬度不足時退回單欄（2 欄沿用 FormGrid 的 480px；3、4 欄每欄至少 240px），空白格不顯示。
+ * 寬度不足時逐步減少欄數（每欄至少約 240px）：4 欄 → 2 欄（≤ 960px）→ 1 欄（≤ 480px）、
+ * 3 欄 → 2 欄（≤ 720px）→ 1 欄（≤ 480px）、2 欄 → 1 欄（≤ 480px，與 FormGrid 相同）。
+ * 欄數減少時，佔用欄數超過目前欄數的項目改為佔滿整列（以 data-span 判斷，不依賴 span 中的
+ * 數學函式），空白格不顯示。
  */
 .form-layout-container {
   container-type: inline-size;
@@ -60,23 +63,25 @@ body,
   max-width: 720px;
 }
 
-@container (max-width: 480px) {
-  .form-layout-cols-2 {
-    grid-template-columns: minmax(0, 1fr);
+/* 4 欄 → 2 欄 */
+@container (max-width: 960px) {
+  .form-layout-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .form-layout-cols-2 > .form-layout-cell {
+  .form-layout-cols-4 > .form-layout-cell:is([data-span='3'], [data-span='4']) {
     grid-column: 1 / -1;
   }
-  .form-layout-cols-2 > .form-layout-spacer {
+  .form-layout-cols-4 > .form-layout-spacer {
     display: none;
   }
 }
 
+/* 3 欄 → 2 欄 */
 @container (max-width: 720px) {
   .form-layout-cols-3 {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .form-layout-cols-3 > .form-layout-cell {
+  .form-layout-cols-3 > .form-layout-cell[data-span='3'] {
     grid-column: 1 / -1;
   }
   .form-layout-cols-3 > .form-layout-spacer {
@@ -84,14 +89,17 @@ body,
   }
 }
 
-@container (max-width: 960px) {
-  .form-layout-cols-4 {
+/* 2、3、4 欄 → 1 欄（放在最後，覆蓋上面的 2 欄） */
+@container (max-width: 480px) {
+  .form-layout-grid:is(.form-layout-cols-2, .form-layout-cols-3, .form-layout-cols-4) {
     grid-template-columns: minmax(0, 1fr);
   }
-  .form-layout-cols-4 > .form-layout-cell {
+  .form-layout-grid:is(.form-layout-cols-2, .form-layout-cols-3, .form-layout-cols-4)
+    > .form-layout-cell {
     grid-column: 1 / -1;
   }
-  .form-layout-cols-4 > .form-layout-spacer {
+  .form-layout-grid:is(.form-layout-cols-2, .form-layout-cols-3, .form-layout-cols-4)
+    > .form-layout-spacer {
     display: none;
   }
 }
