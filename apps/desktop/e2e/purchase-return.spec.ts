@@ -334,14 +334,14 @@ test('purchase return: from posted receipt, returnable qty, post, stock, void', 
 
   // 過帳
   await p
-    .locator('.ant-card-extra')
+    .locator('.page-header-actions')
     .getByRole('button', { name: /過\s?帳/ })
     .click();
   await p
     .getByRole('dialog')
     .getByRole('button', { name: /過\s?帳/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已過帳' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已過帳' })).toBeVisible();
   await expect(rows.nth(0).getByRole('textbox', { name: '台幣單位成本', exact: true })).toHaveValue(
     '396.8918',
   );
@@ -362,14 +362,14 @@ test('purchase return: from posted receipt, returnable qty, post, stock, void', 
   await txns.getByRole('link', { name: 'PR202611-0002' }).click();
   await expect(p.getByLabel('單號')).toHaveValue('PR202611-0002');
   await p
-    .locator('.ant-card-extra')
+    .locator('.page-header-actions')
     .getByRole('button', { name: /作\s?廢/ })
     .click();
   await p
     .getByRole('dialog')
     .getByRole('button', { name: /作\s?廢/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已作廢' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已作廢' })).toBeVisible();
   await expect(p.getByText(/此單據已作廢，不能修改。過帳時間：.*；作廢時間：/)).toBeVisible();
   await expect(p.getByRole('dialog')).toHaveCount(0);
   await settled(p);

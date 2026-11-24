@@ -84,7 +84,7 @@ async function mockDocument(
   });
 }
 
-const actions = (page: Page) => page.locator('.ant-card-extra');
+const actions = (page: Page) => page.locator('.page-header-actions');
 
 test('stock adjustment: create, post and void', async ({ page }) => {
   const state: { current: DataRecord | null } = { current: null };
@@ -101,7 +101,7 @@ test('stock adjustment: create, post and void', async ({ page }) => {
 
   // 存檔後：草稿，有單號，可以過帳
   await expect(page.getByLabel('單號')).toHaveValue('ADJ202611-0001');
-  await expect(page.locator('.ant-card-head .ant-tag', { hasText: '草稿' })).toBeVisible();
+  await expect(page.locator('.page-header .ant-tag', { hasText: '草稿' })).toBeVisible();
   await expect(actions(page).getByRole('button', { name: VOID_BUTTON })).toHaveCount(0);
 
   await actions(page).getByRole('button', { name: POST_BUTTON }).click();
@@ -110,7 +110,7 @@ test('stock adjustment: create, post and void', async ({ page }) => {
   await postDialog.getByRole('button', { name: POST_BUTTON }).click();
 
   // 已過帳：唯讀，沒有儲存，可以作廢
-  await expect(page.locator('.ant-card-head .ant-tag', { hasText: '已過帳' })).toBeVisible();
+  await expect(page.locator('.page-header .ant-tag', { hasText: '已過帳' })).toBeVisible();
   await expect(page.getByText('此單據已過帳，不能修改。')).toContainText(
     '過帳時間：2026-11-18 10:00:00',
   );
@@ -123,7 +123,7 @@ test('stock adjustment: create, post and void', async ({ page }) => {
   await expect(voidDialog).toContainText('作廢後不能再恢復');
   await voidDialog.getByRole('button', { name: VOID_BUTTON }).click();
 
-  await expect(page.locator('.ant-card-head .ant-tag', { hasText: '已作廢' })).toBeVisible();
+  await expect(page.locator('.page-header .ant-tag', { hasText: '已作廢' })).toBeVisible();
   await expect(actions(page).getByRole('button', { name: VOID_BUTTON })).toHaveCount(0);
 
   // 列表：單號、狀態標籤；已作廢的單據沒有刪除按鈕
@@ -177,7 +177,7 @@ test('stock adjustment: stock insufficient error is explained', async ({ page })
       'A001 不鏽鋼螺絲 M6（批號 L-20261101）：需要 1,200，目前可用 350.5，不足 849.5（明細第 1 列）',
     ),
   ).toBeVisible();
-  await expect(page.locator('.ant-card-head .ant-tag', { hasText: '草稿' })).toBeVisible();
+  await expect(page.locator('.page-header .ant-tag', { hasText: '草稿' })).toBeVisible();
 });
 
 test('stock adjustment: viewer cannot post or void', async ({ page }) => {
@@ -185,7 +185,7 @@ test('stock adjustment: viewer cannot post or void', async ({ page }) => {
   await mockDocument(page, VIEWER, state);
 
   await page.goto(`/#/entities/stock_adjustment/${ADJUSTMENT_ID}`);
-  await expect(page.locator('.ant-card-head .ant-tag', { hasText: '已過帳' })).toBeVisible();
+  await expect(page.locator('.page-header .ant-tag', { hasText: '已過帳' })).toBeVisible();
   await expect(actions(page).getByRole('button', { name: VOID_BUTTON })).toHaveCount(0);
   await expect(actions(page).getByRole('button', { name: POST_BUTTON })).toHaveCount(0);
   await expect(page.getByLabel('備註')).toBeDisabled();
@@ -300,7 +300,7 @@ test('sales order: partially shipped can only be closed', async ({ page }) => {
 
   // 單據：部分出貨不可作廢、不可過帳，只能結案
   await page.goto(`/#/entities/sales_order/${ADJUSTMENT_ID}`);
-  await expect(page.locator('.ant-card-head .ant-tag', { hasText: '部分出貨' })).toBeVisible();
+  await expect(page.locator('.page-header .ant-tag', { hasText: '部分出貨' })).toBeVisible();
   await expect(page.getByText('此單據部分出貨，不能修改。')).toContainText(
     '確認時間：2026-11-18 10:00:00',
   );
@@ -312,7 +312,7 @@ test('sales order: partially shipped can only be closed', async ({ page }) => {
   await expect(dialog).toContainText('結案後不能再依這張訂單出貨');
   await dialog.getByRole('button', { name: CLOSE_BUTTON }).click();
 
-  await expect(page.locator('.ant-card-head .ant-tag', { hasText: '已結案' })).toBeVisible();
+  await expect(page.locator('.page-header .ant-tag', { hasText: '已結案' })).toBeVisible();
   await expect(page.getByText('此單據已結案，不能修改。')).toContainText(
     '結案時間：2026-11-18 13:00:00',
   );

@@ -1,9 +1,11 @@
 import { ReloadOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Checkbox, Input, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Checkbox, Input, Space, Table, Tag, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 
+import { NumberText } from '../../components/NumberText';
+import { Page } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
 import { useStockBalances } from '../../api/inventory';
 import type { StockBalance_Serialize as StockBalance } from '../../bindings';
@@ -57,7 +59,7 @@ const columns: TableColumnsType<StockBalance> = [
     dataIndex: 'stock_value_twd',
     align: 'right',
     width: 140,
-    render: (value: string) => formatAmount(value),
+    render: (value: string) => <NumberText>{formatAmount(value)}</NumberText>,
   },
   {
     title: '狀態',
@@ -93,9 +95,9 @@ export function StockBalancesPage() {
   });
 
   return (
-    <Card
+    <Page
       title="庫存查詢"
-      extra={
+      actions={
         <Button
           icon={<ReloadOutlined />}
           onClick={() => balances.refetch()}
@@ -168,6 +170,6 @@ export function StockBalancesPage() {
           },
         }}
       />
-    </Card>
+    </Page>
   );
 }

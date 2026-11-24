@@ -1,4 +1,4 @@
-import { Form, Input, Select, Typography } from 'antd';
+import { Form, Input, Select, Typography, theme } from 'antd';
 import type { FormInstance } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { useMemo, useRef } from 'react';
@@ -113,6 +113,7 @@ export function FormulaSettings({
 /** 語法錯誤：訊息與錯誤位置（以標示顯示公式中的錯誤字元）。 */
 function SyntaxErrorView({ formula, error }: { formula: string; error: FormulaSyntaxError }) {
   const { before, marked, after } = splitAtSpan(formula, error.start, error.end);
+  const { token } = theme.useToken();
   return (
     <div role="alert">
       <Typography.Text type="danger">
@@ -125,8 +126,8 @@ function SyntaxErrorView({ formula, error }: { formula: string; error: FormulaSy
         {before}
         <mark
           style={{
-            background: 'var(--ant-color-error-bg, #fff2f0)',
-            color: 'var(--ant-color-error, #ff4d4f)',
+            background: token.colorErrorBg,
+            color: token.colorError,
             borderBottom: '2px solid currentColor',
             padding: 0,
           }}

@@ -345,14 +345,14 @@ test('sales invoice from shipments: buyer, lines, manual tax, issue, allowance',
   });
 
   // 開立
-  const action = (name: RegExp) => p.locator('.ant-card-extra').getByRole('button', { name });
+  const action = (name: RegExp) => p.locator('.page-header-actions').getByRole('button', { name });
   await action(/開\s?立$/).click();
   await expect(p.getByRole('dialog')).toContainText('開立後會檢查號碼不重複');
   await p
     .getByRole('dialog')
     .getByRole('button', { name: /開\s?立/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已開立' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已開立' })).toBeVisible();
   await expect(p.getByRole('dialog')).toHaveCount(0);
   await settled(p);
   await p.screenshot({ path: test.info().outputPath('invoice-issued.png'), fullPage: true });
@@ -387,7 +387,7 @@ test('sales invoice from shipments: buyer, lines, manual tax, issue, allowance',
     .getByRole('dialog')
     .getByRole('button', { name: /開\s?立/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已開立' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已開立' })).toBeVisible();
   await expect(p.getByRole('dialog')).toHaveCount(0);
   await settled(p);
   await p.screenshot({ path: test.info().outputPath('allowance-issued.png'), fullPage: true });
@@ -438,10 +438,10 @@ test('void across periods shows a warning but can still be voided', async ({ pag
   });
 
   await p.goto(`/#/entities/sales_invoice/${SALES_INVOICE_ID}`);
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已開立' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已開立' })).toBeVisible();
   await expect(p.getByText('期別：2026 年 9–10 月')).toBeVisible();
   await p
-    .locator('.ant-card-extra')
+    .locator('.page-header-actions')
     .getByRole('button', { name: /作\s?廢/ })
     .click();
   const dialog = p.getByRole('dialog', { name: '作廢這張銷項發票' });
@@ -466,7 +466,7 @@ test('void across periods shows a warning but can still be voided', async ({ pag
   await expect(dialog).not.toContainText('作廢日期與發票不同期');
 
   await dialog.getByRole('button', { name: /作\s?廢/ }).click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已作廢' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已作廢' })).toBeVisible();
   expect(voided).toMatchObject({
     key: 'sales_invoice',
     id: SALES_INVOICE_ID,
@@ -531,7 +531,7 @@ test('shipment shows its invoice numbers and why it cannot be voided', async ({ 
   await expect(p.getByRole('link', { name: 'AB12345678（已開立）' })).toBeVisible();
   await expect(p.getByRole('link', { name: 'AB12345677（已作廢）' })).toBeVisible();
   await p
-    .locator('.ant-card-extra')
+    .locator('.page-header-actions')
     .getByRole('button', { name: /作\s?廢/ })
     .click();
   await p

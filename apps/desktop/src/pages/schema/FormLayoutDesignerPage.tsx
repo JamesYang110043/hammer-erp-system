@@ -1,5 +1,4 @@
 import {
-  ArrowLeftOutlined,
   DeleteOutlined,
   HolderOutlined,
   PlusOutlined,
@@ -41,18 +40,20 @@ import {
   Input,
   Modal,
   Popconfirm,
-  Result,
   Segmented,
   Select,
   Space,
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import { useEffect, useMemo, useReducer, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
+import { EmptyState } from '../../components/EmptyState';
+import { Page } from '../../components/PageHeader';
 import { apiErrorCode, errorMessage } from '../../api/client';
 import { useFormLayout, useResetFormLayout, useSaveFormLayout } from '../../api/formLayouts';
 import type { FormLayout } from '../../api/formLayouts';
@@ -200,20 +201,24 @@ export function FormLayoutDesignerPage() {
   const error = entity.error ?? entities.error ?? layout.error;
   if (error) {
     return (
-      <Card title="表單版面">
+      <Page title="表單版面">
         <Alert showIcon type="error" message={errorMessage(error)} />
-      </Card>
+      </Page>
     );
   }
   if (!entity.data || !entities.data || !layout.data) {
-    return <Card title="表單版面" loading />;
+    return <Page title="表單版面" loading />;
   }
   const current = entity.data.entity;
   if (current.kind === 'detail') {
     return (
-      <Card title="表單版面">
-        <Result status="info" title="明細子表在主表的表單中編輯，沒有自己的表單版面" />
-      </Card>
+      <Page title="表單版面">
+        <EmptyState
+          kind="notFound"
+          title="明細子表在主表的表單中編輯，沒有自己的表單版面"
+          description="請到主表的欄位定義開啟表單版面"
+        />
+      </Page>
     );
   }
   const schema: DesignerSchema = {
@@ -314,21 +319,19 @@ function Designer({
   ).filter((b) => !placed.blocks.has(b.code));
 
   return (
-    <Card
-      title={
-        <Space>
-          <Button
-            type="text"
-            icon={<ArrowLeftOutlined />}
-            aria-label={`回到「${schema.entity.label}」的欄位定義`}
-            onClick={onBack}
-          />
-          {`表單版面：${schema.entity.label}`}
-          {layout.is_default && <Tag>預設</Tag>}
-          {dirty && <Tag color="orange">未存檔</Tag>}
-        </Space>
+    <Page
+      onBack={onBack}
+      backLabel={`回到「${schema.entity.label}」的欄位定義`}
+      title={`表單版面：${schema.entity.label}`}
+      tags={
+        (layout.is_default || dirty) && (
+          <>
+            {layout.is_default && <Tag>預設</Tag>}
+            {dirty && <Tag color="orange">未存檔</Tag>}
+          </>
+        )
       }
-      extra={
+      actions={
         <Space>
           <Popconfirm
             title="還原成預設版面？"
@@ -406,7 +409,7 @@ function Designer({
       >
         離開後，目前的修改不會儲存。確定要離開？
       </Modal>
-    </Card>
+    </Page>
   );
 }
 
@@ -591,6 +594,7 @@ function SectionEditor({
   schema: DesignerSchema;
   dispatch: (action: DesignerAction) => void;
 }) {
+  const { token } = theme.useToken();
   const name = section.title || `區塊 ${index + 1}`;
   const {
     attributes,
@@ -707,7 +711,7 @@ function SectionEditor({
               minHeight: 48,
               padding: 4,
               borderRadius: 6,
-              outline: isOver ? '2px dashed #1677ff' : undefined,
+              outline: isOver ? `2px dashed ${token.colorPrimary}` : undefined,
             }}
           >
             {section.items.length === 0 && (
@@ -744,6 +748,7 @@ function ItemChip({
   schema: DesignerSchema;
   dispatch: (action: DesignerAction) => void;
 }) {
+  const { token } = theme.useToken();
   const label = itemLabel(item, schema);
   const {
     attributes,
@@ -767,9 +772,9 @@ function ItemChip({
     gap: 4,
     minWidth: 0,
     padding: '4px 8px',
-    border: `1px ${item.type === 'spacer' ? 'dashed' : 'solid'} rgba(127, 127, 127, 0.35)`,
+    border: `1px ${item.type === 'spacer' ? 'dashed' : 'solid'} ${token.colorBorder}`,
     borderRadius: 6,
-    background: item.type === 'block' ? 'rgba(22, 119, 255, 0.06)' : undefined,
+    background: item.type === 'block' ? token.colorPrimaryBg : undefined,
     ...(isDragging ? { position: 'relative', zIndex: 10, opacity: 0.8 } : {}),
   };
   return (
@@ -829,6 +834,7 @@ function LayoutPreview({
   schema: DesignerSchema;
   fields: FieldDefinition[];
 }) {
+  const { token } = theme.useToken();
   const config = useMemo(
     () =>
       resolveFormLayout(toConfig(state), {
@@ -849,7 +855,7 @@ function LayoutPreview({
         style={{
           marginBottom: 24,
           padding: '16px 12px',
-          border: '1px dashed rgba(127, 127, 127, 0.5)',
+          border: `1px dashed ${token.colorBorder}`,
           borderRadius: 6,
           textAlign: 'center',
         }}

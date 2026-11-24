@@ -1,8 +1,9 @@
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 
+import { Page } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
 import { mutationErrorMessage } from '../../api/errors';
 import { useDeleteUser, useUnlockUser, useUsers } from '../../api/users';
@@ -103,9 +104,9 @@ export function UsersPage() {
   ];
 
   return (
-    <Card
+    <Page
       title="帳號管理"
-      extra={
+      actions={
         <Space>
           <Button
             icon={<ReloadOutlined />}
@@ -139,6 +140,6 @@ export function UsersPage() {
       <CreateUserModal open={creating} onClose={() => setCreating(false)} />
       <EditUserModal user={editing} onClose={() => setEditing(undefined)} />
       <ResetPasswordModal user={resetting} onClose={() => setResetting(undefined)} />
-    </Card>
+    </Page>
   );
 }

@@ -7,24 +7,13 @@ import {
   SaveOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import {
-  Alert,
-  App,
-  Button,
-  Card,
-  Empty,
-  Form,
-  Input,
-  Modal,
-  Space,
-  Tag,
-  Tooltip,
-  Typography,
-} from 'antd';
+import { Alert, App, Button, Form, Input, Modal, Space, Tag, Tooltip, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
+import { EmptyState } from '../../components/EmptyState';
+import { Page } from '../../components/PageHeader';
 import { CommandError, apiErrorCode, errorMessage } from '../../api/client';
 import {
   useCreateRecord,
@@ -712,16 +701,18 @@ function RecordForm({
   const title = record ? entity.label : `新增${entity.label}`;
 
   return (
-    <Card
-      title={
-        <Space>
-          {entityIcon(entity.icon)}
-          {title}
-          {status && <DocumentStatusTag status={status} entityKey={entityKey} />}
-          {dirty && <Tag color="orange">未存檔</Tag>}
-        </Space>
+    <Page
+      icon={entityIcon(entity.icon)}
+      title={title}
+      tags={
+        (status || dirty) && (
+          <>
+            {status && <DocumentStatusTag status={status} entityKey={entityKey} />}
+            {dirty && <Tag color="orange">未存檔</Tag>}
+          </>
+        )
       }
-      extra={
+      actions={
         <Space>
           {actions.map((action) => (
             <Tooltip key={action} title={dirty ? SAVE_BEFORE_ACTION : undefined}>
@@ -807,7 +798,7 @@ function RecordForm({
         />
       )}
       {displayed.length === 0 && details.length === 0 ? (
-        <Empty description="此資料類別沒有可以輸入的欄位" />
+        <EmptyState title="此資料類別沒有可以輸入的欄位" description="請先在「資料類別」新增欄位" />
       ) : (
         <Form<FormValues>
           form={form}
@@ -904,7 +895,7 @@ function RecordForm({
       >
         離開後，目前的修改不會儲存。確定要離開？
       </Modal>
-    </Card>
+    </Page>
   );
 }
 
@@ -948,9 +939,9 @@ export function RecordFormPage() {
   const error = entity.error ?? entities.error ?? detailDefs.error ?? record.error;
   if (error) {
     return (
-      <Card title="資料">
+      <Page title="資料">
         <Alert showIcon type="error" message={errorMessage(error)} />
-      </Card>
+      </Page>
     );
   }
   if (
@@ -960,14 +951,14 @@ export function RecordFormPage() {
     formLayout.isPending ||
     (id !== undefined && !record.data)
   ) {
-    return <Card title="資料" loading />;
+    return <Page title="資料" loading />;
   }
   const detail = entity.data;
   if (!detail.entity.is_active) {
     return (
-      <Card title={detail.entity.label}>
-        <Empty description="此資料類別已停用" />
-      </Card>
+      <Page title={detail.entity.label}>
+        <EmptyState kind="disabled" title="此資料類別已停用" description="請洽管理者重新啟用" />
+      </Page>
     );
   }
   return (

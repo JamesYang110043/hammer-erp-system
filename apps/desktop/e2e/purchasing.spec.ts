@@ -257,16 +257,20 @@ test('foreign purchase order: supplier fills currency and rate, preview matches 
 
   // 確認 → 已確認，可以結案或作廢
   await p
-    .locator('.ant-card-extra')
+    .locator('.page-header-actions')
     .getByRole('button', { name: /確\s?認/ })
     .click();
   await p
     .getByRole('dialog')
     .getByRole('button', { name: /確\s?認/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已確認' })).toBeVisible();
-  await expect(p.locator('.ant-card-extra').getByRole('button', { name: /結\s?案/ })).toBeVisible();
-  await expect(p.locator('.ant-card-extra').getByRole('button', { name: /作\s?廢/ })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已確認' })).toBeVisible();
+  await expect(
+    p.locator('.page-header-actions').getByRole('button', { name: /結\s?案/ }),
+  ).toBeVisible();
+  await expect(
+    p.locator('.page-header-actions').getByRole('button', { name: /作\s?廢/ }),
+  ).toBeVisible();
   await expect(p.getByText(/此單據已確認，不能修改。確認時間：/)).toBeVisible();
   await expect(p.getByRole('dialog')).toHaveCount(0);
   await settled(p);
@@ -494,14 +498,14 @@ test('goods receipt from purchase order: fill unreceived lines, post, lot and co
 
   // 過帳：顯示批號（自動產生的也是）與台幣單位成本
   await p
-    .locator('.ant-card-extra')
+    .locator('.page-header-actions')
     .getByRole('button', { name: /過\s?帳/ })
     .click();
   await p
     .getByRole('dialog')
     .getByRole('button', { name: /過\s?帳/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已過帳' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已過帳' })).toBeVisible();
   await expect(rows.nth(0).getByRole('link', { name: 'US-2611' })).toBeVisible();
   await expect(rows.nth(1).getByRole('link', { name: 'GR202611-0001-2' })).toBeVisible();
   await expect(rows.nth(0).getByRole('textbox', { name: '台幣單位成本', exact: true })).toHaveValue(

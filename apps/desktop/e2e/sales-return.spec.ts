@@ -322,13 +322,13 @@ test('sales return from posted shipment: returnable qty, preview, post, lots add
   await expect(p.getByRole('combobox', { name: '出貨單', exact: true })).toBeDisabled();
 
   // 過帳：顯示加回的批號與成本
-  const action = (name: RegExp) => p.locator('.ant-card-extra').getByRole('button', { name });
+  const action = (name: RegExp) => p.locator('.page-header-actions').getByRole('button', { name });
   await action(/過\s?帳/).click();
   await p
     .getByRole('dialog')
     .getByRole('button', { name: /過\s?帳/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已過帳' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已過帳' })).toBeVisible();
   await expect(p.getByRole('textbox', { name: '退回成本', exact: true })).toHaveValue('570.00');
   const added = p.getByRole('region', { name: '加回的批號' });
   const addedRows = added.locator('tbody tr.ant-table-row');
@@ -350,7 +350,7 @@ test('sales return from posted shipment: returnable qty, preview, post, lots add
     .getByRole('dialog')
     .getByRole('button', { name: /作\s?廢/ })
     .click();
-  await expect(p.locator('.ant-card-head .ant-tag', { hasText: '已作廢' })).toBeVisible();
+  await expect(p.locator('.page-header .ant-tag', { hasText: '已作廢' })).toBeVisible();
   await expect(p.getByText(/作廢時間：/)).toBeVisible();
   await expect(added).toBeVisible();
   await expect(p.getByRole('dialog')).toHaveCount(0);
@@ -359,7 +359,7 @@ test('sales return from posted shipment: returnable qty, preview, post, lots add
 
   // 加回的批號連到庫存查詢
   await added.getByRole('link', { name: 'L-02' }).click();
-  await expect(p.locator('.ant-card-head-title', { hasText: PRODUCT_TITLE })).toBeVisible();
+  await expect(p.locator('.page-header-title', { hasText: PRODUCT_TITLE })).toBeVisible();
   await expect(p.getByRole('table', { name: '批號' })).toContainText('L-02');
   await settled(p);
   await p.screenshot({ path: test.info().outputPath('return-stock.png') });

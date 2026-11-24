@@ -5,11 +5,13 @@ import {
   SaveOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Card, Empty, Popconfirm, Select, Space, Table, Tag } from 'antd';
+import { Alert, App, Button, Popconfirm, Select, Space, Table, Tag } from 'antd';
 import type { TableColumnsType, TableProps } from 'antd';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
+import { EmptyState } from '../../components/EmptyState';
+import { Page } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
 import { mutationErrorMessage } from '../../api/errors';
 import {
@@ -244,14 +246,10 @@ function RecordList({
   };
 
   return (
-    <Card
-      title={
-        <Space>
-          {entityIcon(entity.icon)}
-          {entity.label}
-        </Space>
-      }
-      extra={
+    <Page
+      icon={entityIcon(entity.icon)}
+      title={entity.label}
+      actions={
         <Space>
           <Button
             icon={<ReloadOutlined />}
@@ -386,7 +384,7 @@ function RecordList({
           message.success(`已儲存版面「${layout.name}」`);
         }}
       />
-    </Card>
+    </Page>
   );
 }
 
@@ -403,20 +401,20 @@ export function RecordsPage() {
   const error = entity.error ?? defaultLayout.error;
   if (error) {
     return (
-      <Card title="資料列表">
+      <Page title="資料列表">
         <Alert showIcon type="error" message={errorMessage(error)} />
-      </Card>
+      </Page>
     );
   }
   if (!entity.data || !defaultLayout.data) {
-    return <Card title="資料列表" loading />;
+    return <Page title="資料列表" loading />;
   }
   const detail = entity.data;
   if (!detail.entity.is_active) {
     return (
-      <Card title={detail.entity.label}>
-        <Empty description="此資料類別已停用" />
-      </Card>
+      <Page title={detail.entity.label}>
+        <EmptyState kind="disabled" title="此資料類別已停用" description="請洽管理者重新啟用" />
+      </Page>
     );
   }
   return (

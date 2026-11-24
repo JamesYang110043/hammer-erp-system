@@ -1,11 +1,13 @@
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { DragEndEvent } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
-import { Alert, App, Button, Card, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Space, Table, Tag, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 
+import { SectionTitle } from '../../components/SectionTitle';
+import { Page } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
 import { mutationErrorMessage } from '../../api/errors';
 import { useAllEntities, useReorderEntities } from '../../api/schema';
@@ -100,7 +102,7 @@ function EntityGroupTable({
 
   return (
     <section aria-label={group.label}>
-      <Typography.Title level={5}>{group.label}</Typography.Title>
+      <SectionTitle>{group.label}</SectionTitle>
       <SortableTableContext ids={entities.map((e) => e.id)} onDragEnd={onDragEnd}>
         <Table<EntityDefinition>
           rowKey="id"
@@ -163,9 +165,9 @@ export function EntitiesPage() {
       .reduce((max, e) => Math.max(max, e.sort_order + 1), 0);
 
   return (
-    <Card
+    <Page
       title="資料類別"
-      extra={
+      actions={
         <Space>
           <Button
             icon={<ReloadOutlined />}
@@ -211,6 +213,6 @@ export function EntitiesPage() {
         onClose={() => setFormTarget(undefined)}
         onCreated={(detail) => navigate(`/schema/${detail.entity.key}`)}
       />
-    </Card>
+    </Page>
   );
 }

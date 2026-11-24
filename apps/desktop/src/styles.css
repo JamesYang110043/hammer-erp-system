@@ -141,3 +141,62 @@ body {
     display: block;
   }
 }
+
+/* 頁面標題列（src/components/PageHeader.tsx）：左側標題與說明，右側動作列 */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.page-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.page-header-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+
+.page-header-heading > h4.page-header-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-header-actions {
+  flex-shrink: 0;
+}
+
+/* 頁面內的區塊標題（src/components/SectionTitle.tsx）：左側色條，顏色由元件以 token 指定 */
+h5.section-title {
+  margin: 0;
+  padding-inline-start: 10px;
+  border-inline-start: 3px solid transparent;
+  line-height: 20px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}

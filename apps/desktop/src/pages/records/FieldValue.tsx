@@ -8,9 +8,11 @@ import {
   findOption,
   formatFieldText,
   formulaErrorLabel,
+  isNumericType,
   relationLabel,
   valueField,
 } from '../../records/display';
+import { NumberText } from '../../components/NumberText';
 import { AttachmentLink } from './AttachmentLink';
 import { MISSING_ATTACHMENT_TEXT } from './FileInput';
 
@@ -81,8 +83,11 @@ export function FieldValue({
         <Typography.Text type="secondary">{MISSING_ATTACHMENT_TEXT}</Typography.Text>
       );
     }
-    default:
-      return <>{formatFieldText(field, value)}</>;
+    default: {
+      const text = formatFieldText(field, value) ?? '';
+      // 數字、金額：等寬數字，負數為錯誤色
+      return isNumericType(field) ? <NumberText>{text}</NumberText> : <>{text}</>;
+    }
   }
 }
 

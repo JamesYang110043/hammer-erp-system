@@ -1,8 +1,9 @@
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 
+import { Page } from '../../components/PageHeader';
 import { apiErrorCode, errorMessage } from '../../api/client';
 import { useAllCurrencies, useUpdateCurrency } from '../../api/currencies';
 import type { Currency } from '../../bindings';
@@ -102,9 +103,9 @@ export function CurrenciesPage() {
   ];
 
   return (
-    <Card
+    <Page
       title="幣別"
-      extra={
+      actions={
         <Space>
           <Button icon={<ReloadOutlined />} onClick={reload} loading={currencies.isFetching}>
             重新整理
@@ -138,6 +139,6 @@ export function CurrenciesPage() {
         onClose={() => setEditing(undefined)}
         onReload={reload}
       />
-    </Card>
+    </Page>
   );
 }

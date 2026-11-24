@@ -1,8 +1,9 @@
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, DatePicker, Form, Select, Space, Table, Typography } from 'antd';
+import { Alert, Button, DatePicker, Form, Select, Space, Table, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 
+import { Page } from '../../components/PageHeader';
 import { useAuditLogs } from '../../api/auditLogs';
 import { errorMessage } from '../../api/client';
 import { useUsers } from '../../api/users';
@@ -90,9 +91,9 @@ export function AuditLogsPage() {
   };
 
   return (
-    <Card
+    <Page
       title="操作紀錄"
-      extra={
+      actions={
         <Button icon={<ReloadOutlined />} onClick={() => logs.refetch()} loading={logs.isFetching}>
           重新整理
         </Button>
@@ -178,6 +179,6 @@ export function AuditLogsPage() {
           },
         }}
       />
-    </Card>
+    </Page>
   );
 }

@@ -4,6 +4,7 @@ import { useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
+import { SectionTitle } from '../../components/SectionTitle';
 import { ShipmentAllocationContext } from './shipmentAllocation';
 
 import { unwrap } from '../../api/client';
@@ -462,7 +463,7 @@ export function UsedLotsTable({
   const items = usedLots(txns.data?.items ?? [], lineIds, docType);
   return (
     <section aria-label={config.title} style={{ marginBottom: 24 }}>
-      <Typography.Title level={5}>{config.title}</Typography.Title>
+      <SectionTitle>{config.title}</SectionTitle>
       <Table
         size="small"
         bordered
