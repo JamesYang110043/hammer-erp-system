@@ -135,3 +135,13 @@ export function adjacentId(
   const next = Math.min(Math.max(index + delta, 0), items.length - 1);
   return items[next]!.id;
 }
+
+/**
+ * 右側唯讀預覽顯示的欄位：有效、設定為顯示的欄位（含公式欄位），依 `sort_order`。
+ * 位置依表單版面（§7.7）。
+ */
+export function previewFields(fields: readonly FieldDefinition[]): FieldDefinition[] {
+  return fields
+    .filter((f) => f.is_active && f.is_visible)
+    .sort((a, b) => a.sort_order - b.sort_order);
+}

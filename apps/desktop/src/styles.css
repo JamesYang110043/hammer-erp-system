@@ -218,6 +218,16 @@ body {
   outline: none;
 }
 
+/* 右側唯讀預覽（src/pages/records/RecordPreview.tsx）的標題列 */
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
 .master-split-detail {
   flex: 1;
   min-width: 0;

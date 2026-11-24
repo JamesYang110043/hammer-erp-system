@@ -1,5 +1,6 @@
 import type {
   EntityDefinition,
+  FormLayout_Serialize as FormLayout,
   FieldDefinition,
   Page,
   Record as DataRecord,
@@ -26,6 +27,13 @@ function systemEntity(key: string, label: string, sortOrder: number): EntityDefi
 export const CUSTOMER = systemEntity('customer', '客戶', 40);
 export const SUPPLIER = systemEntity('supplier', '廠商', 50);
 export const PRODUCT = systemEntity('product', '商品', 10);
+/** 客戶聯絡人（明細子表）。 */
+export const CUSTOMER_CONTACT: EntityDefinition = {
+  ...systemEntity('customer_contact', '客戶聯絡人', 0),
+  kind: 'detail',
+  parent_entity_id: CUSTOMER.id,
+  title_template: null,
+};
 
 function sys(entity: EntityDefinition, patch: Partial<FieldDefinition>): FieldDefinition {
   return fieldDef({
@@ -58,6 +66,20 @@ function partyFields(entity: EntityDefinition, codeLabel: string): FieldDefiniti
 
 export const CUSTOMER_FIELDS = partyFields(CUSTOMER, '客戶編號');
 export const SUPPLIER_FIELDS = partyFields(SUPPLIER, '廠商編號');
+export const CUSTOMER_CONTACT_FIELDS: FieldDefinition[] = [
+  sys(CUSTOMER_CONTACT, { field_key: 'name', label: '姓名', is_required: true, sort_order: 10 }),
+  sys(CUSTOMER_CONTACT, { field_key: 'title', label: '職稱', sort_order: 20 }),
+  sys(CUSTOMER_CONTACT, { field_key: 'phone', label: '電話', sort_order: 30 }),
+  sys(CUSTOMER_CONTACT, {
+    field_key: 'is_primary',
+    label: '主要聯絡人',
+    data_type: 'boolean',
+    is_required: true,
+    default_value: false,
+    sort_order: 60,
+  }),
+];
+
 export const PRODUCT_FIELDS = [
   sys(PRODUCT, { field_key: 'code', label: '料號', is_required: true, sort_order: 10 }),
   sys(PRODUCT, { field_key: 'name', label: '品名', is_required: true, sort_order: 20 }),
@@ -164,5 +186,86 @@ export function fakeListRecords(
     total: items.length,
     page,
     page_size: size,
+  };
+}
+
+/**
+ * 客戶的表單版面：「基本資料」2 欄（名稱在編號前面，統編佔 2 欄）、可收折的「聯絡資訊」，
+ * 最後是聯絡人明細表。順序與欄位的 `sort_order` 不同，用來確認預覽依版面排列。
+ */
+export const CUSTOMER_FORM_LAYOUT: FormLayout = {
+  id: '0196f5a0-0000-7000-8000-000000000901',
+  version: 1,
+  is_default: false,
+  config: {
+    sections: [
+      {
+        key: 'basic',
+        title: '基本資料',
+        columns: 2,
+        collapsible: false,
+        collapsed: false,
+        items: [
+          { type: 'field', field: 'name', span: 1 },
+          { type: 'field', field: 'code', span: 1 },
+          { type: 'field', field: 'tax_id', span: 2 },
+          { type: 'field', field: 'short_name', span: 1 },
+          { type: 'field', field: 'is_active', span: 1 },
+        ],
+      },
+      {
+        key: 'contact',
+        title: '聯絡資訊',
+        columns: 1,
+        collapsible: true,
+        collapsed: false,
+        items: [{ type: 'field', field: 'phone', span: 1 }],
+      },
+      {
+        key: '_blocks',
+        title: '',
+        columns: 1,
+        collapsible: false,
+        collapsed: false,
+        items: [
+          { type: 'block', block: 'record_no' },
+          { type: 'block', block: 'lines:customer_contact' },
+        ],
+      },
+    ],
+  },
+};
+
+export const CONTACT_A = '0196f5a0-0000-7000-8000-000000000a01';
+export const CONTACT_B = '0196f5a0-0000-7000-8000-000000000a02';
+
+/** 單筆查詢回傳的客戶（含聯絡人明細）。沒有這筆時回傳 `undefined`。 */
+export function customerDetail(all: readonly DataRecord[], id: string): DataRecord | undefined {
+  const r = all.find((x) => x.id === id);
+  if (!r) {
+    return undefined;
+  }
+  return {
+    ...r,
+    data: { phone: '02-2345-6789', ...r.data },
+    lines: {
+      customer_contact:
+        r.id === customerId(1)
+          ? [
+              partyRecord(CONTACT_A, {
+                name: '王小明',
+                title: '採購經理',
+                phone: '0912-345-678',
+                is_primary: true,
+              }),
+              partyRecord(CONTACT_B, {
+                name: '李小華',
+                title: null,
+                phone: null,
+                is_primary: false,
+              }),
+            ].map((c) => ({ ...c, title: '', data: { ...c.data, is_active: undefined } }))
+          : [],
+    },
   };
 }

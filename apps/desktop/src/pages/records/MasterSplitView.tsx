@@ -12,7 +12,7 @@ import type { EntityDefinition, FieldDefinition, Record as DataRecord } from '..
 import { EmptyState } from '../../components/EmptyState';
 import { PageHeader } from '../../components/PageHeader';
 import { StatusTag } from '../../components/StatusTag';
-import { newRecordPath } from '../../modules';
+import { newRecordPath, recordPath } from '../../modules';
 import {
   NAME_FIELD,
   PICKER_PAGE_SIZE,
@@ -27,6 +27,7 @@ import {
 } from '../../records/masterSplit';
 import { useDebouncedValue } from '../../utils/useDebouncedValue';
 import { entityIcon } from '../schema/entityIcons';
+import { RecordPreview } from './RecordPreview';
 
 /** 左側列表的寬度。 */
 export const PICKER_WIDTH = 320;
@@ -164,6 +165,19 @@ export function MasterSplitView({
     },
     [setSearchParams],
   );
+
+  /** 清除選取（刪除選取的資料之後）。 */
+  const clearSelection = useCallback(() => {
+    latestSelected.current = null;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete(SELECTED_PARAM);
+        return next;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
 
   /** 捲動到接近底部（或列表還沒填滿可視範圍）時載入下一頁。 */
   const loadMoreIfNeeded = useCallback(() => {
@@ -315,10 +329,16 @@ export function MasterSplitView({
           </div>
         </Card>
         <Card className="master-split-detail">
-          {selected ? (
-            <Typography.Title level={5} style={{ margin: 0 }} data-testid="detail-title">
-              {recordCode(selected)} {text(selected, NAME_FIELD)}
-            </Typography.Title>
+          {selectedId ? (
+            <RecordPreview
+              // 換選取時重新建立（不保留上一筆的狀態）
+              key={selectedId}
+              entity={entity}
+              fields={fields}
+              id={selectedId}
+              onEdit={() => navigate(recordPath(entityKey, selectedId))}
+              onDeleted={clearSelection}
+            />
           ) : (
             <EmptyState kind="empty" title={`請從左側選擇${entity.label}`} />
           )}
