@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../App';
 import type {
@@ -447,5 +447,73 @@ describe('在右側編輯與新增', () => {
     expect(screen.getByText('新增廠商')).toBeInTheDocument();
     expect(screen.getByRole('listbox', { name: '廠商列表' })).toBeInTheDocument();
     expect(window.location.hash).toBe('#/entities/supplier?mode=new');
+  });
+});
+
+describe('分割／表格檢視切換', () => {
+  const STORAGE_KEY = 'hammer.recordView.customer';
+
+  it('switches_to_table_and_remembers_choice', async () => {
+    renderAt(`#/entities/customer?selected=${customerId(1)}`);
+    await waitForOptions();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByText('表格'));
+    await screen.findByRole('columnheader', { name: '客戶編號' }, { timeout: PAGE_LOAD_TIMEOUT });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe('table');
+    // 表格不使用選取
+    expect(window.location.hash).toBe('#/entities/customer');
+    // 表格保留版面、欄位設定與篩選
+    expect(screen.getByRole('button', { name: /欄位設定/ })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: '版面' })).toBeInTheDocument();
+  });
+
+  it('reopening_uses_last_choice', async () => {
+    window.localStorage.setItem(STORAGE_KEY, 'table');
+    renderAt('#/entities/customer');
+    await screen.findByRole('columnheader', { name: '客戶編號' }, { timeout: PAGE_LOAD_TIMEOUT });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    // 其他資料類別各自記住（廠商仍為分割檢視）
+    window.location.hash = '#/entities/supplier';
+    expect(
+      await screen.findByRole('listbox', { name: '廠商列表' }, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toBeInTheDocument();
+  });
+
+  it('defaults_to_split_when_storage_is_unavailable', async () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    try {
+      renderAt('#/entities/customer');
+      await waitForOptions();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('clicking_table_row_opens_split_view_with_selection', async () => {
+    window.localStorage.setItem(STORAGE_KEY, 'table');
+    renderAt('#/entities/customer');
+    const user = userEvent.setup();
+    const cell = await screen.findByText(
+      'C002',
+      { selector: 'td' },
+      { timeout: PAGE_LOAD_TIMEOUT },
+    );
+    await user.click(cell);
+
+    expect(await screen.findByTestId('preview-title')).toHaveTextContent('C002');
+    expect(window.location.hash).toContain(`selected=${customerId(2)}`);
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe('split');
+  });
+
+  it('url_with_selection_shows_split_even_if_table_was_chosen', async () => {
+    window.localStorage.setItem(STORAGE_KEY, 'table');
+    renderAt(`#/entities/customer/${customerId(1)}`);
+    expect(
+      await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toHaveTextContent('C001');
   });
 });

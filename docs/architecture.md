@@ -1274,6 +1274,13 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 - 舊網址導向分割畫面：`/entities/customer/:id`（廠商相同）→ `?selected=<id>`；`/entities/customer/new` → `?mode=new`
 - 沒有 `record.write` 時忽略 `mode`，只顯示預覽
 
+**分割／表格檢視切換**（#245）
+
+- 頁首右上角的切換鈕（`RecordViewToggle`：分割／表格），在分割檢視與原本的表格列表之間切換；表格保留版面、欄位設定與篩選
+- 每個資料類別各自記住上次選的檢視，存在 localStorage `hammer.recordView.<資料類別代碼>`（不存伺服器；讀寫以 try/catch 包住，讀不到時為分割檢視）
+- 網址帶有 `?selected=` 或 `?mode=`（例如從舊網址導向）時一律顯示分割檢視；切到表格時清除這兩個參數。分割檢視編輯中有未存檔的修改時，切到表格前先確認
+- 在表格點一列：切回分割檢視並選取那筆；表格的「新增」也切回分割檢視開啟新增
+
 ---
 
 ### 8.8 進貨模組

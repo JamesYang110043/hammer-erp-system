@@ -30,6 +30,7 @@ import type { SplitMode } from '../../records/masterSplit';
 import { useDebouncedValue } from '../../utils/useDebouncedValue';
 import { entityIcon } from '../schema/entityIcons';
 import { RecordPreview } from './RecordPreview';
+import { RecordViewToggle } from './RecordViewToggle';
 import { RecordFormPanel } from './RecordFormPage';
 import { useUnsavedGuard } from './useUnsavedGuard';
 
@@ -121,9 +122,12 @@ function PickerOption({
 export function MasterSplitView({
   entity,
   fields,
+  onSwitchToTable,
 }: {
   entity: EntityDefinition;
   fields: FieldDefinition[];
+  /** 切換到表格列表（#245）；未指定時不顯示切換鈕。 */
+  onSwitchToTable?: () => void;
 }) {
   const entityKey = entity.key;
   const { token } = theme.useToken();
@@ -270,6 +274,12 @@ export function MasterSplitView({
         title={entity.label}
         actions={
           <>
+            {onSwitchToTable && (
+              <RecordViewToggle
+                value="split"
+                onChange={(view) => view === 'table' && confirmDiscard(onSwitchToTable)}
+              />
+            )}
             <Button
               icon={<ReloadOutlined />}
               onClick={() => picker.refetch()}
