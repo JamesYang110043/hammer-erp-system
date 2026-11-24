@@ -9,6 +9,8 @@ import {
   isInactive,
   loadRecordView,
   saveRecordView,
+  designerReturnPath,
+  designerReturnState,
   splitViewPath,
   mergeRecords,
   pickerPageQuery,
@@ -166,5 +168,23 @@ describe('splitViewPath', () => {
     expect(splitViewPath('customer')).toBe('/entities/customer');
     expect(splitViewPath('customer', { selected: 'x' })).toBe('/entities/customer?selected=x');
     expect(splitViewPath('supplier', { mode: 'new' })).toBe('/entities/supplier?mode=new');
+  });
+});
+
+describe('designerReturnPath', () => {
+  it('returns_to_the_split_view_with_selection', () => {
+    const state = designerReturnState('customer', 'abc');
+    expect(state).toEqual({ returnTo: '/entities/customer?selected=abc' });
+    expect(designerReturnPath(state, 'customer')).toBe('/entities/customer?selected=abc');
+  });
+
+  it('ignores_missing_or_other_paths', () => {
+    expect(designerReturnPath(null, 'customer')).toBeUndefined();
+    expect(designerReturnPath({ returnTo: 1 }, 'customer')).toBeUndefined();
+    expect(designerReturnPath({ returnTo: '/entities/supplier?selected=a' }, 'customer')).toBe(
+      undefined,
+    );
+    expect(designerReturnPath({ returnTo: '/entities/customerx' }, 'customer')).toBeUndefined();
+    expect(designerReturnPath({ returnTo: 'https://example.com' }, 'customer')).toBeUndefined();
   });
 });

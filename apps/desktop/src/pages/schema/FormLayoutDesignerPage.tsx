@@ -48,9 +48,9 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useEffect, useMemo, useReducer, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { useBlocker, useNavigate, useParams } from 'react-router';
+import { useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 
 import { StatusTag } from '../../components/StatusTag';
 import { EmptyState } from '../../components/EmptyState';
@@ -86,6 +86,7 @@ import type {
   DesignerState,
 } from '../../records/formLayoutDesigner';
 import { detailEntitiesOf } from '../../records/lines';
+import { designerReturnPath } from '../../records/masterSplit';
 import {
   SPLIT_DETAIL_PREVIEW_WIDTH,
   hasSplitPreview,
@@ -203,11 +204,14 @@ const collisionDetection: CollisionDetection = (args) => {
 export function FormLayoutDesignerPage() {
   const { key = '' } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const entity = useEntity(key);
   const entities = useAllEntities();
   const layout = useFormLayout(key);
 
-  const back = () => navigate(`/schema/${key}`);
+  // 從分割檢視開啟時（#253）：返回與存檔後回到原本的畫面，保留選取的資料
+  const returnTo = designerReturnPath(location.state, key);
+  const back = () => void navigate(returnTo ?? `/schema/${key}`);
   const error = entity.error ?? entities.error ?? layout.error;
   if (error) {
     return (
@@ -243,6 +247,8 @@ export function FormLayoutDesignerPage() {
       schema={schema}
       layout={layout.data}
       onBack={back}
+      backLabel={returnTo ? `回到「${current.label}」` : `回到「${current.label}」的欄位定義`}
+      onSaved={returnTo ? back : undefined}
       onReload={() => void layout.refetch()}
       reloading={layout.isFetching}
     />
@@ -253,12 +259,17 @@ function Designer({
   schema,
   layout,
   onBack,
+  backLabel,
+  onSaved,
   onReload,
   reloading,
 }: {
   schema: DesignerSchema;
   layout: FormLayout;
   onBack: () => void;
+  backLabel: string;
+  /** 存檔後（從分割檢視開啟時回到原本的畫面）。 */
+  onSaved?: () => void;
   onReload: () => void;
   reloading: boolean;
 }) {
@@ -279,9 +290,11 @@ function Designer({
     [config, layout.config],
   );
 
+  // 存檔成功後離開時不再提醒（快取更新前 dirty 仍為 true）
+  const saved = useRef(false);
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
-      dirty && currentLocation.pathname !== nextLocation.pathname,
+      dirty && !saved.current && currentLocation.pathname !== nextLocation.pathname,
   );
   useEffect(() => {
     if (!dirty) {
@@ -301,10 +314,13 @@ function Designer({
   };
 
   const onSave = () =>
-    save.mutate(
-      { version: layout.version ?? null, config },
-      { onSuccess: () => void message.success('已儲存表單版面'), onError },
-    );
+    save.mutateAsync({ version: layout.version ?? null, config }).then(() => {
+      message.success('已儲存表單版面');
+      if (onSaved) {
+        saved.current = true;
+        onSaved();
+      }
+    }, onError);
 
   const onReset = () => {
     if (layout.version === null) {
@@ -334,7 +350,7 @@ function Designer({
   return (
     <Page
       onBack={onBack}
-      backLabel={`回到「${schema.entity.label}」的欄位定義`}
+      backLabel={backLabel}
       title={`表單版面：${schema.entity.label}`}
       tags={
         (layout.is_default || dirty) && (

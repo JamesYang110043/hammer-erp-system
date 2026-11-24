@@ -55,6 +55,7 @@ async function setup(
 ) {
   // 4 筆固定的客戶＋80 筆一般客戶（啟用中 83 筆），超過一頁（50 筆）；刪除後從清單移除
   let customers = manyCustomers(80);
+  let layout = formLayout;
   await mockTauri(page, {
     get_server_url: () => 'http://localhost:8080',
     health_check: () => ({ status: 'ok', version: '0.1.0', database: 'ok' }),
@@ -94,7 +95,12 @@ async function setup(
       }
       return r;
     },
-    get_form_layout: () => formLayout,
+    get_form_layout: () => layout,
+    save_form_layout: ({ req }) => {
+      const { config } = req as { config: typeof layout.config };
+      layout = { ...layout, version: (layout.version ?? 0) + 1, config };
+      return layout;
+    },
     delete_record: ({ id }) => {
       customers = customers.filter((c) => c.id !== id);
       return null;
@@ -482,4 +488,41 @@ test('form layout designer previews the split view right side', async ({ page })
   await page.getByText('整頁', { exact: true }).click();
   await expect(page.getByTestId('split-preview-frame')).toHaveCount(0);
   expect((await designerPreview.boundingBox())!.width).toBeGreaterThan(SPLIT_DETAIL_PREVIEW_WIDTH);
+});
+
+// 從分割檢視右側調整表單版面（#253）：返回與存檔後回到原本選取的資料
+test('adjust form layout from the split view and come back', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setup(page);
+  await page.goto(`/#/entities/customer?selected=${customerId(2)}`);
+  const preview = page.getByTestId('record-preview');
+  await expect(preview.getByTestId('preview-title')).toHaveText('C002 光明電子有限公司');
+  await page.screenshot({ path: test.info().outputPath('preview-header.png') });
+
+  // 返回：選取不變
+  await preview.getByRole('button', { name: /調整表單版面/ }).click();
+  await expect(page.getByText('表單版面：客戶')).toBeVisible();
+  await page.getByRole('button', { name: '回到「客戶」' }).click();
+  await expect(preview.getByTestId('preview-title')).toHaveText('C002 光明電子有限公司');
+  await expect(page).toHaveURL(new RegExp(`selected=${customerId(2)}`));
+
+  // 改成 1 欄並存檔：回到分割檢視，預覽依新的版面
+  await preview.getByRole('button', { name: /調整表單版面/ }).click();
+  const basic = page.getByRole('region', { name: '區塊：基本資料' });
+  await basic.getByRole('combobox', { name: '欄數' }).click({ force: true });
+  await page.locator('.ant-select-dropdown:visible').getByText('1 欄', { exact: true }).click();
+  await page.getByRole('button', { name: /儲\s*存/ }).click();
+  await expect(preview.getByTestId('preview-title')).toHaveText('C002 光明電子有限公司');
+  await expect(page.getByText('有未存檔的修改')).toHaveCount(0);
+  const name = (await preview.locator('[data-item="name"]').boundingBox())!;
+  const code = (await preview.locator('[data-item="code"]').boundingBox())!;
+  expect(code.y, '1 欄：編號在名稱下方').toBeGreaterThan(name.y + name.height - 1);
+});
+
+test('viewer does not see adjust form layout', async ({ page }) => {
+  await setup(page, VIEWER);
+  await page.goto(`/#/entities/customer?selected=${customerId(1)}`);
+  const preview = page.getByTestId('record-preview');
+  await expect(preview.getByTestId('preview-title')).toBeVisible();
+  await expect(preview.getByRole('button', { name: /調整表單版面/ })).toHaveCount(0);
 });
