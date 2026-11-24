@@ -14,7 +14,8 @@ type CellStyle = CSSProperties & { '--span'?: number; '--columns'?: number };
  * - 每個區塊是 `columns` 欄的格線（樣式在 styles.css），項目依 `span` 佔用欄數，空白格佔位；
  *   系統區塊（明細表等）佔滿整列，單號與欄位相同佔一格
  * - 項目依版面順序輸出，Tab 鍵的移動順序與畫面閱讀順序一致（左到右、上到下）
- * - 寬度不足時退回單欄（CSS container query）
+ * - 寬度不足時逐步減少欄數（4、3 欄 → 2 欄 → 1 欄，CSS container query）；`data-span` 供樣式判斷
+ *   佔用欄數超過目前欄數的項目（改為佔滿整列）
  * - 可收折的區塊收折時內容仍保留在表單中（欄位的值與驗證不受影響）；`reveal` 中的欄位所在的
  *   區塊會自動展開（送出時有驗證錯誤）
  * - `renderField`、`renderBlock` 回傳 `null` 的項目不顯示（例如只在可以編輯時出現的區塊）；
@@ -131,6 +132,7 @@ function sectionCells(
               key={key}
               aria-hidden
               className="form-layout-cell form-layout-spacer"
+              data-span={item.span}
               style={{ '--span': item.span } as CellStyle}
             />
           ),
@@ -152,6 +154,7 @@ function sectionCells(
             key={key}
             className={wide ? 'form-layout-cell form-layout-block' : 'form-layout-cell'}
             data-item={item.type === 'field' ? item.field : item.block}
+            data-span={wide ? undefined : span}
             style={wide ? undefined : ({ '--span': span } as CellStyle)}
           >
             {content}

@@ -94,7 +94,7 @@ const LAYOUT: FormLayoutConfig = {
   ],
 };
 
-async function mockServer(page: Page) {
+async function mockServer(page: Page, config: FormLayoutConfig = LAYOUT) {
   await mockTauri(page, {
     get_server_url: () => 'http://localhost:8080',
     health_check: () => ({ status: 'ok', version: '0.1.0', database: 'ok' }),
@@ -107,7 +107,7 @@ async function mockServer(page: Page) {
       id: '0196f5a0-0000-7000-8000-000000000301',
       version: 1,
       is_default: false,
-      config: LAYOUT,
+      config,
     }),
   });
 }
@@ -181,18 +181,143 @@ test('form follows the layout: columns, spans, spacer, blocks, collapsed section
   await expectNoHorizontalScroll(page);
 });
 
-test('narrow window falls back to a single column without horizontal scroll', async ({ page }) => {
+test('narrow window reduces 3 columns to 2 without horizontal scroll', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 900 });
   await mockServer(page);
   await page.goto('/#/entities/repair/new');
   await expect(page.getByLabel('客戶名稱')).toBeVisible();
 
-  // 3 欄的區塊寬度不足時退回單欄：依版面順序由上往下
-  await expectBelow(page, '單號', '報修日期');
-  await expectBelow(page, '報修日期', '客戶名稱');
+  // 3 欄的區塊寬度不足（≤ 720px）時改為 2 欄：空白格不顯示，佔 2 欄的項目佔滿整列
+  await expectSameRow(page, '單號', '報修日期');
+  await expectBelow(page, '單號', '客戶名稱');
   await expectBelow(page, '客戶名稱', '聯絡人');
-  const [name, contact] = [await itemBox(page, '客戶名稱'), await itemBox(page, '聯絡人')];
-  expect(Math.abs(name.x - contact.x)).toBeLessThanOrEqual(1);
+  await expectSameRow(page, '聯絡人', '電話');
+  await expectBelow(page, '聯絡人', '地址');
+  const [record, name, date] = [
+    await itemBox(page, '單號'),
+    await itemBox(page, '客戶名稱'),
+    await itemBox(page, '報修日期'),
+  ];
+  expect(Math.abs(name.x - record.x)).toBeLessThanOrEqual(1);
+  expect(name.x + name.width).toBeCloseTo(date.x + date.width, 0);
 
   await expectNoHorizontalScroll(page);
 });
+
+// 寬度不足時逐步減少欄數（#251）：4 欄 → 2 欄 → 1 欄、3 欄 → 2 欄 → 1 欄
+const WIDE_LAYOUT: FormLayoutConfig = {
+  sections: [
+    {
+      key: 'four',
+      title: '四欄區塊',
+      columns: 4,
+      collapsible: false,
+      collapsed: false,
+      items: [
+        { type: 'block', block: 'record_no' },
+        { type: 'field', field: 'name', span: 1 },
+        { type: 'field', field: 'phone', span: 1 },
+        { type: 'spacer', span: 1 },
+        { type: 'field', field: 'address', span: 3 },
+        { type: 'field', field: 'repair_date', span: 1 },
+      ],
+    },
+    {
+      key: 'three',
+      title: '三欄區塊',
+      columns: 3,
+      collapsible: false,
+      collapsed: false,
+      items: [
+        { type: 'field', field: 'inspector', span: 1 },
+        { type: 'field', field: 'contact', span: 1 },
+        { type: 'spacer', span: 1 },
+        { type: 'field', field: 'note', span: 3 },
+      ],
+    },
+  ],
+};
+
+/** 區塊的容器寬度、實際欄數與顯示中的空白格數。 */
+async function sectionGrid(page: Page, key: string) {
+  return page.locator(`[data-section="${key}"] .form-layout-container`).evaluate((el) => {
+    const grid = el.querySelector('.form-layout-grid')!;
+    const spacers = [...grid.querySelectorAll('.form-layout-spacer')];
+    return {
+      width: el.getBoundingClientRect().width,
+      columns: getComputedStyle(grid).gridTemplateColumns.split(' ').length,
+      spacersShown: spacers.filter((s) => getComputedStyle(s).display !== 'none').length,
+    };
+  });
+}
+
+async function expectSameX(page: Page, a: string, b: string) {
+  const [boxA, boxB] = [await itemBox(page, a), await itemBox(page, b)];
+  expect(Math.abs(boxA.x - boxB.x), `${a} / ${b} 同一欄`).toBeLessThanOrEqual(1);
+}
+
+// 全頁表單的區塊寬度：1440px → 1128px、1100px → 788px、900px → 588px、600px → 288px
+for (const { viewport, four, three } of [
+  { viewport: 1440, four: 4, three: 3 },
+  { viewport: 1100, four: 2, three: 3 },
+  { viewport: 900, four: 2, three: 2 },
+  { viewport: 600, four: 1, three: 1 },
+]) {
+  test(`columns reduce step by step at ${viewport}px: 4 → ${four}, 3 → ${three}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport, height: 900 });
+    await mockServer(page, WIDE_LAYOUT);
+    await page.goto('/#/entities/repair/new');
+    await expect(page.getByLabel('客戶名稱')).toBeVisible();
+
+    const g4 = await sectionGrid(page, 'four');
+    const g3 = await sectionGrid(page, 'three');
+    expect(g4.columns, `4 欄區塊（寬 ${g4.width}px）`).toBe(four);
+    expect(g3.columns, `3 欄區塊（寬 ${g3.width}px）`).toBe(three);
+    // 欄數減少時空白格不顯示
+    expect(g4.spacersShown, '4 欄區塊的空白格').toBe(four === 4 ? 1 : 0);
+    expect(g3.spacersShown, '3 欄區塊的空白格').toBe(three === 3 ? 1 : 0);
+
+    const name = await itemBox(page, '客戶名稱');
+    const address = await itemBox(page, '地址');
+    if (four === 4) {
+      // 單號｜客戶名稱｜電話｜（空白）；地址（3 欄）｜報修日期
+      await expectSameRow(page, '單號', '客戶名稱');
+      await expectSameRow(page, '客戶名稱', '電話');
+      await expectSameRow(page, '地址', '報修日期');
+      expect(address.width, '地址佔 3 欄').toBeGreaterThan(name.width * 2.5);
+    } else if (four === 2) {
+      // 單號｜客戶名稱；電話｜（空白不顯示）；地址佔滿整列；報修日期
+      await expectSameRow(page, '單號', '客戶名稱');
+      await expectBelow(page, '單號', '電話');
+      await expectSameX(page, '單號', '電話');
+      await expectBelow(page, '電話', '地址');
+      const record = await itemBox(page, '單號');
+      expect(address.x + address.width, '地址佔滿整列').toBeCloseTo(name.x + name.width, 0);
+      expect(Math.abs(address.x - record.x)).toBeLessThanOrEqual(1);
+      await expectBelow(page, '地址', '報修日期');
+      await expectSameX(page, '單號', '報修日期');
+    } else {
+      await expectBelow(page, '單號', '客戶名稱');
+      await expectBelow(page, '客戶名稱', '電話');
+      await expectBelow(page, '電話', '地址');
+      await expectSameX(page, '客戶名稱', '地址');
+      expect(Math.abs(address.width - name.width)).toBeLessThanOrEqual(1);
+    }
+
+    const inspector = await itemBox(page, '檢修人員');
+    const note = await itemBox(page, '備註');
+    if (three === 1) {
+      await expectBelow(page, '檢修人員', '聯絡人');
+      await expectBelow(page, '聯絡人', '備註');
+      expect(Math.abs(note.width - inspector.width)).toBeLessThanOrEqual(1);
+    } else {
+      // 檢修人員｜聯絡人（｜空白）；備註佔滿整列
+      await expectSameRow(page, '檢修人員', '聯絡人');
+      await expectBelow(page, '聯絡人', '備註');
+      expect(note.width, '備註佔滿整列').toBeGreaterThan(inspector.width * (three - 0.5));
+    }
+    await expectNoHorizontalScroll(page);
+  });
+}
