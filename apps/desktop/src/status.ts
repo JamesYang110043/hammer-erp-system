@@ -7,8 +7,8 @@
 import type { BadgeProps } from 'antd';
 
 import type { DocumentStatus } from './bindings';
-import { TAG_PALETTE } from './theme';
-import type { TagColorName, TagColors } from './theme';
+import { TAG_PALETTE, tagPalette } from './theme';
+import type { ColorMode, TagColorName, TagColors } from './theme';
 
 /** 語意狀態。 */
 export type StatusTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
@@ -45,9 +45,9 @@ export const DOCUMENT_STATUS_TONES: Record<DocumentStatus, StatusTone> = {
   void: 'danger',
 };
 
-/** 語意狀態的標籤顏色。 */
-export function toneColors(tone: StatusTone): TagColors {
-  return TAG_PALETTE[TONE_TAG_COLOR[tone]];
+/** 語意狀態的標籤顏色（依外觀模式，預設淺色）。 */
+export function toneColors(tone: StatusTone, mode: ColorMode = 'light'): TagColors {
+  return tagPalette(mode)[TONE_TAG_COLOR[tone]];
 }
 
 /** select 選項可選的顏色（欄位設定畫面的顏色選擇器，順序即顯示順序）。 */
@@ -68,16 +68,20 @@ export const OPTION_COLOR_NAMES: readonly { value: TagColorName; label: string }
  * 舊資料可能存有 antd 的其他色名或狀態名（`volcano`、`success`…），對應到最接近的色票；
  * 無法辨識或沒有設定時為 `undefined`（顯示預設的灰色標籤）。
  */
-export function optionColors(color: string | null | undefined): TagColors | undefined {
+export function optionColors(
+  color: string | null | undefined,
+  mode: ColorMode = 'light',
+): TagColors | undefined {
   if (!color) {
     return undefined;
   }
+  const palette = tagPalette(mode);
   const name = color.trim().toLowerCase();
   if (name in TAG_PALETTE) {
-    return TAG_PALETTE[name as TagColorName];
+    return palette[name as TagColorName];
   }
   const alias = LEGACY_COLOR_ALIASES[name];
-  return alias ? TAG_PALETTE[alias] : undefined;
+  return alias ? palette[alias] : undefined;
 }
 
 const LEGACY_COLOR_ALIASES: Record<string, TagColorName> = {

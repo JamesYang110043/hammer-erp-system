@@ -1,10 +1,12 @@
+import { theme as antdTheme } from 'antd';
 import type { ConfigProviderProps, ThemeConfig } from 'antd';
 import { createElement } from 'react';
 
 import { EmptyState } from './components/EmptyState';
 
 /**
- * 全站 antd 主題（main.tsx 與測試的 render.tsx 共用），定案見 docs/architecture.md「視覺設計」。
+ * 全站 antd 主題（AppThemeProvider 套用，main.tsx 與測試的 render.tsx 共用），定案見
+ * docs/architecture.md「視覺設計」。淺色與深色各一組（`getAppTheme`）。
  *
  * `controlHeight` 同時決定按鈕、輸入框、下拉選單、日期選擇器的高度，調整這一個值就能讓
  * 並排的按鈕與輸入框保持對齊；small / large 尺寸依比例跟著變（27 / 45）。
@@ -33,6 +35,9 @@ export const BRAND_COLORS = {
   siderDivider: 'rgba(255, 255, 255, 0.08)',
 } as const;
 
+/** 外觀模式（實際套用的顏色；「跟隨系統」解析後為其中之一，見 src/appearance.ts）。 */
+export type ColorMode = 'light' | 'dark';
+
 /** 語意色與中性色（不隨主色改變）。 */
 export const SEMANTIC_COLORS = {
   success: '#2E9D5B',
@@ -44,6 +49,31 @@ export const SEMANTIC_COLORS = {
   tableHeaderBg: '#F5F7FA',
   /** 表格列 hover 底色（帶一點主色調，與表頭區隔） */
   tableRowHoverBg: '#F0F4FA',
+  /** 卡片、標題列、狀態列底色 */
+  bgContainer: '#FFFFFF',
+  /** 浮層（下拉選單、Modal）底色 */
+  bgElevated: '#FFFFFF',
+} as const;
+
+/**
+ * 深色模式的顏色（#234）：以 antd `darkAlgorithm` 推導其餘色階。
+ *
+ * 主色在深色底上太暗，按鈕底色改用 `primary`（白字對比 ≥ 4.5:1），連結、資訊文字用較亮的 `link`。
+ */
+export const DARK_COLORS = {
+  primary: '#2F62A6',
+  link: '#8AB4E8',
+  success: '#3FB872',
+  warning: '#E5A23A',
+  error: '#EF6B6B',
+  bgLayout: '#0F141B',
+  bgContainer: '#161C24',
+  bgElevated: '#1E252F',
+  tableHeaderBg: '#1C232D',
+  tableRowHoverBg: '#1F2A38',
+  text: '#E3E8EF',
+  /** 次要文字（說明、麵包屑、表單提示）；antd 預設的 45% 透明度在深色底上對比不足 */
+  textDescription: '#9CA6B4',
 } as const;
 
 /** 標籤的一組顏色：文字、底色、框線（文字與底色對比 ≥ 4.5:1，由 theme.test.ts 檢查）。 */
@@ -73,11 +103,29 @@ export const TAG_PALETTE = {
 
 export type TagColorName = keyof typeof TAG_PALETTE;
 
+/** 深色模式的標籤色票（同一組色名，淺色文字、深色底）。 */
+export const DARK_TAG_PALETTE = {
+  gray: { text: '#C3CAD5', bg: '#252C36', border: '#3A4350' },
+  blue: { text: '#9CC2F0', bg: '#16263D', border: '#284A75' },
+  green: { text: '#86D6A6', bg: '#13291D', border: '#25573A' },
+  gold: { text: '#F0C76A', bg: '#2E2410', border: '#5E4818' },
+  orange: { text: '#F5A874', bg: '#2F1D10', border: '#66391B' },
+  red: { text: '#F59C94', bg: '#321716', border: '#6B2C28' },
+  purple: { text: '#C2B2F2', bg: '#231C38', border: '#46386E' },
+  cyan: { text: '#7FD3DE', bg: '#102A2E', border: '#1F5860' },
+  magenta: { text: '#F0A0CB', bg: '#30172A', border: '#662C52' },
+} as const satisfies Record<TagColorName, TagColors>;
+
+/** 依外觀模式取得標籤色票。 */
+export function tagPalette(mode: ColorMode): Record<TagColorName, TagColors> {
+  return mode === 'dark' ? DARK_TAG_PALETTE : TAG_PALETTE;
+}
+
 /** 中文介面的字型順序；數字另以 `tabular-nums` 對齊（見 styles.css）。 */
 export const FONT_FAMILY =
   '-apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", "Segoe UI", sans-serif';
 
-export const appTheme: ThemeConfig = {
+const LIGHT_THEME: ThemeConfig = {
   token: {
     controlHeight: CONTROL_HEIGHT,
     colorPrimary: BRAND_COLORS.primary,
@@ -95,9 +143,9 @@ export const appTheme: ThemeConfig = {
   components: {
     Layout: {
       siderBg: BRAND_COLORS.siderBg,
-      headerBg: '#FFFFFF',
+      headerBg: SEMANTIC_COLORS.bgContainer,
       bodyBg: SEMANTIC_COLORS.bgLayout,
-      footerBg: '#FFFFFF',
+      footerBg: SEMANTIC_COLORS.bgContainer,
     },
     Menu: {
       itemHeight: 40,
@@ -122,6 +170,54 @@ export const appTheme: ThemeConfig = {
     Tag: { defaultBg: SEMANTIC_COLORS.tableHeaderBg },
   },
 };
+
+/** 深色主題：沿用淺色的設定，換掉底色、語意色與主色，其餘色階由 `darkAlgorithm` 推導。 */
+const DARK_THEME: ThemeConfig = {
+  algorithm: antdTheme.darkAlgorithm,
+  token: {
+    ...LIGHT_THEME.token,
+    colorPrimary: DARK_COLORS.primary,
+    colorInfo: DARK_COLORS.primary,
+    colorLink: DARK_COLORS.link,
+    colorSuccess: DARK_COLORS.success,
+    colorWarning: DARK_COLORS.warning,
+    colorError: DARK_COLORS.error,
+    colorText: DARK_COLORS.text,
+    colorTextDescription: DARK_COLORS.textDescription,
+    colorBgLayout: DARK_COLORS.bgLayout,
+    colorBgContainer: DARK_COLORS.bgContainer,
+    colorBgElevated: DARK_COLORS.bgElevated,
+    boxShadowTertiary: '0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3)',
+  },
+  components: {
+    ...LIGHT_THEME.components,
+    Layout: {
+      siderBg: BRAND_COLORS.siderBg,
+      headerBg: DARK_COLORS.bgContainer,
+      bodyBg: DARK_COLORS.bgLayout,
+      footerBg: DARK_COLORS.bgContainer,
+    },
+    Menu: { ...LIGHT_THEME.components?.Menu, darkItemSelectedBg: DARK_COLORS.primary },
+    Alert: {
+      colorInfoBg: DARK_TAG_PALETTE.blue.bg,
+      colorInfoBorder: DARK_TAG_PALETTE.blue.border,
+    },
+    Table: {
+      headerBg: DARK_COLORS.tableHeaderBg,
+      headerSplitColor: 'transparent',
+      rowHoverBg: DARK_COLORS.tableRowHoverBg,
+    },
+    Tag: { defaultBg: DARK_COLORS.tableHeaderBg },
+  },
+};
+
+/** 依外觀模式取得 antd 主題（AppThemeProvider 使用）。 */
+export function getAppTheme(mode: ColorMode): ThemeConfig {
+  return mode === 'dark' ? DARK_THEME : LIGHT_THEME;
+}
+
+/** 淺色主題（測試與既有程式碼使用）。 */
+export const appTheme: ThemeConfig = LIGHT_THEME;
 
 /**
  * 與主題一起套用的元件預設值（main.tsx 與測試的 render.tsx 共用）。

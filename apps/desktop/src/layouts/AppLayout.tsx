@@ -1,6 +1,8 @@
 import {
   ApiOutlined,
   AppstoreOutlined,
+  BgColorsOutlined,
+  CheckOutlined,
   ContainerOutlined,
   DownOutlined,
   FileTextOutlined,
@@ -32,6 +34,8 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 
 import { errorMessage } from '../api/client';
+import { APPEARANCES, APPEARANCE_LABELS, useAppearance } from '../appearance';
+import type { Appearance } from '../appearance';
 import { useEntities } from '../api/schema';
 import { useCurrentUser, usePermissions } from '../auth/permission';
 import { useLogout } from '../auth/session';
@@ -96,6 +100,7 @@ export function AppLayout() {
   const user = useCurrentUser();
   const can = usePermissions();
   const logout = useLogout();
+  const { appearance, setAppearance } = useAppearance();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   // 側邊欄收合狀態記在本機，重新開啟程式後維持
   const [collapsed, setCollapsed] = useState(loadCollapsed);
@@ -367,11 +372,28 @@ export function AppLayout() {
               menu={{
                 items: [
                   { key: 'change-password', icon: <KeyOutlined />, label: '修改密碼' },
+                  {
+                    key: 'appearance',
+                    icon: <BgColorsOutlined />,
+                    label: '外觀',
+                    children: APPEARANCES.map((a) => ({
+                      key: `appearance:${a}`,
+                      label: APPEARANCE_LABELS[a],
+                      // 目前的選擇打勾
+                      icon: (
+                        <CheckOutlined
+                          style={{ visibility: a === appearance ? 'visible' : 'hidden' }}
+                        />
+                      ),
+                    })),
+                  },
                   { type: 'divider' },
                   { key: 'logout', icon: <LogoutOutlined />, label: '登出' },
                 ],
                 onClick: ({ key }) => {
-                  if (key === 'change-password') {
+                  if (key.startsWith('appearance:')) {
+                    setAppearance(key.slice('appearance:'.length) as Appearance);
+                  } else if (key === 'change-password') {
                     setChangePasswordOpen(true);
                   } else if (key === 'logout') {
                     logout.mutate(undefined, {

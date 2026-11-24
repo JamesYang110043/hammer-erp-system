@@ -1,6 +1,7 @@
 import { Tag } from 'antd';
 import type { CSSProperties, ReactNode } from 'react';
 
+import { useAppearance } from '../appearance';
 import { optionColors, toneColors } from '../status';
 import type { StatusTone } from '../status';
 import type { TagColors } from '../theme';
@@ -23,8 +24,9 @@ export function StatusTag({
   style?: CSSProperties;
   children: ReactNode;
 }) {
+  const { mode } = useAppearance();
   return (
-    <Tag icon={icon} style={tagStyle(toneColors(tone), style)} data-tone={tone}>
+    <Tag icon={icon} style={tagStyle(toneColors(tone, mode), style)} data-tone={tone}>
       {children}
     </Tag>
   );
@@ -38,8 +40,9 @@ export function OptionColorTag({
   color: string | null | undefined;
   children: ReactNode;
 }) {
+  const { mode } = useAppearance();
   return (
-    <Tag style={tagStyle(optionColors(color))} data-color={color ?? undefined}>
+    <Tag style={tagStyle(optionColors(color, mode))} data-color={color ?? undefined}>
       {children}
     </Tag>
   );

@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { BRAND_COLORS, CONTROL_HEIGHT, TAG_PALETTE, appTheme } from './theme';
+import { theme } from 'antd';
+
+import {
+  BRAND_COLORS,
+  CONTROL_HEIGHT,
+  DARK_COLORS,
+  DARK_TAG_PALETTE,
+  TAG_PALETTE,
+  appTheme,
+  getAppTheme,
+} from './theme';
 
 /** WCAG 相對亮度對比（docs/architecture.md「視覺設計」：文字對比 ≥ 4.5:1）。 */
 function contrast(a: string, b: string) {
@@ -38,6 +48,28 @@ describe('appTheme', () => {
       expect(contrast(c.text, c.bg), name).toBeGreaterThanOrEqual(4.5);
       // 白底的表格中也要清楚
       expect(contrast(c.text, '#FFFFFF'), name).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('dark_theme_uses_the_dark_algorithm_and_readable_colors', () => {
+    const dark = getAppTheme('dark');
+    expect(dark.algorithm).toBe(theme.darkAlgorithm);
+    expect(getAppTheme('light')).toBe(appTheme);
+    // 內文、連結在卡片與內容區底色上
+    for (const bg of [DARK_COLORS.bgContainer, DARK_COLORS.bgLayout, DARK_COLORS.bgElevated]) {
+      expect(contrast(DARK_COLORS.text, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(DARK_COLORS.textDescription, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(DARK_COLORS.link, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(DARK_COLORS.error, bg)).toBeGreaterThanOrEqual(4.5);
+    }
+    // 主要按鈕：白字在主色上
+    expect(contrast('#FFFFFF', DARK_COLORS.primary)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('dark_tag_palette_text_has_enough_contrast', () => {
+    for (const [name, c] of Object.entries(DARK_TAG_PALETTE)) {
+      expect(contrast(c.text, c.bg), name).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(c.text, DARK_COLORS.bgContainer), name).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

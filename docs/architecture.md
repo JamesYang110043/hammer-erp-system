@@ -160,6 +160,14 @@ M9 定案（#229，三套方案比較後選定深藍）。設定集中在 `apps/
 - select 選項標籤用 `OptionColorTag`：色名對應到 `theme.ts` 的 `TAG_PALETTE`（文字、底色、框線，文字對比 ≥ 4.5:1），舊資料的其他 antd 色名對應到最接近的色票；欄位設定的顏色選擇器顯示同一組色票
 - info 提示（Alert）的底色與框線用 `TAG_PALETTE.blue`
 
+**深色模式**（#234）
+
+- 使用者選單「外觀」：跟隨系統（預設）／淺色／深色，存在 localStorage `hammer.appearance`（不存伺服器）；跟隨系統時監聽 `prefers-color-scheme` 即時切換
+- `components/AppThemeProvider.tsx` 依外觀套用 `getAppTheme(mode)`（深色用 antd `darkAlgorithm`），設定 `<html data-theme>` 與 `color-scheme`；桌面程式以 Tauri `setTheme` 切換視窗標題列（`core:window:allow-set-theme`）
+- 深色的顏色在 `theme.ts` 的 `DARK_COLORS`（主色 `#2F62A6`、連結 `#8AB4E8`、內容區 `#0F141B`、卡片 `#161C24`、次要文字 `#9CA6B4`）與 `DARK_TAG_PALETTE`；側邊欄兩種模式相同
+- 元件取得目前模式用 `useAppearance()`（`src/appearance.ts`）；狀態標籤、選項標籤依模式取色票
+- E2E：`chromium-dark` project 以深色系統重跑主要畫面；`dark-mode.spec.ts` 量測文字對比
+
 **規則**
 
 - 元件不寫死色碼：antd 元件用 token（`theme.useToken()`），側邊欄等 antd 沒有對應 token 的區域用 `theme.ts` 匯出的 `BRAND_COLORS`、`SEMANTIC_COLORS`；`src/` 內的色碼只出現在 `theme.ts`。
