@@ -9,7 +9,7 @@ import type {
   Record as DataRecord,
   RecordListQuery_Deserialize as RecordListQuery,
 } from '../../bindings';
-import { ADMIN, VIEWER, startupCommands } from '../../test/fixtures';
+import { ADMIN, EDITOR, VIEWER, startupCommands } from '../../test/fixtures';
 import { commandError, mockCommands } from '../../test/ipc';
 import type { CommandHandler } from '../../test/ipc';
 import {
@@ -554,5 +554,59 @@ describe('表單版面設計器的預覽（#252）', () => {
     await user.click(screen.getByText('預覽', { exact: true }));
     expect(screen.getByText('唯讀預覽', { exact: true })).toBeInTheDocument();
     expect(screen.queryByText('分割檢視右側', { exact: true })).not.toBeInTheDocument();
+  });
+});
+
+describe('調整表單版面（#253）', () => {
+  const preview = () => screen.getByTestId('record-preview');
+  const adjust = /調整表單版面/;
+
+  it('shown_only_with_schema_manage', async () => {
+    renderAt(`#/entities/customer?selected=${customerId(1)}`, {}, EDITOR);
+    await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    expect(within(preview()).getByRole('button', { name: /編\s*輯/ })).toBeInTheDocument();
+    expect(within(preview()).queryByRole('button', { name: adjust })).not.toBeInTheDocument();
+  });
+
+  it('opens_designer_and_back_keeps_the_selection', async () => {
+    const user = userEvent.setup();
+    renderAt(`#/entities/customer?selected=${customerId(2)}`);
+    await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    await user.click(within(preview()).getByRole('button', { name: adjust }));
+    await screen.findByText('表單版面：客戶', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    expect(window.location.hash).toBe('#/schema/customer/form-layout');
+
+    await user.click(screen.getByRole('button', { name: '回到「客戶」' }));
+    expect(
+      await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toHaveTextContent('C002');
+    expect(window.location.hash).toBe(`#/entities/customer?selected=${customerId(2)}`);
+  });
+
+  it('save_returns_to_the_split_view', async () => {
+    const user = userEvent.setup();
+    const saves: unknown[] = [];
+    renderAt(`#/entities/customer?selected=${customerId(1)}`, {
+      save_form_layout: ({ req }) => {
+        saves.push(req);
+        return {
+          ...CUSTOMER_FORM_LAYOUT,
+          version: 2,
+          config: (req as { config: unknown }).config,
+        };
+      },
+    });
+    await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT });
+    await user.click(within(preview()).getByRole('button', { name: adjust }));
+    await user.click(
+      await screen.findByRole('button', { name: /新增區塊/ }, { timeout: PAGE_LOAD_TIMEOUT }),
+    );
+    await user.click(screen.getByRole('button', { name: /儲\s*存/ }));
+    expect(
+      await screen.findByTestId('preview-title', {}, { timeout: PAGE_LOAD_TIMEOUT }),
+    ).toHaveTextContent('C001');
+    expect(saves).toHaveLength(1);
+    expect(window.location.hash).toBe(`#/entities/customer?selected=${customerId(1)}`);
+    expect(screen.queryByText('有未存檔的修改')).not.toBeInTheDocument();
   });
 });

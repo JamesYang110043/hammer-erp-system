@@ -196,3 +196,25 @@ export function saveRecordView(entityKey: string, view: RecordView) {
     // 忽略
   }
 }
+
+/**
+ * 從分割檢視開啟表單版面設計器（#253）時帶的 router state：設計器返回或存檔後回到這個位置
+ *（保留選取的資料）。
+ */
+export interface DesignerReturnState {
+  returnTo: string;
+}
+
+export function designerReturnState(entityKey: string, selectedId: string): DesignerReturnState {
+  return { returnTo: splitViewPath(entityKey, { selected: selectedId }) };
+}
+
+/** router state 中的返回位置；只接受同一個資料類別的資料畫面，其他值忽略。 */
+export function designerReturnPath(state: unknown, entityKey: string): string | undefined {
+  const returnTo = (state as Partial<DesignerReturnState> | null | undefined)?.returnTo;
+  if (typeof returnTo !== 'string') {
+    return undefined;
+  }
+  const prefix = `/entities/${entityKey}`;
+  return returnTo === prefix || returnTo.startsWith(`${prefix}?`) ? returnTo : undefined;
+}

@@ -1,8 +1,9 @@
-import { DeleteOutlined, EditOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, LayoutOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Popconfirm, Space, Spin, Table, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
+import { useNavigate } from 'react-router';
 
 import { apiErrorCode, errorMessage } from '../../api/client';
 import { mutationErrorMessage } from '../../api/errors';
@@ -18,7 +19,7 @@ import { isNumericType } from '../../records/display';
 import { generatedFormLayout, linesBlockDetail, resolveFormLayout } from '../../records/formLayout';
 import { FORM_BLOCKS } from '../../records/formLayout';
 import { detailEntitiesOf, showsRecordNo } from '../../records/lines';
-import { previewFields } from '../../records/masterSplit';
+import { designerReturnState, previewFields } from '../../records/masterSplit';
 import { FieldValue } from './FieldValue';
 import { PreviewItem, ReadonlyLayout } from './ReadonlyLayout';
 
@@ -64,7 +65,8 @@ function PreviewLines({
  * 分割檢視右側的唯讀預覽（docs/architecture.md §8.7）。
  *
  * - 欄位依表單版面（§7.7）以 {@link ReadonlyLayout} 排列，值以 {@link FieldValue} 格式化；明細子表（聯絡人）以唯讀表格顯示
- * - 上方「編號＋名稱」標題，有 `record.write` 時顯示「編輯」「刪除」
+ * - 上方「編號＋名稱」標題，有 `record.write` 時顯示「編輯」「刪除」；有 `schema.manage` 時顯示
+ *   「調整表單版面」（開啟設計器，返回或存檔後回到這筆資料）
  * - 資料不存在或已刪除時顯示「找不到資料」
  */
 export function RecordPreview({
@@ -84,6 +86,8 @@ export function RecordPreview({
   const entityKey = entity.key;
   const { message } = App.useApp();
   const canWrite = usePermission(PERMISSIONS.RECORD_WRITE);
+  const canManageSchema = usePermission(PERMISSIONS.SCHEMA_MANAGE);
+  const navigate = useNavigate();
   const record = useRecord(entityKey, id);
   const entities = useEntities();
   const detailEntities = useMemo(
@@ -161,22 +165,38 @@ export function RecordPreview({
         <Typography.Title level={5} style={{ margin: 0 }} data-testid="preview-title">
           {data.title}
         </Typography.Title>
-        {canWrite && (
-          <Space>
-            <Button icon={<EditOutlined />} onClick={onEdit}>
-              編輯
-            </Button>
-            <Popconfirm
-              title="確定要刪除這筆資料？"
-              okText="刪除"
-              okButtonProps={{ danger: true }}
-              cancelText="取消"
-              onConfirm={remove}
-            >
-              <Button danger icon={<DeleteOutlined />} loading={deleteRecord.isPending}>
-                刪除
+        {(canWrite || canManageSchema) && (
+          <Space wrap>
+            {canManageSchema && (
+              <Button
+                icon={<LayoutOutlined />}
+                onClick={() =>
+                  void navigate(`/schema/${entityKey}/form-layout`, {
+                    state: designerReturnState(entityKey, id),
+                  })
+                }
+              >
+                調整表單版面
               </Button>
-            </Popconfirm>
+            )}
+            {canWrite && (
+              <>
+                <Button icon={<EditOutlined />} onClick={onEdit}>
+                  編輯
+                </Button>
+                <Popconfirm
+                  title="確定要刪除這筆資料？"
+                  okText="刪除"
+                  okButtonProps={{ danger: true }}
+                  cancelText="取消"
+                  onConfirm={remove}
+                >
+                  <Button danger icon={<DeleteOutlined />} loading={deleteRecord.isPending}>
+                    刪除
+                  </Button>
+                </Popconfirm>
+              </>
+            )}
           </Space>
         )}
       </div>
