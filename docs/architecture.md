@@ -1243,6 +1243,21 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 #### `supplier_contacts`（明細子表 `supplier_contact`）
 欄位與 `customer_contacts` 相同（`customer_id` 改為 `supplier_id`，FK → suppliers）。
 
+#### 畫面：分割檢視（M10）
+
+客戶、廠商的 `/entities/:key` 不用表格列表，改用左右分割的畫面（`pages/records/MasterSplitView.tsx`）。哪些資料類別使用分割檢視由 `records/masterSplit.ts` 的 `SPLIT_VIEW_ENTITIES` 決定（目前只有 `customer`、`supplier`），其他資料類別不受影響。
+
+**左側列表選擇器**（#242）
+
+- 固定寬度 320。每筆第一行「編號＋名稱」，第二行統編；選取的那筆以 `colorPrimaryBg` 底色加左側主色色條標示；停用的資料文字為次要色（灰色），並加上 `neutral` 的「停用」標籤
+- 依編號由小到大排序；上方顯示總筆數
+- 搜尋框（停止輸入 300ms 後查詢）比對編號、名稱、簡稱、統編，任一個包含即符合。列表 API 的多個篩選條件是 AND，所以前端對每個欄位各查一次 `contains`，取得全部符合的資料後合併、去除重複（不修改後端）
+- 「啟用中／全部」篩選，預設「啟用中」（`filter.is_active.eq=true`）
+- 沒有搜尋文字時以伺服器分頁（每頁 50 筆），捲動到底自動載入下一頁；有搜尋文字時一次取得全部結果
+- ↑ ↓ 鍵切換選取（列表取得焦點時）
+- 選取的資料寫在網址 `?selected=<id>`（取代目前的歷史紀錄，不新增），重新整理、從其他頁回上一頁都會保留
+- 右側：沒有選取時顯示「請從左側選擇客戶／廠商」
+
 ---
 
 ### 8.8 進貨模組

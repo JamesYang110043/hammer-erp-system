@@ -1,4 +1,10 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import type { QueryKey } from '@tanstack/react-query';
 
 import { LOOKUP_DEFAULT_LIMIT, commands } from '../bindings';
@@ -13,6 +19,7 @@ import type {
   ViewLayout_Serialize as ViewLayout,
 } from '../bindings';
 import type { DocumentAction } from '../records/documents';
+import { mergeRecords, pickerPageQuery, pickerSearchQueries } from '../records/masterSplit';
 import { useDebouncedValue } from '../utils/useDebouncedValue';
 import { auditLogsKey } from './auditLogs';
 import { inventoryKey } from './inventory';
@@ -63,6 +70,73 @@ export function useAllRecords(entityKey: string, enabled = true) {
       }
     },
     enabled,
+  });
+}
+
+/** 分割檢視左側列表的一頁。`nextPage` 為下一頁的頁碼，沒有下一頁時為 `undefined`。 */
+export interface PickerPage {
+  items: DataRecord[];
+  total: number;
+  nextPage: number | undefined;
+}
+
+/** 依 `query` 逐頁取得全部符合的資料（每頁 {@link MAX_PAGE_SIZE} 筆）。 */
+async function listAllRecords(entityKey: string, query: RecordListQuery): Promise<DataRecord[]> {
+  const items: DataRecord[] = [];
+  for (let page = 1; ; page += 1) {
+    const result = await unwrap(
+      commands.listRecords(entityKey, { ...query, page, page_size: MAX_PAGE_SIZE }),
+    );
+    items.push(...result.items);
+    if (result.items.length === 0 || items.length >= result.total) {
+      return items;
+    }
+  }
+}
+
+/**
+ * 分割檢視（客戶、廠商）左側的列表選擇器（docs/architecture.md §8.7），依編號排序。
+ *
+ * - 沒有搜尋文字：伺服器分頁，捲動到底時以 `fetchNextPage` 載入下一頁
+ * - 有搜尋文字：`searchFields` 每個欄位各查一次 `contains`（伺服器的篩選條件是 AND），取得全部
+ *   符合的資料後合併、去除重複，只有一頁
+ *
+ * 放在 {@link recordsKey} 底下：新增、修改、刪除資料後一起重新取得。
+ */
+export function useMasterPicker(
+  entityKey: string,
+  searchFields: readonly string[],
+  q: string,
+  activeOnly: boolean,
+  pageSize: number,
+) {
+  const search = q.trim();
+  return useInfiniteQuery({
+    queryKey: [...recordsKey(entityKey), 'picker', { search, activeOnly, searchFields, pageSize }],
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }): Promise<PickerPage> => {
+      if (search === '' || searchFields.length === 0) {
+        const result = await unwrap(
+          commands.listRecords(entityKey, pickerPageQuery(activeOnly, pageParam, pageSize)),
+        );
+        const loaded = (pageParam - 1) * pageSize + result.items.length;
+        return {
+          items: result.items,
+          total: result.total,
+          nextPage: result.items.length > 0 && loaded < result.total ? pageParam + 1 : undefined,
+        };
+      }
+      const lists = await Promise.all(
+        pickerSearchQueries(searchFields, search, activeOnly, 1, MAX_PAGE_SIZE).map((query) =>
+          listAllRecords(entityKey, query),
+        ),
+      );
+      const items = mergeRecords(lists);
+      return { items, total: items.length, nextPage: undefined };
+    },
+    getNextPageParam: (last) => last.nextPage,
+    // 輸入搜尋文字、切換篩選時保留上一次的結果，避免列表閃爍
+    placeholderData: keepPreviousData,
   });
 }
 

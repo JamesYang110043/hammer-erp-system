@@ -38,6 +38,7 @@ export default defineConfig({
         'documents.spec.ts',
         'form-layout.spec.ts',
         'form-layout-designer.spec.ts',
+        'master-split.spec.ts',
         'page-style.spec.ts',
       ],
     },

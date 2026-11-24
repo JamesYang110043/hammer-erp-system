@@ -56,9 +56,11 @@ import {
   sortFromTable,
 } from '../../records/query';
 import { entityIcon } from '../schema/entityIcons';
+import { usesSplitView } from '../../records/masterSplit';
 import { ColumnSettingsModal } from './ColumnSettingsModal';
 import { FieldValue } from './FieldValue';
 import { FilterPanel } from './FilterPanel';
+import { MasterSplitView } from './MasterSplitView';
 import { DocumentStatusTag } from './DocumentStatusTag';
 import { SaveLayoutModal } from './SaveLayoutModal';
 
@@ -393,6 +395,7 @@ function RecordList({
  * 資料類別的列表（自訂與系統資料類別共用，需要 `record.read`），路徑 `/entities/:key`。
  *
  * 欄位依版面設定（沒有版面時依欄位定義）產生；分頁、排序與篩選在伺服器端處理。
+ * 客戶、廠商改用分割檢視（{@link MasterSplitView}）。
  */
 export function RecordsPage() {
   const { key = '' } = useParams();
@@ -417,6 +420,10 @@ export function RecordsPage() {
         <EmptyState kind="disabled" title="此資料類別已停用" description="請洽管理者重新啟用" />
       </Page>
     );
+  }
+  // 客戶、廠商使用分割檢視（§8.7）
+  if (usesSplitView(key)) {
+    return <MasterSplitView key={key} entity={detail.entity} fields={detail.fields} />;
   }
   return (
     <RecordList
