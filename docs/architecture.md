@@ -131,6 +131,11 @@ M9 定案（#229，三套方案比較後選定深藍）。設定集中在 `apps/
 - 標題列：左側收合按鈕與麵包屑（區塊 › 頁面 › 下一層），右側連線設定與使用者選單（Avatar 顯示名稱首字）
 - 卡片預設不加框線、改用 `boxShadowTertiary` 淡陰影（`theme.ts` 的 `appComponentConfig`），在 `colorBgLayout` 底色上做出層次
 
+**登入前畫面**（`layouts/AuthLayout.tsx`，#231）
+
+- 登入、建立管理者、強制改密碼、連線失敗共用；寬視窗左右分欄：左側品牌區塊（`siderBg` → 主色漸層、圖示、系統名稱、標語），右側表單卡片（`boxShadowSecondary`）
+- 視窗寬度 ≤ 880px 時隱藏品牌區塊，Logo 移到卡片上方；右上角保留連線設定
+
 **規則**
 
 - 元件不寫死色碼：antd 元件用 token（`theme.useToken()`），側邊欄等 antd 沒有對應 token 的區域用 `theme.ts` 匯出的 `BRAND_COLORS`、`SEMANTIC_COLORS`。

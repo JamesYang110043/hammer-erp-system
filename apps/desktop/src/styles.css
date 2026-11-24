@@ -114,3 +114,30 @@ body {
 .app-nav .ant-menu-inline > .nav-section > .ant-menu-submenu-title:hover {
   color: var(--nav-section-hover-color);
 }
+
+/*
+ * 登入前畫面（src/layouts/AuthLayout.tsx）：寬視窗左側顯示品牌區塊；
+ * 視窗變窄時只顯示表單卡片，Logo 改顯示在卡片上方
+ */
+.auth-brand {
+  flex: 0 0 40%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 32px 40px 48px;
+  box-sizing: border-box;
+}
+
+.auth-compact-logo {
+  display: none;
+}
+
+@media (max-width: 880px) {
+  .auth-brand {
+    display: none;
+  }
+  .auth-compact-logo {
+    display: block;
+  }
+}
