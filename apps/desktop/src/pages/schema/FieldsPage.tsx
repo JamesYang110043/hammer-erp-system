@@ -6,6 +6,7 @@ import type { TableColumnsType } from 'antd';
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
+import { StatusTag } from '../../components/StatusTag';
 import { PageHeader } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
 import { mutationErrorMessage } from '../../api/errors';
@@ -31,11 +32,11 @@ import { DragHandle, SortableRow, SortableTableContext } from './sortableRows';
 function FieldTags({ field }: { field: FieldDefinition }) {
   return (
     <Space size={[0, 4]} wrap>
-      {!field.is_active && <Tag color="default">已停用</Tag>}
-      {field.is_system && <Tag color="purple">系統</Tag>}
-      {field.is_required && <Tag color="red">必填</Tag>}
-      {field.is_unique && <Tag color="orange">不可重複</Tag>}
-      {field.is_searchable && <Tag color="blue">可搜尋</Tag>}
+      {!field.is_active && <StatusTag tone="neutral">已停用</StatusTag>}
+      {field.is_system && <StatusTag tone="info">系統</StatusTag>}
+      {field.is_required && <StatusTag tone="danger">必填</StatusTag>}
+      {field.is_unique && <StatusTag tone="warning">不可重複</StatusTag>}
+      {field.is_searchable && <StatusTag tone="neutral">可搜尋</StatusTag>}
       {field.is_readonly && <Tag>唯讀</Tag>}
       {!field.is_visible && <Tag>隱藏</Tag>}
     </Space>

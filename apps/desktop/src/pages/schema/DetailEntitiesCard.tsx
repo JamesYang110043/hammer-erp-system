@@ -1,9 +1,10 @@
 import { PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Table, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 
+import { StatusTag } from '../../components/StatusTag';
 import { errorMessage } from '../../api/client';
 import { useAllEntities } from '../../api/schema';
 import type { EntityDefinition } from '../../bindings';
@@ -45,7 +46,12 @@ export function DetailEntitiesCard({ parent }: { parent: EntityDefinition }) {
     {
       title: '狀態',
       dataIndex: 'is_active',
-      render: (active: boolean) => (active ? <Tag color="green">啟用</Tag> : <Tag>已停用</Tag>),
+      render: (active: boolean) =>
+        active ? (
+          <StatusTag tone="success">啟用</StatusTag>
+        ) : (
+          <StatusTag tone="neutral">已停用</StatusTag>
+        ),
     },
     {
       title: '操作',

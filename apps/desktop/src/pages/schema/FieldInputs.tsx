@@ -1,24 +1,21 @@
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, DatePicker, Form, Input, InputNumber, Select, Space } from 'antd';
 
+import { OptionColorTag } from '../../components/StatusTag';
 import { FULL_ROW } from '../../components/FormGrid';
 import { useEntities } from '../../api/schema';
 import type { DataType, EntityDefinition } from '../../bindings';
 import { MASTER_DATA_LABEL } from '../../schema/entities';
+import { OPTION_COLOR_NAMES } from '../../status';
 import type { OptionFormValue } from '../../schema/fieldForm';
 import { MAX_DECIMAL_PLACES, isRelationTarget, typeSettings } from '../../schema/fieldSettings';
 
-/** 選項標籤可用的顏色（Ant Design Tag 的預設顏色）。 */
-const OPTION_COLORS = [
-  { value: 'blue', label: '藍' },
-  { value: 'green', label: '綠' },
-  { value: 'gold', label: '黃' },
-  { value: 'orange', label: '橘' },
-  { value: 'red', label: '紅' },
-  { value: 'purple', label: '紫' },
-  { value: 'cyan', label: '青' },
-  { value: 'magenta', label: '洋紅' },
-];
+/** 選項標籤可用的顏色：與列表中的選項標籤同一組色票（src/status.ts）。 */
+const OPTION_COLORS = OPTION_COLOR_NAMES.map(({ value, label }) => ({
+  value,
+  label: <OptionColorTag color={value}>{label}</OptionColorTag>,
+  title: label,
+}));
 
 /**
  * 依資料型態顯示的設定（小數位數、選項、驗證規則），見 {@link typeSettings}。
@@ -158,7 +155,7 @@ function OptionsField({ disabled }: { disabled: boolean }) {
                     aria-label="選項的顏色"
                     allowClear
                     options={OPTION_COLORS}
-                    style={{ width: 90 }}
+                    style={{ width: 110 }}
                     disabled={disabled}
                   />
                 </Form.Item>

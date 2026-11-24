@@ -31,17 +31,6 @@ export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
   void: '已作廢',
 };
 
-/** 狀態標籤的顏色（antd `Tag` 的 `color`）。 */
-export const DOCUMENT_STATUS_COLORS: Record<DocumentStatus, string> = {
-  draft: 'default',
-  posted: 'green',
-  confirmed: 'blue',
-  partially_received: 'gold',
-  partially_shipped: 'gold',
-  closed: 'green',
-  void: 'red',
-};
-
 /** 所有單據狀態。 */
 export const DOCUMENT_STATUSES: readonly DocumentStatus[] = [
   'draft',

@@ -46,6 +46,33 @@ export const SEMANTIC_COLORS = {
   tableRowHoverBg: '#F0F4FA',
 } as const;
 
+/** 標籤的一組顏色：文字、底色、框線（文字與底色對比 ≥ 4.5:1，由 theme.test.ts 檢查）。 */
+export interface TagColors {
+  text: string;
+  bg: string;
+  border: string;
+}
+
+/**
+ * 標籤色票（狀態標籤與 select 選項標籤共用，見 src/status.ts）。
+ *
+ * 色名與資料庫 `options[].color` 相同（維持色名字串）；antd 的預設標籤色在淺底上文字對比不足，
+ * 改用加深的文字色。
+ */
+export const TAG_PALETTE = {
+  gray: { text: '#475467', bg: '#F2F4F7', border: '#D0D5DD' },
+  blue: { text: '#1F4E8C', bg: '#EAF1FB', border: '#C3D5EE' },
+  green: { text: '#1E7A45', bg: '#EAF6EF', border: '#BFE3CC' },
+  gold: { text: '#8A5A00', bg: '#FDF5E3', border: '#F2D99B' },
+  orange: { text: '#A8470B', bg: '#FDF0E6', border: '#F6CBA6' },
+  red: { text: '#B42318', bg: '#FEF0EF', border: '#F7C4BF' },
+  purple: { text: '#5B3FA8', bg: '#F2EEFB', border: '#D5CAF0' },
+  cyan: { text: '#0E6B78', bg: '#E7F6F8', border: '#B5E1E7' },
+  magenta: { text: '#A3226A', bg: '#FBEEF5', border: '#EEC0D8' },
+} as const satisfies Record<string, TagColors>;
+
+export type TagColorName = keyof typeof TAG_PALETTE;
+
 /** 中文介面的字型順序；數字另以 `tabular-nums` 對齊（見 styles.css）。 */
 export const FONT_FAMILY =
   '-apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", "Segoe UI", sans-serif';
@@ -82,6 +109,8 @@ export const appTheme: ThemeConfig = {
       darkItemSelectedColor: '#FFFFFF',
       darkGroupTitleColor: BRAND_COLORS.siderMutedText,
     },
+    // info 提示：colorInfo 為深藍主色，antd 推導的淺底偏灰，改用標籤色票的藍色底與框線
+    Alert: { colorInfoBg: TAG_PALETTE.blue.bg, colorInfoBorder: TAG_PALETTE.blue.border },
     Button: { primaryShadow: 'none', defaultShadow: 'none', dangerShadow: 'none' },
     Card: { headerFontSize: 16 },
     Table: {

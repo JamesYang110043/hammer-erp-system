@@ -146,6 +146,20 @@ M9 定案（#229，三套方案比較後選定深藍）。設定集中在 `apps/
 | `components/NumberText.tsx` | 數字、金額：`tabular-nums`，負數為錯誤色；表格欄位另設 `align: 'right'` |
 | `components/EmptyState.tsx` | 空狀態（沒有資料、沒有權限、找不到、已停用、尚未開放）：圖示＋標題＋引導文字；表格等元件的「沒有資料」以 ConfigProvider `renderEmpty` 使用精簡版 |
 
+**語意狀態與標籤色**（`src/status.ts`，#233）
+
+| 語意狀態 | 色票 | 用於 |
+|---|---|---|
+| `neutral` | gray | 草稿、停用、預設 |
+| `success` | green | 已過帳／已開立／已登錄、已結案、啟用、已連線 |
+| `warning` | gold | 部分進貨／部分出貨、未存檔、待改密碼、資料庫異常 |
+| `danger` | red | 已作廢、鎖定、低於安全庫存、必填、未連線 |
+| `info` | blue | 已確認、本位幣、系統、手動指定、連線中 |
+
+- 狀態標籤用 `components/StatusTag.tsx` 的 `StatusTag tone=…`，不直接寫 antd 色名；狀態點（`Badge`）用 `TONE_BADGE_STATUS`
+- select 選項標籤用 `OptionColorTag`：色名對應到 `theme.ts` 的 `TAG_PALETTE`（文字、底色、框線，文字對比 ≥ 4.5:1），舊資料的其他 antd 色名對應到最接近的色票；欄位設定的顏色選擇器顯示同一組色票
+- info 提示（Alert）的底色與框線用 `TAG_PALETTE.blue`
+
 **規則**
 
 - 元件不寫死色碼：antd 元件用 token（`theme.useToken()`），側邊欄等 antd 沒有對應 token 的區域用 `theme.ts` 匯出的 `BRAND_COLORS`、`SEMANTIC_COLORS`；`src/` 內的色碼只出現在 `theme.ts`。
@@ -920,7 +934,7 @@ stock_adjustments ─< stock_adjustment_lines ─┬─0..1── inventory_lots
 | is_searchable / is_unique | BOOLEAN | 會觸發建立索引（7.5） |
 | default_value | JSONB | |
 | validation | JSONB | 例如 `{"min":"0","max":"100","max_length":50,"pattern":"^\\d{8}$"}`；`min`、`max` 與 decimal 值一樣存成字串（D9） |
-| options | JSONB | select 的選項：`[{"value":"a","label":"A","color":"blue"}]` |
+| options | JSONB | select 的選項：`[{"value":"a","label":"A","color":"blue"}]`；`color` 為色名（blue、green、gold、orange、red、purple、cyan、magenta），顯示時對應到 `TAG_PALETTE`（§3.4） |
 | decimal_places | SMALLINT | decimal / money 使用 |
 | relation_entity_id | UUID FK → entity_definitions | relation 使用；建立後不可修改，限制見 §7.3 |
 | formula | TEXT | formula 使用 |

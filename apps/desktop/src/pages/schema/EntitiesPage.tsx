@@ -6,6 +6,7 @@ import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 
+import { StatusTag } from '../../components/StatusTag';
 import { SectionTitle } from '../../components/SectionTitle';
 import { Page } from '../../components/PageHeader';
 import { errorMessage } from '../../api/client';
@@ -86,7 +87,11 @@ function EntityGroupTable({
       key: 'status',
       render: (_, e) => (
         <Space size={[0, 4]} wrap>
-          {e.is_system ? <Tag color="purple">系統</Tag> : <Tag color="blue">自訂</Tag>}
+          {e.is_system ? (
+            <StatusTag tone="info">系統</StatusTag>
+          ) : (
+            <StatusTag tone="neutral">自訂</StatusTag>
+          )}
           {!e.is_active && <Tag>已停用</Tag>}
         </Space>
       ),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { BRAND_COLORS, CONTROL_HEIGHT, appTheme } from './theme';
+import { BRAND_COLORS, CONTROL_HEIGHT, TAG_PALETTE, appTheme } from './theme';
 
 /** WCAG 相對亮度對比（docs/architecture.md「視覺設計」：文字對比 ≥ 4.5:1）。 */
 function contrast(a: string, b: string) {
@@ -31,5 +31,13 @@ describe('appTheme', () => {
     }
     // 選中項目：白字在主色上
     expect(contrast('#FFFFFF', BRAND_COLORS.primary)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('tag_palette_text_has_enough_contrast', () => {
+    for (const [name, c] of Object.entries(TAG_PALETTE)) {
+      expect(contrast(c.text, c.bg), name).toBeGreaterThanOrEqual(4.5);
+      // 白底的表格中也要清楚
+      expect(contrast(c.text, '#FFFFFF'), name).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });

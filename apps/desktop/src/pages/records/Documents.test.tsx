@@ -79,9 +79,9 @@ describe('系統單據列表', () => {
     const draft = await screen.findByText('ADJ202611-0001', {}, { timeout: PAGE_LOAD_TIMEOUT });
     const row = (no: string) => within(screen.getByText(no).closest('tr')!);
 
-    expect(within(draft.closest('tr')!).getByText('草稿')).toHaveClass('ant-tag-default');
-    expect(row('ADJ202611-0002').getByText('已過帳')).toHaveClass('ant-tag-green');
-    expect(row('ADJ202611-0003').getByText('已作廢')).toHaveClass('ant-tag-red');
+    expect(within(draft.closest('tr')!).getByText('草稿')).toHaveAttribute('data-tone', 'neutral');
+    expect(row('ADJ202611-0002').getByText('已過帳')).toHaveAttribute('data-tone', 'success');
+    expect(row('ADJ202611-0003').getByText('已作廢')).toHaveAttribute('data-tone', 'danger');
 
     expect(row('ADJ202611-0001').getByRole('button', { name: /刪\s*除/ })).toBeInTheDocument();
     expect(row('ADJ202611-0002').queryByRole('button', { name: /刪\s*除/ })).toBeNull();

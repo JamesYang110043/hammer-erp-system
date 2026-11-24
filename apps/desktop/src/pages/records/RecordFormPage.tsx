@@ -7,11 +7,12 @@ import {
   SaveOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Form, Input, Modal, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, App, Button, Form, Input, Modal, Space, Tooltip, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useBlocker, useNavigate, useParams } from 'react-router';
 
+import { StatusTag } from '../../components/StatusTag';
 import { EmptyState } from '../../components/EmptyState';
 import { Page } from '../../components/PageHeader';
 import { CommandError, apiErrorCode, errorMessage } from '../../api/client';
@@ -708,7 +709,7 @@ function RecordForm({
         (status || dirty) && (
           <>
             {status && <DocumentStatusTag status={status} entityKey={entityKey} />}
-            {dirty && <Tag color="orange">未存檔</Tag>}
+            {dirty && <StatusTag tone="warning">未存檔</StatusTag>}
           </>
         )
       }

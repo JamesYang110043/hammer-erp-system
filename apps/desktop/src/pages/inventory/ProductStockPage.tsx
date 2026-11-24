@@ -4,6 +4,7 @@ import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 
+import { StatusTag } from '../../components/StatusTag';
 import { NumberText } from '../../components/NumberText';
 import { PageHeader } from '../../components/PageHeader';
 import { SectionTitle } from '../../components/SectionTitle';
@@ -89,7 +90,9 @@ const txnColumns: TableColumnsType<InventoryTransaction> = [
     dataIndex: 'txn_type',
     width: 100,
     render: (t: TxnType) => (
-      <Tag color={t === 'void_reversal' ? 'red' : undefined}>{TXN_TYPE_LABELS[t]}</Tag>
+      <StatusTag tone={t === 'void_reversal' ? 'danger' : 'neutral'}>
+        {TXN_TYPE_LABELS[t]}
+      </StatusTag>
     ),
   },
   { title: '批號', dataIndex: 'lot_no' },
