@@ -59,6 +59,8 @@ pub async fn find_shipment_for_return<'e>(
 pub struct ShipmentLineForReturn {
     pub id: Uuid,
     pub product_id: Uuid,
+    /// 出貨明細的品名（M11），銷貨退回明細沿用。
+    pub product_name: String,
     pub unit_price: Decimal,
     pub discount_rate: Decimal,
     pub qty: Decimal,
@@ -73,7 +75,7 @@ pub async fn list_shipment_lines_for_return<'e>(
     let rows = sqlx::query_as!(
         ShipmentLineForReturn,
         r#"
-        SELECT id, product_id, unit_price, discount_rate, qty
+        SELECT id, product_id, product_name, unit_price, discount_rate, qty
         FROM shipment_lines
         WHERE shipment_id = $1 AND id = ANY($2) AND deleted_at IS NULL
         ORDER BY id
@@ -103,6 +105,21 @@ pub async fn product_tax_types<'e>(
     .fetch_all(executor)
     .await?;
     Ok(rows)
+}
+
+/// 未刪除商品 `product_id` 的 `name`（銷貨明細沒帶品名時的預設值，§8.9「明細的品名」）；
+/// 不存在或已刪除時為 `None`。
+pub async fn product_name<'e>(
+    executor: impl PgExecutor<'e>,
+    product_id: Uuid,
+) -> Result<Option<String>, DbError> {
+    let name = sqlx::query_scalar!(
+        "SELECT name FROM products WHERE id = $1 AND deleted_at IS NULL",
+        product_id,
+    )
+    .fetch_optional(executor)
+    .await?;
+    Ok(name)
 }
 
 /// 以 `FOR SHARE` 鎖定客戶（含已刪除）：回傳是否已刪除；不存在時為 `None`。鎖定後到 transaction 結束前

@@ -155,7 +155,7 @@ async fn list_returns_system_entities(pool: PgPool) {
     let list: Vec<EntityDefinition> = serde_json::from_value(body).unwrap();
 
     let keys: Vec<&str> = list.iter().map(|e| e.key.as_str()).collect();
-    // 依 sort_order、id 排序：明細子表（0）在前；盤點調整單（M4a，#128）、進貨單據（M4b，#138）、銷貨單據（M4c，#146）、發票單據（M5，#183）在 M3 之後
+    // 依 sort_order、id 排序：明細子表（0）在前；客戶品名（M11，#264）的 sort_order 為 10，排在商品之後；盤點調整單（M4a，#128）、進貨單據（M4b，#138）、銷貨單據（M4c，#146）、發票單據（M5，#183）在 M3 之後
     assert_eq!(
         keys,
         [
@@ -173,6 +173,7 @@ async fn list_returns_system_entities(pool: PgPool) {
             "sales_allowance_line",
             "purchase_invoice_receipt",
             "product",
+            "customer_product_name",
             "product_category",
             "unit",
             "customer",

@@ -1975,10 +1975,17 @@ async fn prepare_line(
         Some(existing) => WriteMode::Update { existing },
         None => WriteMode::Create,
     };
-    let input = match detail.store {
+    let mut input = match detail.store {
         LineStore::Table(_) => without_maintained(&detail.fields, &line.data),
         LineStore::CustomRecords => Cow::Borrowed(&line.data),
     };
+    if let Some(name) =
+        sales::save::default_product_name(tx, &detail.entity.key, &input, existing).await?
+    {
+        input
+            .to_mut()
+            .insert(sales::save::PRODUCT_NAME.into(), Value::String(name));
+    }
     let mut data = match normalize_record_data(&detail.fields, &input, mode) {
         Ok(data) => data,
         Err(errors) => return Ok(Err(errors)),

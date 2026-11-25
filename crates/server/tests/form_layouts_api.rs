@@ -468,7 +468,11 @@ async fn customer_and_supplier_use_grouped_default_layout(pool: PgPool) {
             ["invoice", ["invoice_title", "invoice_address"]],
             ["terms", ["payment_terms_days", "credit_limit"]],
             ["other", ["notes"]],
-            ["_blocks", ["lines:customer_contact"]],
+            // 明細表依明細子表的 sort_order：聯絡人 → 客戶品名（M11）
+            [
+                "_blocks",
+                ["lines:customer_contact", "lines:customer_product_name"]
+            ],
         ])
     );
     let sections = &customer.config.sections;

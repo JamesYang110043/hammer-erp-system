@@ -92,8 +92,9 @@ async fn insert_shipment(pool: &PgPool, customer: Uuid, product: Uuid, no: &str)
     .unwrap();
     let line = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO shipment_lines (id, shipment_id, product_id, qty, unit_price, discount_rate, lot_no)
-         VALUES ($1, $2, $3, 10, 105, 0.1, 'L-01')",
+        "INSERT INTO shipment_lines
+             (id, shipment_id, product_id, product_name, qty, unit_price, discount_rate, lot_no)
+         VALUES ($1, $2, $3, 'A', 10, 105, 0.1, 'L-01')",
     )
     .bind(line)
     .bind(id)
@@ -322,6 +323,8 @@ fn specs(entity: &str) -> Vec<Spec> {
     let status = || maintained("status", "狀態", "select");
     let customer = || input("customer_id", "客戶", "relation", true).relation("customer");
     let product = || input("product_id", "商品", "relation", true).relation("product");
+    // M11（0017）：插在 product_id 之後
+    let product_name = || input("product_name", "品名", "text", true);
     let qty = || input("qty", "數量", "decimal", true).decimals(4);
     let unit_price = || input("unit_price", "單價", "money", true).decimals(4);
     let discount = || {
@@ -347,6 +350,7 @@ fn specs(entity: &str) -> Vec<Spec> {
         .concat(),
         "sales_order_line" => vec![
             product(),
+            product_name(),
             qty(),
             unit_price(),
             discount(),
@@ -376,6 +380,7 @@ fn specs(entity: &str) -> Vec<Spec> {
                 .relation("sales_order_line")
                 .hidden(),
             product(),
+            product_name(),
             qty(),
             unit_price(),
             discount(),
@@ -406,6 +411,7 @@ fn specs(entity: &str) -> Vec<Spec> {
                 .relation("shipment_line")
                 .hidden(),
             maintained("product_id", "商品", "relation").relation("product"),
+            maintained("product_name", "品名", "text"),
             qty(),
             maintained("unit_price", "單價", "money").decimals(4),
             maintained("discount_rate", "折扣率", "decimal").decimals(4),
@@ -479,13 +485,25 @@ async fn system_fields_match_spec(pool: PgPool) {
             assert_eq!(row.is_visible, spec.visible, "{at} is_visible");
             assert!(!row.is_unique && !row.is_searchable, "{at}");
             assert_eq!(row.default_value, spec.default_value, "{at} default_value");
-            assert_eq!(row.sort_order, (i as i32 + 1) * 10, "{at} sort_order");
+            // 0017 加上的 product_name 插在 product_id 之後（product_id 的 sort_order + 5），
+            // 其他欄位依序為 10、20、30…
+            let expected_sort = if spec.key == "product_name" {
+                rows[i - 1].sort_order + 5
+            } else {
+                let before = specs[..i]
+                    .iter()
+                    .filter(|s| s.key != "product_name")
+                    .count();
+                (before as i32 + 1) * 10
+            };
+            assert_eq!(row.sort_order, expected_sort, "{at} sort_order");
 
             // 可輸入的數量、單價不可小於 0；折扣率介於 0 與 1；批號最長 50 字元
             let expected_validation = match (spec.key, spec.readonly) {
                 ("qty" | "unit_price", false) => Some(json!({ "min": "0" })),
                 ("discount_rate", false) => Some(json!({ "min": "0", "max": "1" })),
                 ("lot_no", false) => Some(json!({ "max_length": 50 })),
+                ("product_name", false) => Some(json!({ "max_length": 200 })),
                 _ => None,
             };
             assert_eq!(row.validation, expected_validation, "{at} validation");
@@ -573,8 +591,18 @@ async fn table_columns(pool: PgPool) {
         .fetch_all(&pool)
         .await
         .unwrap();
-        let fields: Vec<&str> = specs(entity).iter().map(|s| s.key).collect();
-        let expected: Vec<&str> = [head, &fields, &after, TAIL].concat();
+        // 0017 以 ALTER TABLE 加上的 product_name 在最後
+        let fields: Vec<&str> = specs(entity)
+            .iter()
+            .map(|s| s.key)
+            .filter(|k| *k != "product_name")
+            .collect();
+        let added: &[&str] = if entity.ends_with("_line") {
+            &["product_name"]
+        } else {
+            &[]
+        };
+        let expected: Vec<&str> = [head, &fields, &after, TAIL, added].concat();
         assert_eq!(columns, expected, "{table}");
     }
 
@@ -772,8 +800,9 @@ async fn document_checks(pool: PgPool) {
     ] {
         let err = sqlx::query(
             "INSERT INTO sales_order_lines
-                 (id, sales_order_id, product_id, qty, unit_price, discount_rate, shipped_qty)
-             VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6::numeric, $7::numeric)",
+                 (id, sales_order_id, product_id, product_name, qty, unit_price, discount_rate,
+                  shipped_qty)
+             VALUES ($1, $2, $3, 'A', $4::numeric, $5::numeric, $6::numeric, $7::numeric)",
         )
         .bind(Uuid::now_v7())
         .bind(so)
@@ -794,8 +823,9 @@ async fn document_checks(pool: PgPool) {
     exec(
         &pool,
         &format!(
-            "INSERT INTO sales_order_lines (id, sales_order_id, product_id, qty, unit_price, discount_rate)
-             VALUES ('{}', '{so}', '{product}', 1, 1, 1)",
+            "INSERT INTO sales_order_lines
+                 (id, sales_order_id, product_id, product_name, qty, unit_price, discount_rate)
+             VALUES ('{}', '{so}', '{product}', 'A', 1, 1, 1)",
             Uuid::now_v7()
         ),
     )
@@ -852,9 +882,9 @@ async fn document_checks(pool: PgPool) {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO sales_return_lines (id, sales_return_id, shipment_line_id, product_id, qty,
-                                         unit_price, discount_rate)
-         VALUES ($1, $2, $3, $4, 2, 105, 0.1)",
+        "INSERT INTO sales_return_lines (id, sales_return_id, shipment_line_id, product_id,
+                                         product_name, qty, unit_price, discount_rate)
+         VALUES ($1, $2, $3, $4, 'A', 2, 105, 0.1)",
     )
     .bind(Uuid::now_v7())
     .bind(sr)

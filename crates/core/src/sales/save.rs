@@ -3,9 +3,11 @@
 //!
 //! 1. [`prefill`]（只有新增，欄位驗證之前）：沒有帶 `tax_type`、欄位定義也沒有 `default_value` 時，
 //!    出貨單有 `sales_order_id` → 帶入訂單的稅別；否則明細商品的稅別全部相同 → 帶入該值，否則 `taxable`
-//! 2. [`check_line_data`]（每一列明細，欄位驗證之後）：`qty > 0`、`unit_price ≥ 0`、
+//! 2. [`default_product_name`]（每一列訂單、出貨明細，欄位驗證之前）：沒帶品名（或空白）時帶入商品的
+//!    `name`，見該函式
+//! 3. [`check_line_data`]（每一列明細，欄位驗證之後）：`qty > 0`、`unit_price ≥ 0`、
 //!    `0 ≤ discount_rate ≤ 1`；出貨明細的批號去除前後空白（空字串視為留空）、不可有控制字元
-//! 3. [`apply_amounts`]（全部驗證通過之後）：依明細重新計算 `amount`、`subtotal`、`tax_amount`、
+//! 4. [`apply_amounts`]（全部驗證通過之後）：依明細重新計算 `amount`、`subtotal`、`tax_amount`、
 //!    `total`（[`super::amounts`]）
 //!
 //! 修改時 [`crate::records`] 一律帶入所有明細（[`recalculates_lines`]），所以只改表頭（例如稅別、含稅）
@@ -49,6 +51,7 @@ pub(crate) const TAX_INCLUDED: &str = "tax_included";
 pub(crate) const SALES_ORDER_ID: &str = "sales_order_id";
 pub(crate) const LOT_NO: &str = "lot_no";
 const PRODUCT_ID: &str = "product_id";
+pub(crate) const PRODUCT_NAME: &str = "product_name";
 const QTY: &str = "qty";
 const UNIT_PRICE: &str = "unit_price";
 const DISCOUNT_RATE: &str = "discount_rate";
@@ -145,6 +148,54 @@ pub(crate) async fn prefill(
     let tax_type = amounts::default_tax_type(types.iter().map(String::as_str));
     input.insert(TAX_TYPE.into(), Value::String(tax_type.into()));
     Ok(())
+}
+
+/// 訂單、出貨明細沒帶品名時的預設值（欄位驗證之前；docs/architecture.md §8.9「明細的品名」）。
+///
+/// `input` 為 request 中這一列的 `data`，`existing` 為修改前的資料（新增的列為 `None`）。需要帶入時回傳
+/// 商品的 `name`：
+///
+/// - `product_name` 為 `null` 或空白 → 帶入
+/// - 沒帶 `product_name`：新增的列，或修改時換了 `product_id` → 帶入；只改其他欄位 → 保留原本的品名
+///
+/// 商品不存在、已刪除或 `product_id` 格式錯誤時不帶入，交給欄位驗證回報。
+///
+/// 目前只帶入商品的 `name`（#264：讓 `product_name` 成為必填後既有的呼叫仍可存檔）；依客戶品名帶入、
+/// 出貨明細沿用訂單明細的品名由 #265 補上。
+pub(crate) async fn default_product_name(
+    conn: &mut PgConnection,
+    detail_key: &str,
+    input: &Map<String, Value>,
+    existing: Option<&Map<String, Value>>,
+) -> Result<Option<String>, CoreError> {
+    if detail_key != SALES_ORDER_LINE && detail_key != SHIPMENT_LINE {
+        return Ok(None);
+    }
+    if !needs_product_name(input, existing) {
+        return Ok(None);
+    }
+    let product = input
+        .get(PRODUCT_ID)
+        .or_else(|| existing.and_then(|e| e.get(PRODUCT_ID)));
+    let Some(product_id) = id_of(product) else {
+        return Ok(None);
+    };
+    Ok(db::product_name(&mut *conn, product_id).await?)
+}
+
+/// 是否需要帶入品名（見 [`default_product_name`]）。
+fn needs_product_name(input: &Map<String, Value>, existing: Option<&Map<String, Value>>) -> bool {
+    match input.get(PRODUCT_NAME) {
+        Some(Value::Null) => true,
+        Some(Value::String(s)) => s.trim().is_empty(),
+        Some(_) => false,
+        None => match existing {
+            None => true,
+            Some(existing) => input
+                .get(PRODUCT_ID)
+                .is_some_and(|p| id_of(Some(p)) != id_of(existing.get(PRODUCT_ID))),
+        },
+    }
 }
 
 /// 一列明細本身的檢查（欄位驗證之後）；出貨明細的批號去除前後空白後寫回（空字串時移除）並檢查格式。
@@ -257,6 +308,51 @@ mod tests {
 
     fn messages(e: Vec<FieldError>) -> Vec<String> {
         e.into_iter().map(|e| e.message).collect()
+    }
+
+    #[test]
+    fn product_name_is_needed_when_missing_blank_or_product_changed() {
+        let p1 = "01a211f5-20e9-7b08-9d17-2a0dbce98c12";
+        let p2 = "01a211f5-20ea-704c-9ef5-4cb1c369cd4d";
+        let map = |v: Value| v.as_object().unwrap().clone();
+        let existing = map(json!({ "product_id": p1, "product_name": "舊品名" }));
+
+        // 新增：沒帶、null、空白 → 帶入；有值 → 不帶入
+        assert!(needs_product_name(&map(json!({ "product_id": p1 })), None));
+        assert!(needs_product_name(
+            &map(json!({ "product_id": p1, "product_name": null })),
+            None
+        ));
+        assert!(needs_product_name(
+            &map(json!({ "product_id": p1, "product_name": "  " })),
+            None
+        ));
+        assert!(!needs_product_name(
+            &map(json!({ "product_id": p1, "product_name": "X 型扳手" })),
+            None
+        ));
+
+        // 修改：只改其他欄位 → 保留；換商品 → 帶入；同一商品 → 保留；空白 → 帶入
+        assert!(!needs_product_name(
+            &map(json!({ "qty": "5" })),
+            Some(&existing)
+        ));
+        assert!(needs_product_name(
+            &map(json!({ "product_id": p2 })),
+            Some(&existing)
+        ));
+        assert!(!needs_product_name(
+            &map(json!({ "product_id": p1 })),
+            Some(&existing)
+        ));
+        assert!(needs_product_name(
+            &map(json!({ "product_name": "" })),
+            Some(&existing)
+        ));
+        assert!(!needs_product_name(
+            &map(json!({ "product_id": p2, "product_name": "新品名" })),
+            Some(&existing)
+        ));
     }
 
     #[test]
