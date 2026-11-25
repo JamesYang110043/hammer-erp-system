@@ -52,6 +52,15 @@ describe('systemBlocks', () => {
       'lines:shipment_line',
       'used_lots',
     ]);
+    // 主檔類的系統資料類別沒有單號（#259）；單據與自訂資料類別仍有
+    expect(codes('customer', ['customer_contact'])).toEqual(['lines:customer_contact']);
+    expect(codes('supplier', ['supplier_contact'])).toEqual(['lines:supplier_contact']);
+    expect(codes('product', [])).toEqual([]);
+    expect(codes('sales_order', ['sales_order_line'])).toEqual([
+      'record_no',
+      'lines:sales_order_line',
+    ]);
+    expect(codes('repair', [])).toEqual(['record_no']);
     expect(linesBlockDetail('lines:parts')).toBe('parts');
     expect(linesBlockDetail('record_no')).toBeUndefined();
   });
@@ -109,6 +118,17 @@ describe('resolveFormLayout', () => {
       [BLOCKS_SECTION_KEY, ['lines:parts']],
     ]);
     expect(resolved.sections[1]!.title).toBe('其他欄位');
+  });
+
+  it('drops_record_no_from_stored_system_master_layouts', () => {
+    const resolved = resolveFormLayout(
+      { sections: [section('basic', 2, [b('record_no'), f('a'), f('b')])] },
+      { entityKey: 'customer', fieldKeys: ['a', 'b'], detailKeys: ['customer_contact'] },
+    );
+    expect(outline(resolved)).toEqual([
+      ['basic', ['a', 'b']],
+      [BLOCKS_SECTION_KEY, ['lines:customer_contact']],
+    ]);
   });
 
   it('appends_to_an_existing_other_section', () => {

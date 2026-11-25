@@ -227,10 +227,7 @@ export const CUSTOMER_FORM_LAYOUT: FormLayout = {
         columns: 1,
         collapsible: false,
         collapsed: false,
-        items: [
-          { type: 'block', block: 'record_no' },
-          { type: 'block', block: 'lines:customer_contact' },
-        ],
+        items: [{ type: 'block', block: 'lines:customer_contact' }],
       },
     ],
   },

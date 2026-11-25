@@ -1,5 +1,5 @@
 {
-  "_comment": "客戶、廠商的分組預設表單版面（#254，docs/architecture.md §7.7）。伺服器（hammer_core::form_layouts::generated_config）與桌面程式（records/formLayout.ts 的 generatedFormLayout）依 fields、detail_keys 產生的版面都必須等於 expected。fields 只列出產生版面需要的屬性。",
+  "_comment": "客戶、廠商的分組預設表單版面（#254，docs/architecture.md §7.7）。伺服器（hammer_core::form_layouts::generated_config）與桌面程式（records/formLayout.ts 的 generatedFormLayout）依 fields、detail_keys 產生的版面都必須等於 expected。客戶、廠商是主檔類的系統資料類別，沒有單號區塊（#259）。fields 只列出產生版面需要的屬性。",
   "cases": [
     {
       "name": "customer: all fields, custom field appended, contacts last",
@@ -108,10 +108,6 @@
             "collapsible": false,
             "collapsed": false,
             "items": [
-              {
-                "type": "block",
-                "block": "record_no"
-              },
               {
                 "type": "field",
                 "field": "code",
@@ -372,10 +368,6 @@
             "collapsible": false,
             "collapsed": false,
             "items": [
-              {
-                "type": "block",
-                "block": "record_no"
-              },
               {
                 "type": "field",
                 "field": "code",

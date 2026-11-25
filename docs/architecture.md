@@ -623,7 +623,7 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 | 代碼 | 名稱 | 適用的資料類別 | 何時顯示（由區塊本身判斷） | 自動附加的位置 |
 |---|---|---|---|---|
 | `allowance_available` | 可折讓金額 | `sales_allowance`、`purchase_allowance` | 可以編輯且已選擇發票（憑證）時 | 欄位之前 |
-| `record_no` | 單號 | 所有主檔與單據（資料類別的單號規則可以隨時設定或清除，所以一律適用） | 有單號規則，或這筆資料已有單號；新增時顯示「存檔後產生」 | 欄位之前 |
+| `record_no` | 單號 | 自訂資料類別（主檔與單據；單號規則可以隨時設定或清除，所以一律適用）與系統單據。主檔類的系統資料類別（`product`、`product_category`、`unit`、`customer`、`supplier`）不能設定單號規則（§7.1），**不適用**（#259） | 有單號規則，或這筆資料已有單號；新增時顯示「存檔後產生」 | 欄位之前 |
 | `shipment_picker` | 選擇出貨單 | `sales_invoice` | 可以編輯時 | 欄位之後 |
 | `receipt_picker` | 選擇進貨單 | `purchase_invoice` | 可以編輯時 | 欄位之後 |
 | `lines:<明細子表代碼>` | 明細表（標題為明細子表名稱） | 每個有效的明細子表一個，例如 `lines:goods_receipt_line`、`lines:customer_contact`、自訂的 `lines:parts`；依明細子表的 `sort_order` | 一律顯示 | 欄位之後 |
@@ -634,7 +634,7 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 - 「只在新增時出現」「只在某些狀態出現」的區塊，由區塊本身依上表判斷；版面只決定位置，新增、編輯、檢視共用同一個版面。
 - 各單據的**帶入工具**（`PurchasingAutofill`、`SalesAutofill`、`PurchaseReturnAutofill`、`SalesReturnAutofill`、`SalesInvoiceAutofill`、`PurchaseInvoiceAutofill`：選擇廠商、客戶、訂單、進貨單、出貨單、幣別等之後自動帶入其他欄位與明細）沒有畫面，只監聽欄位變動，所以不是系統區塊，不受版面影響。銷貨折讓、進貨折讓的帶入工具有畫面的部分即 `allowance_available`。
 - 表單以外的頁面元素不屬於版面：頁首的標題與動作按鈕（過帳、作廢、確認、結案、刪除）、單據狀態說明、發票號碼（`InvoiceLinksNote`）、錯誤與版本衝突提示、表單最下方的「儲存」按鈕。
-- 適用的資料類別、順序與位置定義在 `hammer_shared::form_layout::system_blocks`，伺服器與桌面程式共用；`lines:*` 依資料類別目前有效的明細子表決定。之後新增寫死的區塊時，同步更新本表與該清單。
+- 適用的資料類別、順序與位置定義在 `hammer_shared::form_layout::system_blocks`（主檔類的系統資料類別清單為 `SYSTEM_MASTER_ENTITIES`），伺服器與桌面程式共用；已存版面中不適用的 `record_no` 依「讀取時的處理」略過，寫入時帶到 → `422`；`lines:*` 依資料類別目前有效的明細子表決定。之後新增寫死的區塊時，同步更新本表與該清單。
 
 #### 寫入時的檢查
 
@@ -666,7 +666,7 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 | 其他（`other`） | 備註（佔滿整列） | |
 
 - 停用、不顯示的欄位略過；略過後沒有欄位的區塊不產生
-- 之後依「讀取時的處理」：單號插入第一個區塊的最前面；預設沒有列到的欄位（含自訂欄位）附加到「其他欄位」（`_other`）；聯絡人明細附加到最後的 `_blocks`
+- 之後依「讀取時的處理」：客戶、廠商是主檔類的系統資料類別，沒有單號區塊（見「系統區塊」）；預設沒有列到的欄位（含自訂欄位）附加到「其他欄位」（`_other`）；聯絡人明細附加到最後的 `_blocks`
 - 已經設定過版面的客戶、廠商不受影響；「還原成預設」後回到分組版面；其他資料類別的預設版面不變
 - 伺服器（`generated_config`）與桌面程式（`generatedFormLayout`，讀取版面失敗時使用）必須產生相同的版面：共用測試資料 `crates/shared/testdata/generated_form_layouts.json`，兩邊的單元測試都要等於其中的 `expected`
 

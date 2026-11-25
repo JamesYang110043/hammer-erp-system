@@ -70,6 +70,22 @@ pub fn lines_block(detail_key: &str) -> String {
     format!("{LINES_BLOCK_PREFIX}{detail_key}")
 }
 
+/// 主檔類的系統資料類別（§7.1、§8.3「主檔類的系統資料類別沒有單號」）：不能設定單號規則，
+/// 不適用 [`BLOCK_RECORD_NO`]。之後新增主檔類的系統資料類別時同步更新。
+pub const SYSTEM_MASTER_ENTITIES: &[&str] = &[
+    "product",
+    "product_category",
+    "unit",
+    "customer",
+    "supplier",
+];
+
+/// 資料類別是否適用單號系統區塊（[`BLOCK_RECORD_NO`]）：主檔類的系統資料類別
+///（[`SYSTEM_MASTER_ENTITIES`]）之外都適用。
+pub fn has_record_no_block(entity_key: &str) -> bool {
+    !SYSTEM_MASTER_ENTITIES.contains(&entity_key)
+}
+
 /// 系統區塊沒有放進版面時自動附加的位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
@@ -89,7 +105,9 @@ pub fn fixed_blocks(entity_key: &str) -> Vec<(&'static str, BlockPlacement)> {
     if matches!(entity_key, "sales_allowance" | "purchase_allowance") {
         blocks.push((BLOCK_ALLOWANCE_AVAILABLE, BlockPlacement::Top));
     }
-    blocks.push((BLOCK_RECORD_NO, BlockPlacement::Top));
+    if has_record_no_block(entity_key) {
+        blocks.push((BLOCK_RECORD_NO, BlockPlacement::Top));
+    }
     match entity_key {
         "sales_invoice" => blocks.push((BLOCK_SHIPMENT_PICKER, BlockPlacement::Bottom)),
         "purchase_invoice" => blocks.push((BLOCK_RECEIPT_PICKER, BlockPlacement::Bottom)),
@@ -100,6 +118,7 @@ pub fn fixed_blocks(entity_key: &str) -> Vec<(&'static str, BlockPlacement)> {
 
 /// 資料類別適用的所有系統區塊，依自動產生時的順序（與 M8 之前的 `RecordFormPage` 相同）：
 /// 可折讓金額 → 單號 →（欄位）→ 選擇出貨單／進貨單 → 各明細表 → 已用批號表。
+/// 主檔類的系統資料類別沒有單號（[`has_record_no_block`]）。
 ///
 /// `detail_keys` 為有效的明細子表代碼，依明細子表的 `sort_order`。
 pub fn system_blocks(entity_key: &str, detail_keys: &[&str]) -> Vec<(String, BlockPlacement)> {
@@ -365,8 +384,18 @@ mod tests {
         };
         assert_eq!(
             codes("customer", &["customer_contact"]),
-            ["record_no", "lines:customer_contact"]
+            ["lines:customer_contact"]
         );
+        assert_eq!(
+            codes("supplier", &["supplier_contact"]),
+            ["lines:supplier_contact"]
+        );
+        assert!(codes("product", &[]).is_empty());
+        assert_eq!(
+            codes("sales_order", &["sales_order_line"]),
+            ["record_no", "lines:sales_order_line"]
+        );
+        assert_eq!(codes("parts_request", &[]), ["record_no"]);
         assert_eq!(
             codes("sales_invoice", &["sales_invoice_line"]),
             ["record_no", "shipment_picker", "lines:sales_invoice_line"]
