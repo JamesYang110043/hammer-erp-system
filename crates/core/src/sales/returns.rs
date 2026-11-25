@@ -333,6 +333,10 @@ fn apply_shipment_line(data: &mut Map<String, Value>, row: &ShipmentLineForRetur
         Value::String(row.product_id.to_string()),
     );
     data.insert(
+        "product_name".into(),
+        Value::String(row.product_name.clone()),
+    );
+    data.insert(
         "unit_price".into(),
         Value::String(row.unit_price.to_string()),
     );
@@ -649,6 +653,7 @@ mod tests {
         let row = ShipmentLineForReturn {
             id: Uuid::nil(),
             product_id: Uuid::from_u128(9),
+            product_name: "X 型扳手".into(),
             unit_price: "105.0000".parse().unwrap(),
             discount_rate: "0.1000".parse().unwrap(),
             qty: "10.0000".parse().unwrap(),
@@ -663,6 +668,7 @@ mod tests {
             json!({
                 "qty": "2.0000",
                 "product_id": Uuid::from_u128(9).to_string(),
+                "product_name": "X 型扳手",
                 "unit_price": "105.0000",
                 "discount_rate": "0.1000",
             })
