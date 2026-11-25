@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { App, Button, Form, Input, Modal, Space, Table, Typography } from 'antd';
+import { App, Button, Form, Input, Modal, Select, Space, Spin, Table, Typography } from 'antd';
 import { useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -11,15 +11,20 @@ import { ShipmentAllocationContext } from './shipmentAllocation';
 import { unwrap } from '../../api/client';
 import { useTaxRates } from '../../api/currencies';
 import { useProductLots } from '../../api/inventory';
-import { MAX_PAGE_SIZE, recordKey } from '../../api/records';
+import { MAX_PAGE_SIZE, recordKey, useRecord } from '../../api/records';
 import {
   salesOrderQuery,
+  salesProductLookupQuery,
   shipmentReturnableQuery,
   useDocumentLotTransactions,
+  useSalesProductLookup,
   useShipmentReturnable,
 } from '../../api/sales';
 import { commands } from '../../bindings';
-import type { Record as DataRecord } from '../../bindings';
+import type { Record as DataRecord, FieldDefinition, RelationRef } from '../../bindings';
+import { relationLabel } from '../../records/display';
+import { useDebouncedValue } from '../../utils/useDebouncedValue';
+import { LOOKUP_DEBOUNCE_MS, RelationSelect } from './RelationSelect';
 import { documentStatus, formatQty } from '../../records/documents';
 import { initialFormValues } from '../../records/form';
 import { formatUnitCost, productStockPath } from '../../records/inventory';
@@ -33,7 +38,9 @@ import {
   SHIPMENT,
   SHIPMENT_LINE,
   lotPicksError,
+  namedSalesLine,
   orderNotShippable,
+  productNameOf,
   returnLinesFromShipment,
   salePrice,
   salesLineKey,
@@ -47,7 +54,9 @@ import type { LotPick, RowAllocation } from '../../records/sales';
 /**
  * 訂單、出貨單、銷貨退回（docs/architecture.md §8.9）在動態表單中的專屬輸入與自動帶入：
  *
- * - {@link SalesAutofill}：明細選商品帶入售價；出貨單選客戶帶入送貨地址、選訂單帶入未出貨明細
+ * - {@link SalesAutofill}：明細選商品帶入售價與品名、換客戶時詢問是否重新帶入品名；出貨單選客戶帶入
+ *   送貨地址、選訂單帶入未出貨明細
+ * - {@link SalesProductSelect}：訂單、出貨明細的商品選擇器，可用客戶品名搜尋（§8.9「銷貨用商品選擇 API」）
  * - {@link useShipmentAllocation}、{@link ShipmentLotCell}：出貨明細每一列的建議批號（先進先出試算）
  *   與手動批號的可用數量，可以開啟 {@link LotPickerModal} 指定批號（拆成每個批號一列）
  * - {@link UsedLotsTable}：出貨單過帳後實際扣用的批號、銷貨退回過帳後加回的批號與成本
@@ -64,7 +73,9 @@ type Rows = LineFormValues[];
 /**
  * 依使用者的修改自動帶入（不顯示內容，放在 antd `Form` 內）。只有可以修改的草稿使用。
  *
- * - 明細選了商品：帶入商品的預設售價（單價含稅時換算含稅價）
+ * - 明細選了商品：帶入商品的預設售價（單價含稅時換算含稅價）與品名（這位客戶的客戶品名 → 商品名稱，
+ *   §8.9「明細的品名」）；換商品時重新帶入
+ * - 表頭換客戶、且明細已有商品：詢問是否依新客戶重新帶入所有明細的品名（已手動修改的也會被覆蓋）
  * - 出貨單選了客戶：帶入客戶的地址到送貨地址
  * - 出貨單選了訂單：帶入客戶、稅別、單價含稅、送貨地址與未出貨的明細（§8.9「訂單轉出貨單」）
  *
@@ -120,18 +131,77 @@ export function SalesAutofill({
     }
   };
 
-  /** 明細第 `index` 列選了商品：帶入預設售價。 */
+  /**
+   * 商品 `product` 對客戶 `customerId` 要帶入的品名：以選擇 API 用料號查詢（取得客戶品名），
+   * 找不到或沒有客戶時用商品名稱。
+   */
+  const productName = async (customerId: string | undefined, product: DataRecord | undefined) => {
+    const fallback = textOf(product?.data.name);
+    const code = textOf(product?.data.code);
+    if (!product || !customerId || !code) {
+      return fallback;
+    }
+    const items = await queryClient
+      .fetchQuery({ ...salesProductLookupQuery(customerId, code, 50), staleTime: 0 })
+      .catch(() => undefined);
+    return productNameOf(items, product.id, fallback);
+  };
+
+  /** 明細第 `index` 列選了商品：帶入預設售價與品名。 */
   const applyProduct = async (index: number, id: string) => {
     const product = await fetchRecord('product', id);
     const taxIncluded = form.getFieldValue(F.taxIncluded) === true;
     const rate = taxRates.data?.find((t) => t.code === form.getFieldValue(F.taxType))?.rate;
     const price = salePrice(product?.data.default_sale_price, taxIncluded, rate);
+    const name = namedSalesLine(lineKey)
+      ? await productName(textOf(form.getFieldValue(F.customer)), product)
+      : undefined;
     // 等待期間該列可能已換成別的商品
-    if (price === undefined || currentProducts()[index] !== id) {
+    if (currentProducts()[index] !== id || (price === undefined && name === undefined)) {
       return;
     }
-    form.setFieldValue([...linePath, index, F.unitPrice], price);
+    if (price !== undefined) {
+      form.setFieldValue([...linePath, index, F.unitPrice], price);
+    }
+    if (name !== undefined) {
+      form.setFieldValue([...linePath, index, F.productName], name);
+    }
     onChange();
+  };
+
+  /** 換了客戶：依新客戶重新帶入所有已選商品的明細的品名。 */
+  const applyCustomerNames = async (customerId: string) => {
+    const ids = currentProducts();
+    const names = await Promise.all(
+      ids.map(async (id) =>
+        id ? productName(customerId, await fetchRecord('product', id)) : undefined,
+      ),
+    );
+    // 等待期間又換了客戶或商品
+    if (textOf(form.getFieldValue(F.customer)) !== customerId) {
+      return;
+    }
+    const after = currentProducts();
+    names.forEach((name, i) => {
+      if (name !== undefined && after[i] === ids[i]) {
+        form.setFieldValue([...linePath, i, F.productName], name);
+      }
+    });
+    onChange();
+  };
+
+  /** 表頭換了客戶、且明細已有商品時，詢問是否重新帶入品名。 */
+  const confirmCustomerNames = (customerId: string) => {
+    if (!namedSalesLine(lineKey) || !currentProducts().some(Boolean)) {
+      return;
+    }
+    modal.confirm({
+      title: '是否依新客戶重新帶入品名？',
+      content: '已手動修改的品名也會被覆蓋。',
+      okText: '重新帶入',
+      cancelText: '不變',
+      onOk: () => applyCustomerNames(customerId),
+    });
   };
 
   /** 出貨單選了訂單：帶入表頭與未出貨的明細。 */
@@ -225,6 +295,9 @@ export function SalesAutofill({
     if (isShipment && before.customer !== customer && customer) {
       void applyCustomer(customer);
     }
+    if (before.customer !== customer && customer) {
+      confirmCustomerNames(customer);
+    }
     // 列數不變時才比較（新增、刪除列會讓位置位移）
     if (before.products.length === actual.products.length) {
       actual.products.forEach((id, i) => {
@@ -237,6 +310,125 @@ export function SalesAutofill({
   }, [customer, order, productKey]);
 
   return null;
+}
+
+// ---- 商品選擇器 ----
+
+/**
+ * 訂單、出貨明細的商品選擇器（放在明細表格的 `Form.Item` 內，值為商品 id）。
+ *
+ * 表頭已選客戶時改用銷貨用商品選擇 API（§8.9）：可以用這位客戶的客戶品名搜尋，選項顯示「料號 商品名稱」，
+ * 有客戶品名時另外顯示客戶品名。沒有選客戶時與一般的關聯選擇器（{@link RelationSelect}）相同。
+ * 選定後的品名由 {@link SalesAutofill} 帶入。
+ */
+export function SalesProductSelect({
+  field,
+  value,
+  onChange,
+  initial,
+  disabled,
+  id,
+  'aria-label': ariaLabel,
+}: {
+  field: FieldDefinition;
+  value?: string;
+  onChange?: (value: string | undefined) => void;
+  initial?: RelationRef;
+  disabled?: boolean;
+  id?: string;
+  'aria-label'?: string;
+}) {
+  const form = Form.useFormInstance();
+  const customer = textOf(Form.useWatch(F.customer, form) as unknown);
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const q = useDebouncedValue(search.trim(), LOOKUP_DEBOUNCE_MS);
+  const lookup = useSalesProductLookup(customer, q, open && customer !== undefined);
+  // 選過的選項的標題，選單關閉、換了關鍵字後仍可顯示
+  const [picked, setPicked] = useState<Map<string, string>>(() => new Map());
+  const items = lookup.data ?? [];
+  const known =
+    value === undefined
+      ? undefined
+      : initial?.id === value
+        ? relationLabel(initial)
+        : (picked.get(value) ?? items.find((i) => i.id === value)?.title);
+  // 不知道標題的值（例如從訂單帶入的明細）：查詢那一筆商品
+  const resolved = useRecord('product', customer && value && !known ? value : undefined);
+
+  if (!customer) {
+    return (
+      <RelationSelect
+        field={field}
+        value={value}
+        onChange={onChange}
+        initial={initial}
+        disabled={disabled}
+        id={id}
+        aria-label={ariaLabel}
+      />
+    );
+  }
+
+  const options = items.map((item) => ({
+    value: item.id,
+    label: item.title,
+    customerName: item.customer_product_name,
+  }));
+  if (value && !options.some((o) => o.value === value)) {
+    const label =
+      known ??
+      (resolved.data
+        ? resolved.data.title
+        : resolved.isError
+          ? relationLabel({ title: '', deleted: true })
+          : '載入中…');
+    options.unshift({ value, label, customerName: null });
+  }
+
+  return (
+    <Select
+      id={id}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      style={{ maxWidth: 320, width: '100%' }}
+      showSearch
+      allowClear
+      placeholder="搜尋商品或客戶品名"
+      filterOption={false}
+      searchValue={search}
+      onSearch={setSearch}
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) {
+          setSearch('');
+        }
+      }}
+      loading={lookup.isFetching}
+      notFoundContent={lookup.isFetching ? <Spin size="small" /> : '找不到資料'}
+      value={value || undefined}
+      options={options}
+      optionLabelProp="label"
+      optionRender={(option) => (
+        <div>
+          <div>{option.data.label}</div>
+          {option.data.customerName ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              客戶品名：{option.data.customerName}
+            </Typography.Text>
+          ) : null}
+        </div>
+      )}
+      onChange={(next?: string) => {
+        const item = items.find((i) => i.id === next);
+        if (next && item) {
+          setPicked((m) => new Map(m).set(next, item.title));
+        }
+        onChange?.(next);
+      }}
+    />
+  );
 }
 
 // ---- 出貨的建議批號 ----

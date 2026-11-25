@@ -38,6 +38,10 @@ const ORDER_TITLE = 'SO202611-0001 大同五金行';
 const ORDER_LINE_1 = '0196f5a0-0000-7000-8000-000000000e01';
 const ORDER_LINE_2 = '0196f5a0-0000-7000-8000-000000000e02';
 const ADDRESS = '台北市大同區民生西路 100 號';
+/** 客戶 C001 對 A001 的客戶品名（M11）；C002 沒有設定客戶品名。 */
+const CUSTOMER_PRODUCT_NAME = '客戶專用螺絲';
+const CUSTOMER2_ID = '0196f5a0-0000-7000-8000-000000000d02';
+const CUSTOMER2_TITLE = 'C002 永和機械';
 
 const page = <T>(items: T[]) => ({ items, total: items.length, page: 1, page_size: 50 });
 const rel = (id: string, title: string) => ({ id, title, deleted: false });
@@ -131,6 +135,7 @@ function productRecord(id: string) {
     title: titleOf(id),
     data: {
       code: titleOf(id).split(' ')[0],
+      name: titleOf(id).split(' ').slice(1).join(' '),
       default_sale_price: id === PRODUCT_ID ? '120.0000' : '33.3333',
       tax_type: 'taxable',
     },
@@ -157,7 +162,10 @@ function baseHandlers(): Record<string, E2eCommandHandler> {
     list_tax_rates: () => TAX_RATES,
     lookup_records: ({ key }) =>
       key === 'customer'
-        ? [{ id: CUSTOMER_ID, title: CUSTOMER_TITLE }]
+        ? [
+            { id: CUSTOMER_ID, title: CUSTOMER_TITLE },
+            { id: CUSTOMER2_ID, title: CUSTOMER2_TITLE },
+          ]
         : key === 'sales_order'
           ? [{ id: SALES_ORDER_ID, title: ORDER_TITLE }]
           : [
@@ -165,7 +173,40 @@ function baseHandlers(): Record<string, E2eCommandHandler> {
               { id: PRODUCT2_ID, title: PRODUCT2_TITLE },
             ],
     allocation_preview: allocationPreview,
+    sales_product_lookup: ({ query }) => salesProductLookup(query as LookupArgs),
   };
+}
+
+interface LookupArgs {
+  customer_id: string | null;
+  q: string | null;
+}
+
+/** 銷貨用商品選擇 API（§8.9）：比對標題與客戶品名，客戶品名符合的在前。 */
+function salesProductLookup({ customer_id, q }: LookupArgs) {
+  const terms = (q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+  const items = [PRODUCT_ID, PRODUCT2_ID].map((id) => {
+    const [code, ...name] = titleOf(id).split(' ');
+    const customerName =
+      customer_id === CUSTOMER_ID && id === PRODUCT_ID ? CUSTOMER_PRODUCT_NAME : null;
+    return {
+      id,
+      title: titleOf(id),
+      code: code!,
+      name: name.join(' '),
+      spec: null,
+      product_type: 'goods',
+      default_sale_price: id === PRODUCT_ID ? '120.0000' : '33.3333',
+      customer_product_name: customerName,
+      product_name: customerName ?? name.join(' '),
+    };
+  });
+  const matches = (text: string) => terms.every((t) => text.toLowerCase().includes(t));
+  const first = items.filter((i) => i.customer_product_name && matches(i.customer_product_name));
+  const rest = items.filter(
+    (i) => !first.includes(i) && matches(`${i.title} ${i.customer_product_name ?? ''}`),
+  );
+  return [...first, ...rest];
 }
 
 /** 明細列的記錄（伺服器回應）。 */
@@ -178,6 +219,92 @@ function lineRecord(id: string, data: DataRecord['data']) {
     relations: { product_id: rel(productId, titleOf(productId)) },
   });
 }
+
+test('sales order: customer product names are filled, searchable and editable', async ({
+  page: p,
+}) => {
+  let created: { lines: { sales_order_line: { data: DataRecord['data'] }[] } } | undefined;
+  await mockTauri(p, {
+    ...baseHandlers(),
+    get_record: ({ key, id }) =>
+      key === 'customer'
+        ? customerRecord()
+        : key === 'product'
+          ? productRecord(id as string)
+          : null,
+    create_record: ({ req }) => {
+      created = req as typeof created;
+      throw new CommandRejection({ kind: 'network', message: '測試：不實際存檔' });
+    },
+  });
+  await p.goto('/#/entities/sales_order/new');
+  await select(p, '客戶').click();
+  await option(p, CUSTOMER_TITLE).click();
+
+  const lines = p.getByRole('region', { name: '訂單明細' });
+  const rows = lines.locator('tbody tr.ant-table-row');
+  const cell = (i: number, name: string) => rows.nth(i).getByRole('textbox', { name, exact: true });
+  await lines.getByRole('button', { name: /新增訂單明細/ }).click();
+  await lines.getByRole('button', { name: /新增訂單明細/ }).click();
+
+  // 以客戶品名的一部分搜尋：選項顯示「料號 名稱」與客戶品名
+  await select(rows.nth(0), '商品').click();
+  await rows.nth(0).getByRole('combobox', { name: '商品', exact: true }).fill('客戶專用');
+  const picked = option(p, PRODUCT_TITLE);
+  await expect(picked).toContainText(`客戶品名：${CUSTOMER_PRODUCT_NAME}`);
+  await expect(option(p, PRODUCT2_TITLE)).toHaveCount(0);
+  await p.screenshot({ path: test.info().outputPath('order-product-search.png') });
+  await picked.click();
+  // 帶入客戶品名與售價；沒有客戶品名的商品帶入商品名稱
+  await expect(cell(0, '品名')).toHaveValue(CUSTOMER_PRODUCT_NAME);
+  await expect(cell(0, '單價')).toHaveValue('120.0000');
+  await expect(select(rows.nth(0), '商品')).toContainText(PRODUCT_TITLE);
+  await select(rows.nth(1), '商品').click();
+  await option(p, PRODUCT2_TITLE).click();
+  await expect(cell(1, '品名')).toHaveValue('六角螺帽 M6');
+
+  // 手動修改品名；換商品時重新帶入
+  await cell(0, '品名').fill('特製螺絲');
+  await cell(0, '數量').fill('2');
+  await expect(cell(0, '品名')).toHaveValue('特製螺絲');
+  await select(rows.nth(1), '商品').click();
+  await option(p, PRODUCT_TITLE).click();
+  await expect(cell(1, '品名')).toHaveValue(CUSTOMER_PRODUCT_NAME);
+  await cell(1, '數量').fill('1');
+
+  // 換客戶：選「不變」時品名不變
+  await select(p, '客戶').click();
+  await option(p, CUSTOMER2_TITLE).click();
+  const ask = p.getByRole('dialog').filter({ hasText: '是否依新客戶重新帶入品名？' });
+  await expect(ask).toContainText('已手動修改的品名也會被覆蓋');
+  await expect(p.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')).toHaveCount(0);
+  await p.screenshot({ path: test.info().outputPath('order-customer-change.png') });
+  await ask.getByRole('button', { name: /不\s?變/ }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(cell(0, '品名')).toHaveValue('特製螺絲');
+  await expect(cell(1, '品名')).toHaveValue(CUSTOMER_PRODUCT_NAME);
+
+  // 換回 C001 再換 C002：選「重新帶入」時依新客戶帶入（C002 沒有客戶品名 → 商品名稱）
+  await select(p, '客戶').click();
+  await option(p, CUSTOMER_TITLE).click();
+  await ask.getByRole('button', { name: /不\s?變/ }).click();
+  await select(p, '客戶').click();
+  await option(p, CUSTOMER2_TITLE).click();
+  await ask.getByRole('button', { name: /重新帶入/ }).click();
+  await expect(cell(0, '品名')).toHaveValue('不鏽鋼螺絲 M6');
+  await expect(cell(1, '品名')).toHaveValue('不鏽鋼螺絲 M6');
+  await expect(ask).toHaveCount(0);
+  await lines.screenshot({ path: test.info().outputPath('order-product-names.png') });
+
+  // 送出的明細帶有品名
+  await cell(0, '品名').fill('手改品名');
+  await p.getByRole('button', { name: /儲\s?存/ }).click();
+  await expect.poll(() => created).toBeDefined();
+  expect(created!.lines.sales_order_line.map((l) => l.data.product_name)).toEqual([
+    '手改品名',
+    '不鏽鋼螺絲 M6',
+  ]);
+});
 
 test('sales order: product fills sale price, preview matches server, confirm', async ({
   page: p,
@@ -343,6 +470,8 @@ test('shipment from order: suggested lots, pick lots, quantity checks, post, use
       sales_order_line: [
         lineRecord(ORDER_LINE_1, {
           product_id: PRODUCT_ID,
+          // 訂單上手動修改過的品名，轉出貨單時沿用（§8.9「明細的品名」）
+          product_name: '特製螺絲',
           qty: '10.0000',
           unit_price: '120.0000',
           discount_rate: '0.1500',
@@ -351,6 +480,7 @@ test('shipment from order: suggested lots, pick lots, quantity checks, post, use
         }),
         lineRecord(ORDER_LINE_2, {
           product_id: PRODUCT2_ID,
+          product_name: '六角螺帽 M6',
           qty: '3.0000',
           unit_price: '33.3333',
           discount_rate: '0.0000',
@@ -531,6 +661,10 @@ test('shipment from order: suggested lots, pick lots, quantity checks, post, use
   await expect(rows).toHaveCount(2);
   await expect(cell(0, '數量')).toHaveValue('10.0000');
   await expect(cell(0, '單價')).toHaveValue('120.0000');
+  // 品名沿用訂單明細的品名；商品顯示料號與名稱
+  await expect(cell(0, '品名')).toHaveValue('特製螺絲');
+  await expect(cell(1, '品名')).toHaveValue('六角螺帽 M6');
+  await expect(select(rows.nth(0), '商品')).toContainText(PRODUCT_TITLE);
   await expect(cell(0, '批號')).toHaveAttribute('placeholder', '留空則先進先出');
   await expect(cell(0, '金額')).toHaveValue('1020.0000');
   await expect(p.getByRole('textbox', { name: '總計', exact: true })).toHaveValue('1176.0000');

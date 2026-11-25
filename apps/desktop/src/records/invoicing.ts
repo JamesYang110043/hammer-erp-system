@@ -254,13 +254,24 @@ export function convertedUnitPrice(
   return format(round(p, 4), 4);
 }
 
-/** 商品的品名（帶入發票明細的 `description`）：關聯標題去掉料號。 */
+/** 商品的品名：關聯標題去掉料號（來源明細沒有 `product_name` 時帶入發票明細的 `description`）。 */
 export function productDescription(title: string | undefined): string {
   if (!title) {
     return '';
   }
   const space = title.indexOf(' ');
   return space > 0 ? title.slice(space + 1) : title;
+}
+
+/**
+ * 發票（折讓）明細的品名：來源明細的 `product_name`（單據上的品名，可能是客戶品名，§8.9「明細的品名」）；
+ * 沒有時（M11 之前的資料已由 migration 補上，保險起見）為商品的品名。
+ */
+export function sourceDescription(line: Pick<DataRecord, 'data' | 'relations'>): string {
+  const name = line.data.product_name;
+  return typeof name === 'string' && name.trim() !== ''
+    ? name
+    : productDescription(line.relations?.product_id?.title);
 }
 
 /**
@@ -276,7 +287,7 @@ export function linesFromSource(
   const sourceIncluded = source.data.tax_included === true;
   return (source.lines?.[lineKey] ?? []).map((line) => ({
     [F.product]: line.data.product_id ?? null,
-    [F.description]: productDescription(line.relations?.product_id?.title),
+    [F.description]: sourceDescription(line),
     [F.qty]: line.data.qty ?? null,
     [F.unitPrice]:
       convertedUnitPrice(

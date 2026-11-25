@@ -212,6 +212,14 @@ function pricedLine(entity: EntityDefinition) {
       relation_entity_id: PRODUCT.id,
       sort_order: 20,
     }),
+    // M11：單據上的品名（客戶品名 → 商品名稱，§8.9「明細的品名」）
+    sys(entity, {
+      field_key: 'product_name',
+      label: '品名',
+      is_required: true,
+      validation: { min: null, max: null, max_length: 200, pattern: null },
+      sort_order: 25,
+    }),
     sys(entity, {
       field_key: 'qty',
       label: '數量',
@@ -352,6 +360,12 @@ export const SALES_RETURN_LINE_FIELDS = [
     is_readonly: true,
     relation_entity_id: PRODUCT.id,
     sort_order: 20,
+  }),
+  sys(SALES_RETURN_LINE, {
+    field_key: 'product_name',
+    label: '品名',
+    is_readonly: true,
+    sort_order: 25,
   }),
   sys(SALES_RETURN_LINE, {
     field_key: 'qty',

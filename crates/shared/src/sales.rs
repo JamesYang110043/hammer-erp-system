@@ -26,6 +26,20 @@ pub mod product_lookup_param {
     pub const CUSTOMER_ID: &str = "customer_id";
 }
 
+/// `GET /api/v1/sales/product-lookup` 的 query string（桌面程式送出時使用；伺服器以參數清單解析）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct SalesProductLookupQuery {
+    /// 客戶 id；省略時與一般商品搜尋相同。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub customer_id: Option<Id>,
+    /// 關鍵字（以空白分隔，每個詞都要出現）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    /// 筆數上限（預設 20、上限 50）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
 /// 銷貨用商品選擇 API 的一筆結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct SalesProductLookupItem {

@@ -87,6 +87,8 @@ const SHIPMENT = purchasingRecord({
         title: PRODUCT_TITLE,
         data: {
           product_id: PRODUCT_ID,
+          // 出貨單上的品名（客戶品名，M11）：帶入發票明細的品名
+          product_name: '客戶專用螺絲',
           qty: '10.0000',
           unit_price: '120.0000',
           discount_rate: '0.1500',
@@ -301,7 +303,8 @@ test('sales invoice from shipments: buyer, lines, manual tax, issue, allowance',
   const rows = lines.locator('tbody tr.ant-table-row');
   const cell = (i: number, name: string) => rows.nth(i).getByRole('textbox', { name, exact: true });
   await expect(rows).toHaveCount(1);
-  await expect(cell(0, '品名')).toHaveValue('不鏽鋼螺絲 M6');
+  // 品名 = 出貨明細的品名（客戶品名，M11）
+  await expect(cell(0, '品名')).toHaveValue('客戶專用螺絲');
   await expect(cell(0, '數量')).toHaveValue('10.0000');
   await expect(cell(0, '單價')).toHaveValue('102.0000');
   await expect(cell(0, '金額')).toHaveValue('1020.0000');
@@ -334,7 +337,7 @@ test('sales invoice from shipments: buyer, lines, manual tax, issue, allowance',
         {
           data: {
             product_id: PRODUCT_ID,
-            description: '不鏽鋼螺絲 M6',
+            description: '客戶專用螺絲',
             qty: '10.0000',
             unit_price: '102.0000',
           },

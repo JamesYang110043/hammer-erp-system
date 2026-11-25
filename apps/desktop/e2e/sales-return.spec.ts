@@ -94,6 +94,7 @@ const SHIPMENT = purchasingRecord({
     shipment_line: [
       lineRecord(SHIP_LINE_1, {
         product_id: PRODUCT_ID,
+        product_name: '客戶專用螺絲',
         qty: '10.0000',
         unit_price: '120.0000',
         discount_rate: '0.1500',
@@ -101,6 +102,7 @@ const SHIPMENT = purchasingRecord({
       }),
       lineRecord(SHIP_LINE_2, {
         product_id: PRODUCT2_ID,
+        product_name: '六角螺帽 M6',
         qty: '2.0000',
         unit_price: '33.3333',
         discount_rate: '0.0000',
@@ -294,6 +296,10 @@ test('sales return from posted shipment: returnable qty, preview, post, lots add
   await expect(rows.nth(0)).toContainText('8');
   await expect(cell(0, '數量')).toHaveValue('8.0000');
   await expect(cell(1, '數量')).toHaveValue('2.0000');
+  // 品名 = 出貨明細的品名（唯讀，存檔時由伺服器帶入）
+  await expect(cell(0, '品名')).toHaveValue('客戶專用螺絲');
+  await expect(cell(0, '品名')).toBeDisabled();
+  await expect(cell(1, '品名')).toHaveValue('六角螺帽 M6');
   await expect(select(rows.nth(0), '商品')).toContainText(PRODUCT_TITLE);
   // 8 × 120 × 0.85 = 816；2 × 33.3333 = 66.6666 → 67；稅 round(883 × 0.05) = 44
   await expect(cell(0, '金額')).toHaveValue('816.0000');

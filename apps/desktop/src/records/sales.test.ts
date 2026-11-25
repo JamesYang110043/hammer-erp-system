@@ -5,11 +5,13 @@ import { div, format, parse } from './decimal';
 import {
   lotPicksError,
   manualLotShortages,
+  namedSalesLine,
   normalizeLotNo,
   orderNotShippable,
   overShippedRows,
   previewInputs,
   previewRowErrors,
+  productNameOf,
   returnLinesFromShipment,
   rowAllocations,
   salePrice,
@@ -107,6 +109,7 @@ describe('sales order to shipment', () => {
             id: 'l1',
             data: {
               product_id: 'p1',
+              product_name: 'X 型扳手',
               qty: '10.0000',
               shipped_qty: '4.0000',
               unit_price: '120.0000',
@@ -121,6 +124,8 @@ describe('sales order to shipment', () => {
       {
         sales_order_line_id: 'l1',
         product_id: 'p1',
+        // 訂單明細的品名（§8.9「明細的品名」）
+        product_name: 'X 型扳手',
         qty: '6.0000',
         unit_price: '120.0000',
         discount_rate: '0.1500',
@@ -332,6 +337,7 @@ describe('sales return', () => {
       {
         shipment_line_id: 's1',
         product_id: 'p1',
+        product_name: null,
         unit_price: '120.0000',
         discount_rate: '0.1500',
         qty: '4.0000',
@@ -355,5 +361,25 @@ describe('sales return', () => {
       { row: 0, lotNo: 'L-02', qty: '7.0000', costTwd: '577.50' },
     ]);
     expect(usedLots([txn], ['a'])).toEqual([]);
+  });
+});
+
+describe('product names (M11)', () => {
+  it('order and shipment lines carry product names, returns do not', () => {
+    expect(namedSalesLine('sales_order_line')).toBe(true);
+    expect(namedSalesLine('shipment_line')).toBe(true);
+    expect(namedSalesLine('sales_return_line')).toBe(false);
+    expect(namedSalesLine('goods_receipt_line')).toBe(false);
+  });
+
+  it('uses the lookup product name, falls back to the product name', () => {
+    const items = [
+      { id: 'p1', product_name: 'X 型扳手' },
+      { id: 'p2', product_name: '鉗子' },
+    ];
+    expect(productNameOf(items, 'p1', '扳手 10mm')).toBe('X 型扳手');
+    expect(productNameOf(items, 'p3', '螺絲')).toBe('螺絲');
+    expect(productNameOf(undefined, 'p1', '扳手 10mm')).toBe('扳手 10mm');
+    expect(productNameOf([], 'p1', undefined)).toBeUndefined();
   });
 });

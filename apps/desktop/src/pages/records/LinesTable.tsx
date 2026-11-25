@@ -19,8 +19,13 @@ import {
 } from '../../records/purchasing';
 import { FormulaValue } from './FieldValue';
 import { ReceiptLotNoInput, ReturnableQty } from './PurchasingInputs';
-import { SALES_RETURN_LINE, SHIPMENT_LINE } from '../../records/sales';
-import { ShipmentLotCell, ShipmentReturnableQty } from './SalesInputs';
+import {
+  SALES_FIELDS,
+  SALES_RETURN_LINE,
+  SHIPMENT_LINE,
+  namedSalesLine,
+} from '../../records/sales';
+import { SalesProductSelect, ShipmentLotCell, ShipmentReturnableQty } from './SalesInputs';
 import { RecordFieldInput } from './RecordFieldInput';
 import { CurrentQty, LotNoInput, UnitCostInput } from './StockAdjustmentLineInputs';
 
@@ -81,6 +86,8 @@ export function LinesTable({
   const isShipment = entity.key === SHIPMENT_LINE;
   // 銷貨退回明細：草稿顯示可退數量；明細只能從出貨單帶入
   const isSalesReturn = entity.key === SALES_RETURN_LINE;
+  // 訂單、出貨明細：商品可用客戶品名搜尋（表頭已選客戶時），選定後帶入品名
+  const isNamedSales = namedSalesLine(entity.key);
 
   return (
     <Form.List name={listName}>
@@ -162,6 +169,13 @@ export function LinesTable({
                             row={rowPath}
                             field={field}
                             disabled={disabled || !canWrite}
+                          />
+                        ) : isNamedSales && field.field_key === SALES_FIELDS.product ? (
+                          <SalesProductSelect
+                            field={field}
+                            aria-label={field.label}
+                            disabled={field.is_readonly || undefined}
+                            initial={id ? refs.relations[id]?.[field.field_key] : undefined}
                           />
                         ) : isExclusiveLineField(field) ? (
                           <ExclusiveRadio
