@@ -3,8 +3,8 @@
 //!
 //! 1. [`prefill`]（只有新增，欄位驗證之前）：沒有帶 `tax_type`、欄位定義也沒有 `default_value` 時，
 //!    出貨單有 `sales_order_id` → 帶入訂單的稅別；否則明細商品的稅別全部相同 → 帶入該值，否則 `taxable`
-//! 2. [`default_product_name`]（每一列訂單、出貨明細，欄位驗證之前）：沒帶品名（或空白）時帶入商品的
-//!    `name`，見該函式
+//! 2. [`line_product_names`]（訂單、出貨明細，欄位驗證之前）：沒帶品名（或空白）、換了商品時，依
+//!    訂單明細的品名 → 客戶品名 → 商品的 `name` 帶入，見該函式
 //! 3. [`check_line_data`]（每一列明細，欄位驗證之後）：`qty > 0`、`unit_price ≥ 0`、
 //!    `0 ≤ discount_rate ≤ 1`；出貨明細的批號去除前後空白（空字串視為留空）、不可有控制字元
 //! 4. [`apply_amounts`]（全部驗證通過之後）：依明細重新計算 `amount`、`subtotal`、`tax_amount`、
@@ -16,12 +16,13 @@
 //! 訂單、出貨單、銷貨退回都有金額計算；銷貨退回的稅別、含稅、單價、折扣率由出貨單帶入
 //! （[`super::returns::derive_return`]），不帶入預設稅別。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use hammer_db::currency as currency_db;
 use hammer_db::purchasing as purchasing_db;
 use hammer_db::sales as db;
 use hammer_db::sqlx::PgConnection;
+use hammer_shared::Id;
 use hammer_shared::decimal::Decimal;
 use hammer_shared::record::LineInput;
 use hammer_shared::schema::FieldDefinition;
@@ -39,6 +40,10 @@ use crate::record_data::FieldError;
 
 /// 折扣率超出範圍。
 pub const MSG_DISCOUNT_RANGE: &str = "折扣率必須介於 0 與 1 之間";
+/// 品名去除前後空白後為空。
+pub const MSG_PRODUCT_NAME_REQUIRED: &str = "此欄位為必填";
+/// 品名有控制字元。
+pub const MSG_PRODUCT_NAME_CONTROL: &str = "品名不可包含控制字元";
 
 /// 銷貨的幣別（台幣）：金額的小數位數取這個幣別的 `decimal_places`。
 pub const SALES_CURRENCY: &str = "TWD";
@@ -51,6 +56,7 @@ pub(crate) const TAX_INCLUDED: &str = "tax_included";
 pub(crate) const SALES_ORDER_ID: &str = "sales_order_id";
 pub(crate) const LOT_NO: &str = "lot_no";
 const PRODUCT_ID: &str = "product_id";
+const SALES_ORDER_LINE_ID: &str = "sales_order_line_id";
 pub(crate) const PRODUCT_NAME: &str = "product_name";
 const QTY: &str = "qty";
 const UNIT_PRICE: &str = "unit_price";
@@ -150,40 +156,101 @@ pub(crate) async fn prefill(
     Ok(())
 }
 
-/// 訂單、出貨明細沒帶品名時的預設值（欄位驗證之前；docs/architecture.md §8.9「明細的品名」）。
+/// 明細 request 的一列 `data` 與修改前的資料（新增的列為 `None`）。
+pub(crate) type LineWithExisting<'a> = (&'a Map<String, Value>, Option<&'a Map<String, Value>>);
+
+/// 訂單、出貨明細沒帶品名時要帶入的品名（欄位驗證之前；docs/architecture.md §8.9「明細的品名」）。
 ///
-/// `input` 為 request 中這一列的 `data`，`existing` 為修改前的資料（新增的列為 `None`）。需要帶入時回傳
-/// 商品的 `name`：
+/// `rows` 為同一個明細子表 request 中的每一列 `(data, 修改前的資料)`（新增的列為 `None`），
+/// `customer_id` 為表頭的客戶（修改時已與既有資料合併）。回傳與 `rows` 同順序，需要帶入的列為
+/// `Some(品名)`：
 ///
-/// - `product_name` 為 `null` 或空白 → 帶入
-/// - 沒帶 `product_name`：新增的列，或修改時換了 `product_id` → 帶入；只改其他欄位 → 保留原本的品名
+/// - 需要帶入：`product_name` 為 `null` 或空白；沒帶 `product_name` 時，新增的列或修改時換了
+///   `product_id`。只改其他欄位時保留原本的品名
+/// - 帶入順序：出貨明細有 `sales_order_line_id` → 訂單明細的品名；否則這位客戶未刪除的客戶品名 →
+///   商品的 `name`
 ///
-/// 商品不存在、已刪除或 `product_id` 格式錯誤時不帶入，交給欄位驗證回報。
-///
-/// 目前只帶入商品的 `name`（#264：讓 `product_name` 成為必填後既有的呼叫仍可存檔）；依客戶品名帶入、
-/// 出貨明細沿用訂單明細的品名由 #265 補上。
-pub(crate) async fn default_product_name(
+/// 所有列一起查詢（不是每列各查一次）。商品不存在、已刪除或格式錯誤時不帶入，交給欄位驗證回報。
+/// 表頭換客戶時不重新帶入既有列的品名（由桌面程式詢問使用者後處理）。
+pub(crate) async fn line_product_names(
     conn: &mut PgConnection,
     detail_key: &str,
-    input: &Map<String, Value>,
-    existing: Option<&Map<String, Value>>,
-) -> Result<Option<String>, CoreError> {
+    customer_id: Option<Id>,
+    rows: &[LineWithExisting<'_>],
+) -> Result<Vec<Option<String>>, CoreError> {
+    let mut out = vec![None; rows.len()];
     if detail_key != SALES_ORDER_LINE && detail_key != SHIPMENT_LINE {
-        return Ok(None);
+        return Ok(out);
     }
-    if !needs_product_name(input, existing) {
-        return Ok(None);
-    }
-    let product = input
-        .get(PRODUCT_ID)
-        .or_else(|| existing.and_then(|e| e.get(PRODUCT_ID)));
-    let Some(product_id) = id_of(product) else {
-        return Ok(None);
+    let value = |input: &Map<String, Value>, existing: Option<&Map<String, Value>>, key: &str| {
+        if input.contains_key(key) {
+            id_of(input.get(key))
+        } else {
+            id_of(existing.and_then(|e| e.get(key)))
+        }
     };
-    Ok(db::product_name(&mut *conn, product_id).await?)
+    // 需要帶入的列：(位置, 商品, 訂單明細)
+    let wanted: Vec<(usize, Option<Id>, Option<Id>)> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, (input, existing))| needs_product_name(input, *existing))
+        .map(|(i, (input, existing))| {
+            let order_line = if detail_key == SHIPMENT_LINE {
+                value(input, *existing, SALES_ORDER_LINE_ID)
+            } else {
+                None
+            };
+            (i, value(input, *existing, PRODUCT_ID), order_line)
+        })
+        .collect();
+    if wanted.is_empty() {
+        return Ok(out);
+    }
+
+    let mut order_lines: Vec<Id> = wanted.iter().filter_map(|w| w.2).collect();
+    order_lines.sort_unstable();
+    order_lines.dedup();
+    let order_names: HashMap<Id, String> = if order_lines.is_empty() {
+        HashMap::new()
+    } else {
+        db::order_line_product_names(&mut *conn, &order_lines)
+            .await?
+            .into_iter()
+            .collect()
+    };
+
+    let mut products: Vec<Id> = wanted.iter().filter_map(|w| w.1).collect();
+    products.sort_unstable();
+    products.dedup();
+    let (customer_names, product_names): (HashMap<Id, String>, HashMap<Id, String>) =
+        if products.is_empty() {
+            (HashMap::new(), HashMap::new())
+        } else {
+            let customer_names = match customer_id {
+                Some(customer) => db::customer_product_names(&mut *conn, customer, &products)
+                    .await?
+                    .into_iter()
+                    .collect(),
+                None => HashMap::new(),
+            };
+            let product_names = db::product_names(&mut *conn, &products)
+                .await?
+                .into_iter()
+                .collect();
+            (customer_names, product_names)
+        };
+
+    for (i, product, order_line) in wanted {
+        out[i] = order_line
+            .and_then(|l| order_names.get(&l))
+            .or_else(|| product.and_then(|p| customer_names.get(&p)))
+            .or_else(|| product.and_then(|p| product_names.get(&p)))
+            .cloned();
+    }
+    Ok(out)
 }
 
-/// 是否需要帶入品名（見 [`default_product_name`]）。
+/// 是否需要帶入品名（見 [`line_product_names`]）。
 fn needs_product_name(input: &Map<String, Value>, existing: Option<&Map<String, Value>>) -> bool {
     match input.get(PRODUCT_NAME) {
         Some(Value::Null) => true,
@@ -198,7 +265,8 @@ fn needs_product_name(input: &Map<String, Value>, existing: Option<&Map<String, 
     }
 }
 
-/// 一列明細本身的檢查（欄位驗證之後）；出貨明細的批號去除前後空白後寫回（空字串時移除）並檢查格式。
+/// 一列明細本身的檢查（欄位驗證之後）；訂單、出貨明細的品名去除前後空白後寫回、不可有控制字元；
+/// 出貨明細的批號去除前後空白後寫回（空字串時移除）並檢查格式。
 /// 不是銷貨單據的明細時為空。
 pub fn check_line_data(detail_key: &str, data: &mut Map<String, Value>) -> Vec<FieldError> {
     if !priced_line(detail_key) {
@@ -209,6 +277,9 @@ pub fn check_line_data(detail_key: &str, data: &mut Map<String, Value>) -> Vec<F
         decimal_of(data.get(UNIT_PRICE)),
         decimal_of(data.get(DISCOUNT_RATE)),
     );
+    if detail_key != SALES_RETURN_LINE {
+        errors.extend(normalize_product_name(data));
+    }
     if detail_key == SHIPMENT_LINE
         && let Some(Value::String(raw)) = data.get(LOT_NO)
     {
@@ -226,6 +297,31 @@ pub fn check_line_data(detail_key: &str, data: &mut Map<String, Value>) -> Vec<F
         }
     }
     errors
+}
+
+/// 訂單、出貨明細的品名去除前後空白後寫回；去除後為空 → 必填錯誤，有控制字元 → 錯誤。
+/// 長度由欄位定義的 `max_length`（200）檢查。
+fn normalize_product_name(data: &mut Map<String, Value>) -> Option<FieldError> {
+    let Some(Value::String(raw)) = data.get(PRODUCT_NAME) else {
+        return None;
+    };
+    let trimmed = raw.trim();
+    let message = if trimmed.is_empty() {
+        MSG_PRODUCT_NAME_REQUIRED
+    } else if trimmed.chars().any(char::is_control) {
+        MSG_PRODUCT_NAME_CONTROL
+    } else {
+        if trimmed.len() != raw.len() {
+            let trimmed = trimmed.to_owned();
+            data.insert(PRODUCT_NAME.into(), Value::String(trimmed));
+        }
+        return None;
+    };
+    data.remove(PRODUCT_NAME);
+    Some(FieldError {
+        field_key: PRODUCT_NAME.into(),
+        message: message.into(),
+    })
 }
 
 /// `qty > 0`、`unit_price ≥ 0`、`0 ≤ discount_rate ≤ 1`；沒有值的不檢查（必填由欄位驗證處理）。
@@ -353,6 +449,38 @@ mod tests {
             &map(json!({ "product_id": p2, "product_name": "新品名" })),
             Some(&existing)
         ));
+    }
+
+    #[test]
+    fn product_name_is_trimmed_and_checked_on_order_and_shipment_lines() {
+        for detail in [SALES_ORDER_LINE, SHIPMENT_LINE] {
+            let mut data = json!({ "product_name": "  X 型扳手 " })
+                .as_object()
+                .unwrap()
+                .clone();
+            assert!(check_line_data(detail, &mut data).is_empty(), "{detail}");
+            assert_eq!(data["product_name"], json!("X 型扳手"));
+
+            let mut data = json!({ "product_name": "  " }).as_object().unwrap().clone();
+            assert_eq!(
+                messages(check_line_data(detail, &mut data)),
+                [MSG_PRODUCT_NAME_REQUIRED]
+            );
+            let mut data = json!({ "product_name": "X\n型" })
+                .as_object()
+                .unwrap()
+                .clone();
+            assert_eq!(
+                messages(check_line_data(detail, &mut data)),
+                [MSG_PRODUCT_NAME_CONTROL]
+            );
+        }
+        // 銷貨退回的品名是系統維護，不檢查
+        let mut data = json!({ "product_name": " X " })
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(check_line_data(SALES_RETURN_LINE, &mut data).is_empty());
     }
 
     #[test]

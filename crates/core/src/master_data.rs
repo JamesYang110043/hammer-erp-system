@@ -16,8 +16,11 @@
 //!   廠商不可刪除；明細被未結案的採購單（`confirmed`、`partially_received`）引用的商品不可刪除、不可從
 //!   `goods` 改為 `service`、不可修改 `unit_id`。同樣在 `FOR UPDATE` 鎖定之後檢查（存檔、確認採購單以
 //!   `FOR SHARE` 鎖定廠商、商品）
-//! - [`check_lines`]（純邏輯）：系統明細子表（聯絡人）一起存檔的所有明細之間的規則——同一個客戶或廠商
-//!   最多一位主要聯絡人（`is_primary = true`）。聯絡人每一列的系統欄位限制也由 [`check_data`] 檢查
+//! - [`check_lines`]（純邏輯）：系統明細子表一起存檔的所有明細之間的規則——同一個客戶或廠商
+//!   最多一位主要聯絡人（`is_primary = true`）；同一個客戶的客戶品名，同一個商品最多一列（M11）。
+//!   聯絡人、客戶品名每一列的系統欄位限制也由 [`check_data`] 檢查（客戶品名的 `name` 去除前後空白、
+//!   不可有控制字元）。客戶品名與其他存檔同時寫入而違反唯一索引時，由 [`crate::records`] 以
+//!   [`taken_customer_product_lines`] 回報相同的錯誤
 //!
 //! 錯誤一律 `422 VALIDATION`：欄位的錯誤為 [`CoreError::InvalidFields`]（`details.fields`），明細的錯誤
 //! 為 [`LineError`]（`details.lines`，由 [`crate::records`] 合併），
@@ -58,6 +61,10 @@ pub const SUPPLIER: &str = "supplier";
 pub const CUSTOMER_CONTACT: &str = "customer_contact";
 /// 廠商聯絡人的明細子表代碼。
 pub const SUPPLIER_CONTACT: &str = "supplier_contact";
+/// 客戶品名的明細子表代碼（M11，§8.7）。
+pub const CUSTOMER_PRODUCT_NAME: &str = "customer_product_name";
+/// 客戶品名的唯一索引（同一客戶同一商品最多一筆未刪除的資料）。
+pub const CUSTOMER_PRODUCT_NAME_INDEX: &str = "uq_customer_product_names_customer_product";
 /// 聯絡人的「主要聯絡人」欄位。
 pub const IS_PRIMARY: &str = "is_primary";
 
@@ -77,6 +84,8 @@ pub const MSG_CURRENCY: &str = "不是有效的幣別";
 pub const MSG_CATEGORY_CYCLE: &str = "上層分類不可是自己或自己的下層分類";
 pub const MSG_CUSTOMER_PRIMARY: &str = "每個客戶最多只能有一位主要聯絡人";
 pub const MSG_SUPPLIER_PRIMARY: &str = "每個廠商最多只能有一位主要聯絡人";
+pub const MSG_CUSTOMER_PRODUCT_NAME_TAKEN: &str = "此商品已設定客戶品名";
+pub const MSG_CUSTOMER_PRODUCT_NAME_CONTROL: &str = "客戶品名不可包含控制字元";
 pub const MSG_PRODUCT_DELETE_STOCK: &str = "此商品已有庫存異動，無法刪除，請改為停用";
 pub const MSG_PRODUCT_TYPE_STOCK: &str = "此商品已有庫存異動，無法改為服務";
 pub const MSG_PRODUCT_UNIT_STOCK: &str = "此商品已有庫存異動，無法修改單位";
@@ -133,18 +142,47 @@ pub fn check_data(
             check.required("name");
             check.required(IS_PRIMARY);
         }
+        CUSTOMER_PRODUCT_NAME => {
+            check.required("product_id");
+            check.required("name");
+        }
         _ => {}
     }
-    check.errors
+    let mut errors = check.errors;
+    if entity_key == CUSTOMER_PRODUCT_NAME
+        && !errors.iter().any(|e| e.field_key == "name")
+        && let Some(e) = trim_customer_product_name(data)
+    {
+        errors.push(e);
+    }
+    errors
 }
 
 /// 檢查系統明細子表 `detail_key` 一起存檔的明細（`(在 request 陣列中的位置, 正規化後的資料)`，依順序）
 /// 之間的規則，回傳所有錯誤：
 ///
 /// - 聯絡人：`is_primary = true` 最多一列；第二列起的每一列回傳錯誤（`field_key = is_primary`，§7.2）
+/// - 客戶品名：同一個商品最多一列；第二列起的每一列回傳錯誤（`field_key = product_id`，§8.7）
 ///
 /// 其他明細子表不檢查。
 pub fn check_lines(detail_key: &str, lines: &[(usize, &Map<String, Value>)]) -> Vec<LineError> {
+    if detail_key == CUSTOMER_PRODUCT_NAME {
+        let mut seen = std::collections::HashSet::new();
+        return lines
+            .iter()
+            .filter_map(|(index, data)| {
+                let product = data.get("product_id")?.as_str()?;
+                (!seen.insert(product)).then(|| {
+                    LineError::field(
+                        detail_key,
+                        *index,
+                        "product_id",
+                        MSG_CUSTOMER_PRODUCT_NAME_TAKEN,
+                    )
+                })
+            })
+            .collect();
+    }
     let message = match detail_key {
         CUSTOMER_CONTACT => MSG_CUSTOMER_PRIMARY,
         SUPPLIER_CONTACT => MSG_SUPPLIER_PRIMARY,
@@ -156,6 +194,59 @@ pub fn check_lines(detail_key: &str, lines: &[(usize, &Map<String, Value>)]) -> 
         .skip(1)
         .map(|(index, _)| LineError::field(detail_key, *index, IS_PRIMARY, message))
         .collect()
+}
+
+/// 客戶品名寫入時違反唯一索引（與同時進行的其他存檔衝突，§8.7）：找出商品已被**其他**未刪除的客戶品名
+/// 使用的列。`lines` 為這次有新增或修改的客戶品名 `(在 request 陣列中的位置, 商品)`，`except` 為這次
+/// 存檔涉及的所有客戶品名 id（含要刪除的），不計入。必須在 transaction rollback 之後呼叫。
+pub async fn taken_customer_product_lines(
+    pool: &hammer_db::sqlx::PgPool,
+    customer_id: Id,
+    lines: &[(usize, Id)],
+    except: &[Id],
+) -> Result<Vec<LineError>, CoreError> {
+    let products: Vec<Id> = lines.iter().map(|(_, p)| *p).collect();
+    if products.is_empty() {
+        return Ok(Vec::new());
+    }
+    let taken = db::taken_customer_products(pool, customer_id, &products, except).await?;
+    Ok(lines
+        .iter()
+        .filter(|(_, product)| taken.contains(product))
+        .map(|(index, _)| {
+            LineError::field(
+                CUSTOMER_PRODUCT_NAME,
+                *index,
+                "product_id",
+                MSG_CUSTOMER_PRODUCT_NAME_TAKEN,
+            )
+        })
+        .collect())
+}
+
+/// 客戶品名的 `name` 去除前後空白後寫回；去除後為空 → 必填錯誤，有控制字元 → 錯誤（§8.7）。
+/// 長度由欄位定義的 `max_length`（200）檢查。
+fn trim_customer_product_name(data: &mut Map<String, Value>) -> Option<FieldError> {
+    let Some(Value::String(raw)) = data.get("name") else {
+        return None;
+    };
+    let trimmed = raw.trim();
+    let message = if trimmed.is_empty() {
+        MSG_REQUIRED
+    } else if trimmed.chars().any(char::is_control) {
+        MSG_CUSTOMER_PRODUCT_NAME_CONTROL
+    } else {
+        if trimmed.len() != raw.len() {
+            let trimmed = trimmed.to_owned();
+            data.insert("name".to_owned(), Value::String(trimmed));
+        }
+        return None;
+    };
+    data.remove("name");
+    Some(FieldError {
+        field_key: "name".to_owned(),
+        message: message.to_owned(),
+    })
 }
 
 /// `code` 去除前後空白；去除後為空時移除（之後由必填檢查擋下）。
@@ -739,6 +830,49 @@ mod tests {
                 keys(&check_data(detail, &mut data, None)),
                 ["name", IS_PRIMARY]
             );
+        }
+    }
+
+    #[test]
+    fn customer_product_name_is_required_trimmed_and_without_control_chars() {
+        let p = "01a211f5-20e9-7b08-9d17-2a0dbce98c12";
+        let mut data = map(json!({ "product_id": p, "name": "  X 型扳手 " }));
+        assert!(check_data(CUSTOMER_PRODUCT_NAME, &mut data, None).is_empty());
+        assert_eq!(data["name"], json!("X 型扳手"));
+
+        let mut data = map(json!({ "notes": "x" }));
+        assert_eq!(
+            keys(&check_data(CUSTOMER_PRODUCT_NAME, &mut data, None)),
+            ["product_id", "name"]
+        );
+
+        let mut data = map(json!({ "product_id": p, "name": "   " }));
+        let errors = check_data(CUSTOMER_PRODUCT_NAME, &mut data, None);
+        assert_eq!(keys(&errors), ["name"]);
+        assert_eq!(errors[0].message, MSG_REQUIRED);
+
+        let mut data = map(json!({ "product_id": p, "name": "X\t型" }));
+        let errors = check_data(CUSTOMER_PRODUCT_NAME, &mut data, None);
+        assert_eq!(keys(&errors), ["name"]);
+        assert_eq!(errors[0].message, MSG_CUSTOMER_PRODUCT_NAME_CONTROL);
+    }
+
+    #[test]
+    fn one_customer_product_name_per_product() {
+        let p1 = "01a211f5-20e9-7b08-9d17-2a0dbce98c12";
+        let p2 = "01a211f5-20ea-704c-9ef5-4cb1c369cd4d";
+        let a = map(json!({ "product_id": p1, "name": "A" }));
+        let b = map(json!({ "product_id": p2, "name": "B" }));
+        let c = map(json!({ "product_id": p1, "name": "C" }));
+        let d = map(json!({ "name": "沒有商品" }));
+
+        assert!(check_lines(CUSTOMER_PRODUCT_NAME, &[(0, &a), (1, &b), (2, &d)]).is_empty());
+        let errors = check_lines(CUSTOMER_PRODUCT_NAME, &[(0, &a), (1, &b), (4, &c), (5, &a)]);
+        assert_eq!(line_indexes(&errors), [Some(4), Some(5)]);
+        for e in &errors {
+            assert_eq!(e.detail_key, CUSTOMER_PRODUCT_NAME);
+            assert_eq!(e.field_key.as_deref(), Some("product_id"));
+            assert_eq!(e.message, MSG_CUSTOMER_PRODUCT_NAME_TAKEN);
         }
     }
 

@@ -5,6 +5,7 @@
 //! - [`count_products_by_unit`]、[`count_products_by_category`]、[`count_child_categories`]：刪除單位、
 //!   分類前檢查是否還在使用中
 //! - [`count_product_transactions`]：商品的庫存異動筆數（有異動的商品不可刪除、改類型或單位）
+//! - [`taken_customer_products`]：客戶品名的唯一索引衝突時，找出已有客戶品名的商品
 //!
 //! 規則本身在 `hammer_core::master_data`。
 
@@ -108,4 +109,28 @@ pub async fn count_product_transactions<'e>(
     .fetch_one(executor)
     .await?;
     Ok(n)
+}
+
+/// 客戶 `customer_id` 未刪除的客戶品名中，商品在 `product_ids` 內、且 id 不在 `except` 內的商品
+/// （客戶品名違反「同一客戶同一商品一筆」的唯一索引時，找出是哪些商品，§8.7）。
+pub async fn taken_customer_products<'e>(
+    executor: impl PgExecutor<'e>,
+    customer_id: Uuid,
+    product_ids: &[Uuid],
+    except: &[Uuid],
+) -> Result<Vec<Uuid>, DbError> {
+    let rows = sqlx::query_scalar!(
+        r#"
+        SELECT product_id
+        FROM customer_product_names
+        WHERE customer_id = $1 AND product_id = ANY($2) AND NOT (id = ANY($3))
+          AND deleted_at IS NULL
+        "#,
+        customer_id,
+        product_ids,
+        except,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
 }

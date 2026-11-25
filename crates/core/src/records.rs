@@ -296,8 +296,17 @@ pub async fn create_record(
     .await?;
     let master = invoicing::save::derive_allowance(&mut tx, &entity.key, master, None).await?;
     let mut line_errors = Vec::new();
-    let mut lines =
-        prepare_lines(&mut tx, &details, &req.lines, None, false, &mut line_errors).await?;
+    let customer_id = purchasing::save::id_of(input.get(sales::save::CUSTOMER_ID));
+    let mut lines = prepare_lines(
+        &mut tx,
+        &details,
+        &req.lines,
+        None,
+        false,
+        customer_id,
+        &mut line_errors,
+    )
+    .await?;
     line_errors.extend(system_line_rules(&lines));
     line_errors.extend(
         document_line_rules(&mut tx, &entity.key, &master, None, &details, &lines, None).await?,
@@ -443,12 +452,18 @@ pub async fn update_record(
         || purchasing::save::recalculates_lines(&entity.key)
         || sales::save::recalculates_lines(&entity.key)
         || invoicing::save::recalculates_lines(&entity.key);
+    let customer_id = purchasing::save::id_of(
+        input
+            .get(sales::save::CUSTOMER_ID)
+            .or_else(|| existing.get(sales::save::CUSTOMER_ID)),
+    );
     let mut lines = prepare_lines(
         &mut tx,
         &details,
         &req.lines,
         Some(id),
         recompute_all,
+        customer_id,
         &mut line_errors,
     )
     .await?;
@@ -1849,12 +1864,15 @@ impl DetailWrite<'_> {
 ///
 /// `all_details = true` 時（修改有公式的資料，所有明細都要重算），request 沒帶到的有效明細子表也
 /// 列入，視為列出所有既有明細且不修改任何欄位。
+///
+/// `customer_id` 為表頭的客戶（銷貨明細依客戶品名帶入品名，§8.9「明細的品名」）；其他資料類別為 `None`。
 async fn prepare_lines<'d>(
     tx: &mut PgTransaction<'_>,
     details: &'d [Detail],
     input: &BTreeMap<String, Vec<LineInput>>,
     parent_id: Option<Id>,
     all_details: bool,
+    customer_id: Option<Id>,
     errors: &mut Vec<LineError>,
 ) -> Result<Vec<DetailWrite<'d>>, CoreError> {
     let active: Vec<&EntityDefinition> = details
@@ -1916,6 +1934,23 @@ async fn prepare_lines<'d>(
             }
         };
 
+        // 銷貨明細沒帶品名時要帶入的品名（一次查詢所有列）
+        let currents: Vec<Option<&Map<String, Value>>> = matched
+            .targets
+            .iter()
+            .map(|target| match *target {
+                LineTarget::Existing(i) => data_object(&existing[i].data).map(Some),
+                LineTarget::New => Ok(None),
+            })
+            .collect::<Result<_, _>>()?;
+        let rows: Vec<_> = inputs
+            .iter()
+            .zip(&currents)
+            .map(|(line, current)| (&line.data, *current))
+            .collect();
+        let mut product_names =
+            sales::save::line_product_names(tx, key, customer_id, &rows).await?;
+
         let mut lines = Vec::with_capacity(inputs.len());
         let mut normalized: Vec<Option<Map<String, Value>>> = Vec::with_capacity(inputs.len());
         for (index, (line, target)) in inputs.iter().zip(&matched.targets).enumerate() {
@@ -1925,7 +1960,7 @@ async fn prepare_lines<'d>(
             };
             let sort_order =
                 i32::try_from(index).map_err(|_| CoreError::Validation("明細的列數過多".into()))?;
-            match prepare_line(tx, detail, line, current).await? {
+            match prepare_line(tx, detail, line, current, product_names[index].take()).await? {
                 Ok((data, files)) => {
                     normalized.push(Some(data.clone()));
                     lines.push(LineWrite {
@@ -1964,11 +1999,15 @@ async fn prepare_lines<'d>(
 }
 
 /// 驗證一列明細：正規化 `data`、檢查有變動的關聯與附件。欄位錯誤放在內層的 `Err`。
+///
+/// `product_name` 為銷貨明細沒帶品名時要帶入的品名（[`sales::save::line_product_names`]），在欄位驗證
+/// 之前加入 `data`。
 async fn prepare_line(
     tx: &mut PgTransaction<'_>,
     detail: &Detail,
     line: &LineInput,
     current: Option<&LineRow>,
+    product_name: Option<String>,
 ) -> Result<Result<(Map<String, Value>, FileChanges), Vec<FieldError>>, CoreError> {
     let existing = current.map(|r| data_object(&r.data)).transpose()?;
     let mode = match existing {
@@ -1979,9 +2018,7 @@ async fn prepare_line(
         LineStore::Table(_) => without_maintained(&detail.fields, &line.data),
         LineStore::CustomRecords => Cow::Borrowed(&line.data),
     };
-    if let Some(name) =
-        sales::save::default_product_name(tx, &detail.entity.key, &input, existing).await?
-    {
+    if let Some(name) = product_name {
         input
             .to_mut()
             .insert(sales::save::PRODUCT_NAME.into(), Value::String(name));
@@ -2435,12 +2472,16 @@ async fn line_write_error(
     parent_id: Id,
     details: &[DetailWrite<'_>],
 ) -> CoreError {
-    if err.unique_violation().is_none() {
-        return err.into();
-    }
+    let customer_product = match err.unique_violation() {
+        None => return err.into(),
+        Some(index) => index == master_data::CUSTOMER_PRODUCT_NAME_INDEX,
+    };
     // transaction 已中止，不能再查詢
     if let Err(e) = tx.rollback().await {
         return DbError::from(e).into();
+    }
+    if customer_product {
+        return customer_product_name_error(pool, parent_id, details).await;
     }
     let mut errors = Vec::new();
     for detail in details {
@@ -2491,6 +2532,45 @@ async fn line_write_error(
             lines: errors,
         }
     }
+}
+
+/// 客戶品名違反「同一客戶同一商品一筆」的唯一索引（與同時進行的其他存檔衝突，§8.7）：與同一次存檔內
+/// 的重複（[`master_data::check_lines`]）相同，錯誤在該列的 `product_id`。
+async fn customer_product_name_error(
+    pool: &PgPool,
+    customer_id: Id,
+    details: &[DetailWrite<'_>],
+) -> CoreError {
+    let Some(detail) = details
+        .iter()
+        .find(|d| d.detail.entity.key == master_data::CUSTOMER_PRODUCT_NAME)
+    else {
+        return CoreError::Validation(DUPLICATE_RECORD.into());
+    };
+    let changed: Vec<(usize, Id)> = detail
+        .lines
+        .iter()
+        .filter(|l| l.action() != LineAction::Unchanged)
+        .filter_map(|l| Some((l.index, id_of_value(l.data.get("product_id")?)?)))
+        .collect();
+    let except: Vec<Id> = detail
+        .lines
+        .iter()
+        .map(|l| l.id)
+        .chain(detail.removed.iter().copied())
+        .collect();
+    match master_data::taken_customer_product_lines(pool, customer_id, &changed, &except).await {
+        Ok(lines) if lines.is_empty() => CoreError::Validation(DUPLICATE_RECORD.into()),
+        Ok(lines) => CoreError::InvalidLines {
+            fields: Vec::new(),
+            lines,
+        },
+        Err(e) => e,
+    }
+}
+
+fn id_of_value(value: &Value) -> Option<Id> {
+    value.as_str().and_then(|s| Id::try_parse(s).ok())
 }
 
 /// 主表資料 `parent_id` 的明細，鍵為**有效的**明細子表代碼（沒有明細時為空陣列），依 `sort_order`。
