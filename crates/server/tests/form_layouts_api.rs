@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use hammer_core::test_util::{TestUser, create_user_with_session};
 use hammer_server::{AppState, Config, router};
-use hammer_shared::form_layout::FormLayout;
+use hammer_shared::form_layout::{FormItem, FormLayout};
 use hammer_shared::{ApiError, ErrorCode, Id, role};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -454,7 +454,6 @@ async fn customer_and_supplier_use_grouped_default_layout(pool: PgPool) {
             [
                 "basic",
                 [
-                    "record_no",
                     "code",
                     "name",
                     "short_name",
@@ -498,7 +497,6 @@ async fn customer_and_supplier_use_grouped_default_layout(pool: PgPool) {
             [
                 "basic",
                 [
-                    "record_no",
                     "code",
                     "name",
                     "short_name",
@@ -550,4 +548,54 @@ async fn customer_and_supplier_use_grouped_default_layout(pool: PgPool) {
     let reset: FormLayout = serde_json::from_value(body).unwrap();
     assert!(reset.is_default);
     assert_eq!(reset.config, customer.config);
+}
+
+/// 主檔類的系統資料類別沒有單號區塊（#259）：讀取時不含、寫入時 `422`、已存版面中的略過；
+/// 單據仍有單號區塊。
+#[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
+async fn system_masters_have_no_record_no_block(pool: PgPool) {
+    let admin = token_for(&pool, "admin", role::ADMIN).await;
+    for key in ["customer", "supplier", "product"] {
+        let layout = get_layout(&pool, &admin, key).await;
+        let blocks = outline(&layout).to_string();
+        assert!(!blocks.contains("record_no"), "{key}: {blocks}");
+    }
+    let order = get_layout(&pool, &admin, "sales_order").await;
+    assert_eq!(
+        order.config.sections[0].items[0],
+        FormItem::Block {
+            block: "record_no".into()
+        }
+    );
+
+    let with_record_no = json!({ "sections": [
+        { "key": "basic", "columns": 2, "items": [
+            { "type": "block", "block": "record_no" },
+            { "type": "field", "field": "code" },
+        ]},
+    ]});
+    let (status, body) = call(
+        &pool,
+        Method::PUT,
+        &uri("customer"),
+        &admin,
+        Some(json!({ "version": null, "config": with_record_no })),
+    )
+    .await;
+    assert_invalid(status, &body, "config.sections[0].items[0].block");
+
+    // 加入檢查前存入、含單號區塊的版面：讀取時略過
+    sqlx::query(
+        "INSERT INTO form_layouts (id, entity_id, config) \
+         SELECT $1, id, $2 FROM entity_definitions WHERE key = 'customer'",
+    )
+    .bind(hammer_shared::new_id())
+    .bind(&with_record_no)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let stored = get_layout(&pool, &admin, "customer").await;
+    assert!(!stored.is_default);
+    assert_eq!(outline(&stored)[0], json!(["basic", ["code"]]));
+    assert!(!outline(&stored).to_string().contains("record_no"));
 }

@@ -613,3 +613,189 @@ for (const viewport of [1440, 1280]) {
     ).toBeVisible();
   });
 }
+
+// 設計預覽與實際顯示相同（#259）：主檔沒有單號區塊；設計器「分割檢視右側」預覽（唯讀、編輯表單）
+// 與實際的右側（唯讀、編輯、新增）逐項比對區塊、列、欄與寬度
+
+/** 一個項目的位置：所在區塊（依顯示順序）、區塊內的列、相對於區塊格線的 x 與寬度。 */
+interface ItemPlace {
+  item: string;
+  section: string;
+  row: number;
+  x: number;
+  width: number;
+}
+
+async function layoutPlaces(root: ReturnType<Page['locator']>): Promise<ItemPlace[]> {
+  return root.locator('section[data-section]').evaluateAll((sections) =>
+    sections.flatMap((section) => {
+      const title = section.getAttribute('aria-label') ?? section.getAttribute('data-section')!;
+      const grid = section.querySelector('.form-layout-grid') ?? section;
+      const left = grid.getBoundingClientRect().left;
+      const items = Array.from(section.querySelectorAll<HTMLElement>('[data-item]'))
+        .map((el) => ({ el, box: el.getBoundingClientRect() }))
+        .filter(({ box }) => box.width > 0 && box.height > 0);
+      const rows: number[] = [];
+      for (const { box } of items) {
+        if (!rows.some((y) => Math.abs(y - box.top) < 2)) {
+          rows.push(box.top);
+        }
+      }
+      rows.sort((a, b) => a - b);
+      return items.map(({ el, box }) => ({
+        item: el.getAttribute('data-item')!,
+        section: title,
+        row: rows.findIndex((y) => Math.abs(y - box.top) < 2),
+        x: box.left - left,
+        width: box.width,
+      }));
+    }),
+  );
+}
+
+function expectSamePlaces(actual: ItemPlace[], expected: ItemPlace[], label: string) {
+  const outline = (places: ItemPlace[]) => places.map((p) => [p.section, p.item, p.row]);
+  expect(outline(actual), `${label}：區塊、項目與列`).toEqual(outline(expected));
+  actual.forEach((p, i) => {
+    const e = expected[i]!;
+    expect(Math.abs(p.x - e.x), `${label}：${p.item} 的欄位置`).toBeLessThanOrEqual(1);
+    expect(Math.abs(p.width - e.width), `${label}：${p.item} 的寬度`).toBeLessThanOrEqual(1);
+  });
+}
+
+const FULL_SUPPLIER_FIELDS = FULL_CUSTOMER_FIELDS.filter((f) => f.field_key !== 'region').map(
+  (f) => ({ ...f, id: f.id.replace('customer', 'supplier'), entity_id: SUPPLIER.id }),
+);
+
+/** 伺服器回傳的分組預設版面（§7.7；主檔沒有單號區塊）。 */
+function defaultLayout(entityKey: string, fields: { field_key: string }[], details: string[]) {
+  const keys = fields.map((f) => f.field_key);
+  const supplier = entityKey === 'supplier';
+  const groups: [string, string, string[]][] = [
+    [
+      'basic',
+      '基本資料',
+      [
+        ...['code', 'name', 'short_name', 'tax_id', 'phone', 'fax', 'email', 'address'],
+        ...(supplier ? ['country'] : []),
+        'is_active',
+      ],
+    ],
+    ['invoice', '發票資訊', ['invoice_title', 'invoice_address']],
+    [
+      'terms',
+      '交易條件',
+      [
+        'payment_terms_days',
+        'credit_limit',
+        ...(supplier ? ['default_currency_code', 'bank_info'] : []),
+      ],
+    ],
+    ['other', '其他', ['notes']],
+  ];
+  const listed = new Set(groups.flatMap(([, , g]) => g));
+  const plain = { collapsible: false, collapsed: false };
+  const sections = [
+    ...groups
+      .map(([key, title, g]) => ({
+        key,
+        title,
+        columns: 2,
+        ...plain,
+        items: g
+          .filter((f) => keys.includes(f))
+          .map((field) => ({ type: 'field', field, span: field === 'notes' ? 2 : 1 })),
+      }))
+      .filter((s) => s.items.length > 0),
+    {
+      key: '_other',
+      title: '其他欄位',
+      columns: 1,
+      ...plain,
+      items: keys.filter((k) => !listed.has(k)).map((field) => ({ type: 'field', field, span: 1 })),
+    },
+    {
+      key: '_blocks',
+      title: '',
+      columns: 1,
+      ...plain,
+      items: details.map((d) => ({ type: 'block', block: `lines:${d}` })),
+    },
+  ].filter((s) => s.items.length > 0);
+  return {
+    id: null,
+    version: null,
+    is_default: true,
+    config: { sections },
+  } as unknown as typeof CUSTOMER_FORM_LAYOUT;
+}
+
+for (const { entity, label, fields, details } of [
+  {
+    entity: 'customer',
+    label: '客戶',
+    fields: FULL_CUSTOMER_FIELDS,
+    details: ['customer_contact'],
+  },
+  { entity: 'supplier', label: '廠商', fields: FULL_SUPPLIER_FIELDS, details: [] },
+]) {
+  for (const preset of [true, false]) {
+    const name = `${label}${preset ? '預設' : '自訂'}版面`;
+    test(`designer split preview matches the right side: ${name}`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      const layout = preset ? defaultLayout(entity, fields, details) : CUSTOMER_FORM_LAYOUT;
+      await setup(page, ADMIN, layout, { [entity]: fields });
+
+      // 實際的分割檢視右側：唯讀、編輯、新增
+      await page.goto(`/#/entities/${entity}?selected=${customerId(1)}`);
+      const preview = page.getByTestId('record-preview');
+      await expect(preview.locator('[data-item="name"]')).toBeVisible();
+      await expect(preview.getByText('單號')).toHaveCount(0);
+      const readonly = await layoutPlaces(preview);
+      await page.goto(`/#/entities/${entity}?selected=${customerId(1)}&mode=edit`);
+      const panel = page.getByTestId('record-form-panel');
+      await expect(panel.locator('[data-item="name"] input')).toBeVisible();
+      const edit = await layoutPlaces(panel);
+      await page
+        .getByTestId('page-header')
+        .getByRole('button', { name: /新\s*增/ })
+        .click();
+      await expect(panel.getByRole('heading', { name: `新增${label}` })).toBeVisible();
+      const create = await layoutPlaces(panel);
+      await expect(panel.getByText('單號')).toHaveCount(0);
+      expectSamePlaces(create, edit, '新增與編輯');
+
+      if (preset) {
+        // 基本資料第 1 列：編號｜公司名稱；第 2 列：簡稱｜統一編號
+        const basic = readonly.filter((p) => p.section === '基本資料');
+        expect(basic.slice(0, 4).map((p) => [p.item, p.row])).toEqual([
+          ['code', 0],
+          ['name', 0],
+          ['short_name', 1],
+          ['tax_id', 1],
+        ]);
+      }
+
+      // 設計器：區塊與「尚未放進版面」都沒有單號
+      await page.goto(`/#/schema/${entity}/form-layout`);
+      await expect(page.getByText(`表單版面：${label}`)).toBeVisible();
+      await expect(page.getByText('單號', { exact: true })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '單號' })).toHaveCount(0);
+
+      await page.getByText('預覽', { exact: true }).click();
+      await page.getByText('分割檢視右側', { exact: true }).click();
+      const frame = page.getByTestId('split-preview-frame');
+      await page.getByText('唯讀預覽', { exact: true }).click();
+      await expect(frame.locator('[data-item="name"]')).toContainText('公司名稱範例');
+      await expect(frame.getByText('單號')).toHaveCount(0);
+      expectSamePlaces(await layoutPlaces(frame), readonly, '唯讀預覽');
+      await page.screenshot({ path: test.info().outputPath(`${entity}-${preset}-readonly.png`) });
+
+      await page.getByText('編輯表單', { exact: true }).click();
+      await expect(frame.locator('[data-item="name"] input')).toBeDisabled();
+      await expect(frame.getByText('單號')).toHaveCount(0);
+      expectSamePlaces(await layoutPlaces(frame), edit, '編輯表單');
+      await page.screenshot({ path: test.info().outputPath(`${entity}-${preset}-form.png`) });
+    });
+  }
+}

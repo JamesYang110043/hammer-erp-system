@@ -50,12 +50,30 @@ export function linesBlockDetail(code: string): string | undefined {
   return code.startsWith(LINES_BLOCK_PREFIX) ? code.slice(LINES_BLOCK_PREFIX.length) : undefined;
 }
 
+/**
+ * 主檔類的系統資料類別（`hammer_shared::form_layout::SYSTEM_MASTER_ENTITIES`）：不能設定單號規則，
+ * 不適用單號區塊（§8.3）。
+ */
+export const SYSTEM_MASTER_ENTITIES: readonly string[] = [
+  'product',
+  'product_category',
+  'unit',
+  'customer',
+  'supplier',
+];
+
+/** 資料類別是否適用單號系統區塊（`hammer_shared::form_layout::has_record_no_block`）。 */
+export function hasRecordNoBlock(entityKey: string): boolean {
+  return !SYSTEM_MASTER_ENTITIES.includes(entityKey);
+}
+
 /** 系統區塊沒有放進版面時自動附加的位置：欄位之前或之後。 */
 export type BlockPlacement = 'top' | 'bottom';
 
 /**
  * 資料類別適用的系統區塊，依自動產生時的順序（與 `hammer_shared::form_layout::system_blocks` 相同）：
  * 可折讓金額 → 單號 →（欄位）→ 選擇出貨單／進貨單 → 各明細表 → 已用批號表。
+ * 主檔類的系統資料類別沒有單號（{@link hasRecordNoBlock}）。
  */
 export function systemBlocks(
   entityKey: string,
@@ -65,7 +83,9 @@ export function systemBlocks(
   if (entityKey === SALES_ALLOWANCE || entityKey === PURCHASE_ALLOWANCE) {
     blocks.push({ code: FORM_BLOCKS.allowanceAvailable, placement: 'top' });
   }
-  blocks.push({ code: FORM_BLOCKS.recordNo, placement: 'top' });
+  if (hasRecordNoBlock(entityKey)) {
+    blocks.push({ code: FORM_BLOCKS.recordNo, placement: 'top' });
+  }
   if (entityKey === SALES_INVOICE) {
     blocks.push({ code: FORM_BLOCKS.shipmentPicker, placement: 'bottom' });
   }
@@ -142,7 +162,7 @@ export function presetSections(entityKey: string): PresetSection[] | undefined {
  * 沒有設定版面（或讀取失敗）時的版面（與伺服器的 `generated_config` 相同）：
  *
  * - 客戶、廠商（{@link presetSections}）：分組、2 欄的區塊，略過不能顯示的欄位與沒有欄位的
- *   區塊，再依 {@link resolveFormLayout} 附加單號、未列出的欄位（含自訂欄位）與明細表
+ *   區塊，再依 {@link resolveFormLayout} 附加未列出的欄位（含自訂欄位）與明細表
  * - 其他資料類別：一個單欄、沒有標題的區塊，依序為欄位之前的系統區塊、欄位、欄位之後的系統區塊
  */
 export function generatedFormLayout(content: FormContent): FormLayoutConfig {

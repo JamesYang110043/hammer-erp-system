@@ -938,6 +938,39 @@ mod tests {
         assert!(ok("shipment", "used_lots"));
         assert!(!ok("purchase_invoice", "shipment_picker"));
         assert!(!ok("goods_receipt", "used_lots"));
+        // 主檔類的系統資料類別沒有單號（§8.3）；單據與自訂資料類別仍有
+        assert!(!ok("customer", "record_no"));
+        assert!(!ok("supplier", "record_no"));
+        assert!(!ok("product", "record_no"));
+        assert!(ok("sales_order", "record_no"));
+        assert!(ok("repair", "record_no"));
+    }
+
+    #[test]
+    fn stored_record_no_is_dropped_for_system_masters() {
+        let fields = fields();
+        let s = FormSchema {
+            entity_key: "customer",
+            fields: &fields,
+            detail_keys: &["customer_contact"],
+        };
+        let stored = config(vec![section(
+            "basic",
+            2,
+            vec![b("record_no"), f("a", 1), f("b", 1), f("c", 1)],
+        )]);
+        assert_eq!(
+            sanitize_config(&s, stored),
+            config(vec![
+                section("basic", 2, vec![f("a", 1), f("b", 1), f("c", 1)]),
+                section(BLOCKS_SECTION_KEY, 1, vec![b("lines:customer_contact")]),
+            ])
+        );
+        let result = validate_config(
+            &s,
+            &config(vec![section("basic", 2, vec![b("record_no"), f("a", 1)])]),
+        );
+        assert_eq!(param_of(result), "config.sections[0].items[0].block");
     }
 
     #[test]
