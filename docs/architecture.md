@@ -13,7 +13,7 @@ Hammer ERP 是給小型團隊（5 人以內）使用的桌面 ERP 系統，涵�
 | 模組 | 範圍 |
 |---|---|
 | 進出貨管理 | 採購、進貨、訂單、出貨、退貨、批號庫存（先進先出） |
-| 客戶管理 | 客戶主檔、聯絡人 |
+| 客戶管理 | 客戶主檔、聯絡人、客戶品名（同一商品依客戶使用不同的銷貨品名，§8.7） |
 | 廠商管理 | 廠商主檔、聯絡人 |
 | 發票管理 | 銷項發票、銷貨折讓、進項憑證、進貨折讓的內部紀錄（手開號碼，不上傳財政部，§8.11） |
 | 財務管理 | ⏳ 細節待討論 |
@@ -666,7 +666,7 @@ IF({status} = "open", DAYS(TODAY(), {due_date}), 0)
 | 其他（`other`） | 備註（佔滿整列） | |
 
 - 停用、不顯示的欄位略過；略過後沒有欄位的區塊不產生
-- 之後依「讀取時的處理」：客戶、廠商是主檔類的系統資料類別，沒有單號區塊（見「系統區塊」）；預設沒有列到的欄位（含自訂欄位）附加到「其他欄位」（`_other`）；聯絡人明細附加到最後的 `_blocks`
+- 之後依「讀取時的處理」：客戶、廠商是主檔類的系統資料類別，沒有單號區塊（見「系統區塊」）；預設沒有列到的欄位（含自訂欄位）附加到「其他欄位」（`_other`）；明細表附加到最後的 `_blocks`，依明細子表的 `sort_order`：客戶為聯絡人（`lines:customer_contact`，`sort_order` 0）→ 客戶品名（`lines:customer_product_name`，`sort_order` 10，M11，§8.7），廠商為聯絡人
 - 已經設定過版面的客戶、廠商不受影響；「還原成預設」後回到分組版面；其他資料類別的預設版面不變
 - 伺服器（`generated_config`）與桌面程式（`generatedFormLayout`，讀取版面失敗時使用）必須產生相同的版面：共用測試資料 `crates/shared/testdata/generated_form_layouts.json`，兩邊的單元測試都要等於其中的 `expected`
 
@@ -1263,6 +1263,44 @@ M3 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stora
 #### `supplier_contacts`（明細子表 `supplier_contact`）
 欄位與 `customer_contacts` 相同（`customer_id` 改為 `supplier_id`，FK → suppliers）。
 
+#### `customer_product_names`（明細子表 `customer_product_name`，M11）
+
+同一個商品賣給不同客戶時使用不同的銷貨品名（例如客戶 A 叫「X 型扳手」、客戶 B 叫「工具組零件 03」）。**商品主檔維持一筆**，這裡只記「客戶 × 商品 → 品名」的對照；庫存、批號、成本、單位、規格、條碼都仍以 `product_id` 計算，數量 1:1（賣 1 個扣 1 個）。銷貨單據明細的品名如何帶入見 §8.9「明細的品名」。
+
+M11 的 migration 寫入 `entity_definitions`（規則同 §8.6「M3 的系統資料類別」：`is_system = true`、`storage = table`、`is_active = true`、`icon` 與 `numbering_pattern` 為 `NULL`、固定 uuid）：
+
+| key | label | kind | table_name | 主表 | title_template | sort_order |
+|---|---|---|---|---|---|---|
+| `customer_product_name` | 客戶品名 | detail | `customer_product_names` | `customer` | `{product_id.code} {name}` | 10 |
+
+`sort_order` 10 讓客戶表單的明細表依序為聯絡人（0）→ 客戶品名（§7.7「客戶、廠商的分組預設版面」）。資料表依照 §8.6「系統資料表的共同規則」（與 `customer_contacts` 相同）：
+
+| 欄位 | 型態 | data_type | 顯示名稱 | 定義 |
+|---|---|---|---|---|
+| customer_id | UUID NOT NULL FK → customers | （不是欄位） | | 所屬客戶 |
+| sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序 |
+| product_id | UUID NOT NULL FK → products | `relation` | 商品 | 必填、→ `product`；`goods`、`service` 都可以 |
+| name | TEXT NOT NULL | `text` | 客戶品名 | 必填、可搜尋、`max_length 200` |
+| notes | TEXT | `long_text` | 備註 | |
+
+索引：`(customer_id, sort_order, id) WHERE deleted_at IS NULL`、`(product_id)`、`(lower(name))`（可搜尋），以及部分唯一索引 `uq_customer_product_names_customer_product ON customer_product_names (customer_id, product_id) WHERE deleted_at IS NULL`。
+
+**存檔時的檢查**（`hammer_core::master_data`，透過客戶的通用資料 API 以 `lines.customer_product_name` 整組取代，§10「主表與明細」；錯誤在 `details.lines`）：
+
+| 檢查 | 錯誤位置與訊息 |
+|---|---|
+| `product_id` 必須是未刪除的商品（關聯欄位的一般規則，§7.3）；商品停用不影響寫入 | 該列的 `product_id`（關聯欄位的一般訊息） |
+| 同一位客戶、同一個商品最多一筆（未刪除）：同一次存檔中重複 → 第二列錯誤；與資料庫的唯一索引衝突（同時存檔）→ 相同格式，指向該商品所在的列 | 該列的 `product_id`「此商品已設定客戶品名」 |
+| `name` 去除前後空白後儲存，不可為空、不可有控制字元、最長 200 字元 | 該列的 `name` |
+
+- 操作紀錄：記在客戶那筆紀錄的 diff（`lines.customer_product_name`，§8.5 `custom_records`「明細子表」）。
+- 刪除客戶時，客戶品名與聯絡人一起軟刪除。
+- **商品刪除、停用**：客戶品名**不阻擋**刪除或停用商品，也不連動刪除（列保留，客戶表單照常顯示，關聯的 `deleted = true`）。
+  - 商品已刪除：銷貨明細不能選已刪除的商品（§7.3），所以帶入用不到；選擇 API 不列出。
+  - 商品已停用：選擇 API 不列出（與通用 `lookup` 相同）；已在明細上的停用商品（§7.1 允許）仍依客戶品名帶入，品名才會與之前開的單據一致。
+- 修改客戶品名或商品的 `name`，**不影響**已開的銷貨單據（明細存的是品名快照）。
+- 只有銷貨端；進貨端沿用商品主檔的名稱，不做廠商品名。依客戶不同的單位、規格、數量換算、售價都不做。
+
 #### 畫面：分割檢視（M10）
 
 客戶、廠商的 `/entities/:key` 不用表格列表，改用左右分割的畫面（`pages/records/MasterSplitView.tsx`）。哪些資料類別使用分割檢視由 `records/masterSplit.ts` 的 `SPLIT_VIEW_ENTITIES` 決定（目前只有 `customer`、`supplier`），其他資料類別不受影響。
@@ -1697,6 +1735,7 @@ M4c 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 | sales_order_id | UUID NOT NULL FK → sales_orders | （不是欄位） | | 所屬單據 |
 | sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序 |
 | product_id | UUID NOT NULL FK → products | `relation` | 商品 | 必填、→ `product`；`goods`、`service` 都可以 |
+| product_name | TEXT NOT NULL | `text` | 品名 | 必填、`max_length 200`（M11）；單據上的品名（快照），沒帶時由伺服器帶入，見「明細的品名」 |
 | qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0 |
 | unit_price | NUMERIC(18,4) NOT NULL CHECK (unit_price >= 0) | `money` | 單價 | 必填、小數 4、`min 0`；含稅或未稅依表頭的 `tax_included` |
 | discount_rate | NUMERIC(6,4) NOT NULL DEFAULT 0 CHECK (discount_rate >= 0 AND discount_rate <= 1) | `decimal` | 折扣率 | 必填、預設 `0`、小數 4、`min 0`、`max 1`；減少的比例，`0.1` = 打九折 |
@@ -1731,6 +1770,7 @@ M4c 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 | sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序 |
 | sales_order_line_id | UUID FK → sales_order_lines | `relation` | 訂單明細 | → `sales_order_line`（系統明細子表，§7.3 的例外）、`is_visible = false`；必須屬於表頭的訂單 |
 | product_id | UUID NOT NULL FK → products | `relation` | 商品 | 必填、→ `product`；`goods`、`service` 都可以 |
+| product_name | TEXT NOT NULL | `text` | 品名 | 必填、`max_length 200`（M11）；有 `sales_order_line_id` 而沒帶時帶入訂單明細的品名，見「明細的品名」 |
 | qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0 |
 | unit_price | NUMERIC(18,4) NOT NULL CHECK (unit_price >= 0) | `money` | 單價 | 必填、小數 4、`min 0` |
 | discount_rate | NUMERIC(6,4) NOT NULL DEFAULT 0 CHECK (discount_rate >= 0 AND discount_rate <= 1) | `decimal` | 折扣率 | 同訂單明細 |
@@ -1769,6 +1809,7 @@ M4c 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 | sort_order | INTEGER NOT NULL DEFAULT 0 | （不是欄位） | | 明細順序 |
 | shipment_line_id | UUID NOT NULL FK → shipment_lines | `relation` | 出貨明細 | 必填、→ `shipment_line`（系統明細子表，§7.3 的例外）、`is_visible = false`；必須屬於表頭的出貨單 |
 | product_id | UUID NOT NULL FK → products | `relation` | 商品 | 系統維護、→ `product`；= 出貨明細的商品 |
+| product_name | TEXT NOT NULL | `text` | 品名 | 系統維護（M11）；= 出貨明細的品名 |
 | qty | NUMERIC(18,4) NOT NULL CHECK (qty > 0) | `decimal` | 數量 | 必填、小數 4、`min 0`；必須大於 0，上限見「銷貨退回」 |
 | unit_price | NUMERIC(18,4) NOT NULL CHECK (unit_price >= 0) | `money` | 單價 | 系統維護、小數 4；= 出貨明細的單價 |
 | discount_rate | NUMERIC(6,4) NOT NULL DEFAULT 0 CHECK (discount_rate >= 0 AND discount_rate <= 1) | `decimal` | 折扣率 | 系統維護、小數 4；= 出貨明細的折扣率 |
@@ -1777,6 +1818,59 @@ M4c 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 | notes | TEXT | `long_text` | 備註 | |
 
 另外有索引 `(shipment_line_id)`。退回到哪些批號記錄在 `inventory_transactions`（`txn_type = sales_return`、`ref_line_id` 為退回明細），不另外建表（見「銷貨退回」）。
+
+#### 明細的品名（M11）
+
+三種明細的 `product_name` 是**單據上的品名**：開單時自動帶入、可以手動修改（銷貨退回除外），存的是當時的值（快照）。之後修改客戶品名（§8.7 `customer_product_names`）或商品的 `name`，已開的單據都不變。庫存、批號、成本一律以 `product_id` 計算，與品名無關。
+
+**欄位定義**（M11 的 migration 寫入 `field_definitions`，規則同 §8.6）：
+
+| 明細子表 | `sort_order` | 定義 |
+|---|---|---|
+| `sales_order_line` | 15（`product_id` 10 之後） | `is_required = true`、`validation = {"max_length":200}` |
+| `shipment_line` | 25（`product_id` 20 之後） | 同上 |
+| `sales_return_line` | 25（`product_id` 20 之後） | 系統維護（`is_readonly = true`、不必填，§7.1） |
+
+訂單、出貨明細的 `product_name` 雖然必填，request 沒帶時伺服器會在**欄位檢查之前**先帶入（見下方），所以不會因為必填而失敗；帶入後仍為空（不會發生，商品的 `name` 必填）才是必填錯誤。
+
+**帶入順序**（`hammer_core::sales`，一個函式供存檔與選擇 API 共用）：給定客戶 `C`、商品 `P`：
+
+1. `C` 的客戶品名中 `product_id = P`、未刪除的那筆的 `name`
+2. 沒有時：商品 `P` 的 `name`
+
+不另設「預設銷貨品名」。客戶本身停用、商品停用都不影響帶入。
+
+**存檔時的處理**（訂單、出貨單的新增與修改；先於欄位檢查、金額計算）：
+
+| 情況 | `product_name` |
+|---|---|
+| request 有帶、去除前後空白後不是空字串 | 使用去除空白後的值（最長 200 字元、不可有控制字元，否則 `422`，該列的 `product_name`） |
+| 新增的列（含新增單據、修改時新增的列）沒帶，或帶了 `null` / 空白 | 出貨明細有 `sales_order_line_id` → 訂單明細的 `product_name`；否則依「帶入順序」（`C` 為表頭的 `customer_id`） |
+| 修改既有的列：換了 `product_id` 而沒帶 `product_name` | 依上一列重新帶入 |
+| 修改既有的列：沒換 `product_id`、沒帶 `product_name` | 保留原本的品名（`data` 只合併有帶到的欄位，§10） |
+| 修改既有的列：帶了 `null` / 空白 | 依「新增的列」重新帶入 |
+
+- 一次存檔的所有列一起查詢客戶品名（`customer_id = C AND product_id = ANY(…) AND deleted_at IS NULL`），不要每列各查一次。
+- 表頭**換客戶**時，伺服器**不**重新帶入既有列的品名（已手動修改的品名不應被覆蓋）；由桌面程式詢問使用者後，把要重新帶入的列的 `product_name` 送空白或新值。
+- **銷貨退回**：存檔時與 `product_id`、`unit_price` 一起由伺服器從出貨明細帶入（系統維護，request 帶了一律忽略，§7.1）。
+- 確認、過帳時不重新帶入品名（只檢查）；品名不影響庫存與成本。
+
+**範例**：客戶 A 有客戶品名「商品 P001 → X 型扳手」，客戶 B 沒有設定；P001 的 `name` 為「扳手 10mm」。
+
+| 操作 | 結果的 `product_name` |
+|---|---|
+| 客戶 A 新增訂單，明細 `{ "product_id": P001 }` | X 型扳手 |
+| 客戶 B 新增訂單，明細 `{ "product_id": P001 }` | 扳手 10mm |
+| 客戶 A 新增訂單，明細 `{ "product_id": P001, "product_name": " 特製扳手 " }` | 特製扳手 |
+| 修改上一張訂單那一列，只帶 `{ "qty": 5 }` | 特製扳手（保留） |
+| 修改那一列，帶 `{ "product_id": P002 }`（客戶 A 沒有設定 P002，P002 的 `name` 為「鉗子」） | 鉗子（換商品重新帶入） |
+| 客戶 A 的訂單（品名「特製扳手」）轉出貨單，出貨明細沒帶品名 | 特製扳手（訂單明細的品名） |
+| 上一張出貨單過帳後開銷貨退回 | 特製扳手（出貨明細的品名） |
+| 之後把客戶 A 的客戶品名改為「Y 型扳手」、P001 的 `name` 改為「扳手 12mm」 | 已開的訂單、出貨單、退回單都不變；之後新開的客戶 A 單據帶入「Y 型扳手」 |
+
+**既有資料**（M11 的 migration）：三張表先加可為 `NULL` 的 `product_name` → 訂單明細、出貨明細以當時商品的 `name` 補上（含已刪除的商品、已刪除的明細）；銷貨退回明細以出貨明細補好的 `product_name` 補上（與商品的 `name` 相同）→ 再設 `NOT NULL`。
+
+**內部報表與查詢**：庫存、異動流水帳（§8.10 的 `product_name` 是商品主檔的名稱）、統計等以商品主檔的名稱為主；需要時另加一欄「單據品名」（明細的 `product_name`）。明細子表的 `title_template` 不變（仍為商品的料號與名稱）。
 
 #### 金額與稅額
 
@@ -1865,7 +1959,7 @@ draft ──確認──▶ confirmed ──出貨過帳──▶ partially_ship
 |---|---|
 | `customer_id`、`tax_type`、`tax_included` | 訂單的值（伺服器在新增時沒有帶 `tax_type` 也會帶入訂單的稅別） |
 | `ship_address` | 客戶的 `address` |
-| 明細 | 訂單中**未出貨數量** `qty − shipped_qty > 0` 的每一列：`sales_order_line_id`、`product_id`、`unit_price`、`discount_rate`、`qty` = 未出貨數量；`lot_no` 留空（先進先出） |
+| 明細 | 訂單中**未出貨數量** `qty − shipped_qty > 0` 的每一列：`sales_order_line_id`、`product_id`、`product_name`（訂單明細的品名，M11）、`unit_price`、`discount_rate`、`qty` = 未出貨數量；`lot_no` 留空（先進先出） |
 
 **檢查**（存檔時與過帳時都檢查；過帳時在鎖定訂單後以最新的 `shipped_qty` 檢查）：
 
@@ -1880,7 +1974,7 @@ draft ──確認──▶ confirmed ──出貨過帳──▶ partially_ship
 - `shipped_qty` 只計算已過帳的出貨單，草稿不保留數量（同 §8.8）。
 - 同一列訂單明細可以拆成多列出貨（例如手動指定兩個批號），合計受上一點限制。
 - 客戶要的比訂單多時，多出的部分以沒有 `sales_order_line_id` 的明細輸入。
-- 稅別、含稅、單價、折扣率可以與訂單不同，不檢查。
+- 稅別、含稅、單價、折扣率、品名可以與訂單不同，不檢查。
 
 #### 出貨的批號
 
@@ -1923,6 +2017,43 @@ request：
 - `allocations` 依扣除順序；`shortage` 為不足的數量（足夠時 `"0.0000"`）。庫存不足**不是錯誤**，回傳能分配的部分與 `shortage`。
 - `service` 商品：`allocations` 為空陣列、`shortage` 為 `"0.0000"`。
 
+#### 銷貨用商品選擇 API（M11）
+
+`GET /api/v1/sales/product-lookup?customer_id=&q=&limit=`（需要 `record.read`；型別在 `hammer_shared::sales`，邏輯在 `hammer_core::sales`）。訂單、出貨單的明細選商品時使用：可以用**這位客戶的客戶品名**搜尋，並一次取得要帶入的品名。通用的 `lookup`（§7.3）只比對商品標題，行為不變。
+
+| 參數 | 說明 |
+|---|---|
+| `customer_id` | 客戶 id，可省略。有帶時必須是未刪除的客戶（停用的客戶可以），不存在或已刪除 → `404 NOT_FOUND`；不是 uuid → `422 VALIDATION`（`details.field = customer_id`）。空字串視為未指定 |
+| `q` | 搜尋文字；以空白分隔成多個詞，不分大小寫。省略或空白 = 不篩選 |
+| `limit` | 預設 20、上限 50（與通用 `lookup` 相同：超過上限時套用上限；小於 1 → `422`，不是整數 → `400`） |
+
+**範圍**：未刪除、`is_active = true` 的商品（`goods`、`service` 都列出）。客戶品名只用**這位客戶**未刪除的那筆；指向已刪除、停用商品的客戶品名略過。
+
+**比對**：每個詞都要出現在「比對文字」中（`contains`，不分大小寫）。比對文字 = 商品的標題（`product` 的 `title_template`，預設 `{code} {name}`，與通用 `lookup` 相同），有客戶品名時再加上客戶品名（以空白連接）。所以料號、商品名稱、客戶品名都可以找到，也可以混用（例如「P001 X 型」）。
+
+**排序**（確定的順序）：
+
+1. 有客戶品名、且**每個詞都出現在客戶品名中**的商品（`q` 空白時：所有有客戶品名的商品）
+2. 其他符合的商品
+
+同一組內依 `id DESC`（由新到舊，與通用 `lookup` 相同）。取前 `limit` 筆，不分頁、沒有 `total`。
+
+回應 `200`（陣列）：
+
+```json
+[ { "id": "…", "title": "P001 扳手 10mm", "code": "P001", "name": "扳手 10mm", "spec": "10mm",
+    "product_type": "goods", "default_sale_price": "120.0000",
+    "customer_product_name": "X 型扳手", "product_name": "X 型扳手" },
+  { "id": "…", "title": "P002 鉗子", "code": "P002", "name": "鉗子", "spec": null,
+    "product_type": "goods", "default_sale_price": null,
+    "customer_product_name": null, "product_name": "鉗子" } ]
+```
+
+- `customer_product_name`：這位客戶的客戶品名，沒有時 `null`；`product_name`：依「明細的品名」的帶入順序決定的品名（= `customer_product_name ?? name`），桌面程式選定商品後直接帶入明細的 `product_name`。
+- `default_sale_price` 為未稅價（§8.6），`null` 表示沒有設定；含稅單據的換算仍由桌面程式處理（§8.9「金額與稅額」）。
+- 沒帶 `customer_id`：只比對商品標題，`customer_product_name` 都是 `null`、`product_name` = `name`，排序只有第 2 組。
+- 範例：客戶 A 有「P001 → X 型扳手」「P003 → 工具組零件 03」。`q = "扳手"` → P001（第 1 組：客戶品名含「扳手」），之後是其他名稱含「扳手」的商品（第 2 組）；`q = "零件"` → P003（商品名稱沒有「零件」也找得到）；客戶 B 查 `q = "零件"` → 找不到 P003（不比對其他客戶的客戶品名）。
+
 #### 出貨過帳與作廢
 
 依 §9.2、§9.3、§10「單據動作」（`post`、`void`），鎖定依 §8.10「鎖定順序」：出貨單（`FOR UPDATE`）→ 訂單（有 `sales_order_id` 時，`FOR UPDATE`）→ 商品（`FOR SHARE`）→ 批號（`FOR UPDATE`；過帳為指定的批號 + 先進先出列的商品所有 `qty_remaining > 0` 的批號，作廢為 `lot_allocations` 的批號）→ 訂單明細（依 id `FOR UPDATE`）。
@@ -1954,7 +2085,7 @@ request：
 退回**已過帳**出貨單的部分或全部明細。建立方式與進貨退回相同由桌面程式帶入：選擇出貨單後，列出每一列出貨明細的**可退數量**，使用者選擇要退的列與數量。
 
 - 存檔與過帳時檢查出貨單 `status = posted`（`shipment_id`「出貨單尚未過帳」「出貨單已作廢」）。
-- 表頭的 `customer_id`、`tax_type`、`tax_included`，明細的 `product_id`、`unit_price`、`discount_rate` 由伺服器在存檔時從出貨單、出貨明細帶入（系統維護）。金額依「金額與稅額」計算。
+- 表頭的 `customer_id`、`tax_type`、`tax_included`，明細的 `product_id`、`product_name`（M11）、`unit_price`、`discount_rate` 由伺服器在存檔時從出貨單、出貨明細帶入（系統維護）。金額依「金額與稅額」計算。
 - 明細的 `shipment_line_id` 必須是表頭出貨單未刪除的明細（「不是此出貨單的明細」）；同一張退回單中同一列出貨明細只能出現一次（「出貨明細重複」）。
 
 **退回數量上限**（存檔時與過帳時都檢查；過帳時在鎖定出貨單後檢查）：
@@ -1996,6 +2127,7 @@ request：
 - 鎖定、草稿與已結案訂單不限制、停用不受限制，都與 §8.8 相同。
 - 被銷項發票、銷貨折讓引用時的限制見 §8.11「客戶、廠商被引用時的限制」（廠商被進項憑證、進貨折讓引用時同）。
 - 信用額度不檢查（見「存檔時的檢查」）。
+- 客戶品名（§8.7 `customer_product_names`）不限制商品的刪除、停用與上述修改。
 
 ---
 
@@ -2513,7 +2645,7 @@ tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
 | 發票明細欄位 | 帶入的值 |
 |---|---|
 | `product_id` | 出貨明細的商品 |
-| `description` | 商品的 `name`（有 `spec` 時為 `name spec`） |
+| `description` | 出貨明細的 `product_name`（M11，客戶看到的品名）；品名與商品**目前**的 `name` 相同、且商品有 `spec` 時附加規格（`name spec`，維持 M5 的行為）。例如品名「扳手 10mm」、規格「鍍鉻」→「扳手 10mm 鍍鉻」；品名「X 型扳手」（客戶品名）→「X 型扳手」，不附加規格 |
 | `qty` | 出貨明細的 `qty` |
 | `unit_price` | `p = 出貨明細的 unit_price × (1 − discount_rate)`，再依發票種類與出貨單的 `tax_included` 換算：相同基準 → `round(p, 4)`；三聯式但出貨單含稅 → `round(p ÷ (1 + 稅率), 4)`；二聯式但出貨單未稅 → `round(p × (1 + 稅率), 4)` |
 
@@ -2699,7 +2831,7 @@ tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
 - **通用資料 API**：`/api/v1/entities/{entity_key}/records`（列表、單筆、新增、修改、刪除、`lookup`）。自訂資料類別與系統資料類別（M3 起的 `unit`、`product_category`、`product`、`customer`、`supplier` 與其明細子表）都使用這組端點，行為相同（§7.1「系統資料類別共用通用資料 API」）。
 - **專屬端點**，只用於以下兩種情況：
   - 系統資料類別在一般新增、修改、刪除以外的動作：系統單據的過帳、作廢（見下方「單據動作」），這些動作有自己的權限（`record.post`）與規則。單據的一般新增、修改、刪除仍使用通用資料 API。
-  - 不是資料類別的資料：幣別 `/api/v1/currencies`、匯率 `/api/v1/exchange-rates`、稅別 `/api/v1/tax-rates`（§8.6）、庫存查詢 `/api/v1/inventory/…`（§8.10；建議批號 §8.9）。它們沒有自訂欄位、版面、關聯，也不出現在 `GET /api/v1/entities`。
+  - 不是資料類別的資料：幣別 `/api/v1/currencies`、匯率 `/api/v1/exchange-rates`、稅別 `/api/v1/tax-rates`（§8.6）、庫存查詢 `/api/v1/inventory/…`（§8.10；建議批號 §8.9）、銷貨用商品選擇 `/api/v1/sales/product-lookup`（§8.9，M11）。它們沒有自訂欄位、版面、關聯，也不出現在 `GET /api/v1/entities`。
 - 重新計算公式：`POST /api/v1/entities/{entity_key}/recalculate`（需要 `schema.manage`，無 request body），回應 `{ "processed": 120, "changed": 37, "with_errors": 2 }`（型別 `hammer_shared::schema::RecalculateResult`；規則見 §7.6「重新計算」）。
 - 表單版面（§7.7、§8.5 `form_layouts`；型別在 `hammer_shared::form_layout`）：
   | 端點 | 權限 | 說明 |
@@ -2812,6 +2944,7 @@ tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
 | M6 | 財務（⏳） |
 | M7 | 報表、Excel 匯出、列印、備份與還原介面 |
 | M8 | 表單畫面自訂排版：表單版面（`form_layouts`）資料表與 API、表單依版面渲染、表單版面設計器（§7.7） |
+| M11 | 客戶品名：同一商品依客戶使用不同的銷貨品名，庫存仍以同一商品計算。`customer_product_names`（§8.7）、銷貨明細的 `product_name` 與帶入規則、銷貨用商品選擇 API（§8.9）、發票帶入品名（§8.11） |
 
 ---
 
