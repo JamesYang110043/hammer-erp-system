@@ -35,6 +35,14 @@ export const CUSTOMER_CONTACT: EntityDefinition = {
   title_template: null,
 };
 
+/** 客戶品名（明細子表，M11）：排在聯絡人之後（sort_order 10）。 */
+export const CUSTOMER_PRODUCT_NAME: EntityDefinition = {
+  ...systemEntity('customer_product_name', '客戶品名', 10),
+  kind: 'detail',
+  parent_entity_id: CUSTOMER.id,
+  title_template: '{product_id.code} {name}',
+};
+
 function sys(entity: EntityDefinition, patch: Partial<FieldDefinition>): FieldDefinition {
   return fieldDef({
     id: `f-${entity.key}-${patch.field_key}`,
@@ -79,6 +87,40 @@ export const CUSTOMER_CONTACT_FIELDS: FieldDefinition[] = [
     sort_order: 60,
   }),
 ];
+
+export const CUSTOMER_PRODUCT_NAME_FIELDS: FieldDefinition[] = [
+  sys(CUSTOMER_PRODUCT_NAME, {
+    field_key: 'product_id',
+    label: '商品',
+    data_type: 'relation',
+    relation_entity_id: PRODUCT.id,
+    is_required: true,
+    sort_order: 10,
+  }),
+  sys(CUSTOMER_PRODUCT_NAME, {
+    field_key: 'name',
+    label: '客戶品名',
+    is_required: true,
+    is_searchable: true,
+    validation: { max_length: 200 },
+    sort_order: 20,
+  }),
+  sys(CUSTOMER_PRODUCT_NAME, {
+    field_key: 'notes',
+    label: '備註',
+    data_type: 'long_text',
+    sort_order: 30,
+  }),
+];
+
+/** 商品（客戶品名的選擇器使用）。 */
+export const PRODUCT_P001 = '0196f5a0-0000-7000-8000-000000000b01';
+export const PRODUCT_P002 = '0196f5a0-0000-7000-8000-000000000b02';
+export const PRODUCT_TITLES: Record<string, string> = {
+  [PRODUCT_P001]: 'P001 扳手 10mm',
+  [PRODUCT_P002]: 'P002 鉗子',
+};
+export const CUSTOMER_PRODUCT_NAME_A = '0196f5a0-0000-7000-8000-000000000c01';
 
 export const PRODUCT_FIELDS = [
   sys(PRODUCT, { field_key: 'code', label: '料號', is_required: true, sort_order: 10 }),
@@ -262,6 +304,26 @@ export function customerDetail(all: readonly DataRecord[], id: string): DataReco
                 is_primary: false,
               }),
             ].map((c) => ({ ...c, title: '', data: { ...c.data, is_active: undefined } }))
+          : [],
+      customer_product_name:
+        r.id === customerId(1)
+          ? [
+              {
+                ...partyRecord(CUSTOMER_PRODUCT_NAME_A, {
+                  product_id: PRODUCT_P001,
+                  name: 'X 型扳手',
+                  notes: '客戶圖面編號 W-10',
+                }),
+                title: 'P001 X 型扳手',
+                relations: {
+                  product_id: {
+                    id: PRODUCT_P001,
+                    title: PRODUCT_TITLES[PRODUCT_P001]!,
+                    deleted: false,
+                  },
+                },
+              },
+            ].map((c) => ({ ...c, data: { ...c.data, is_active: undefined } }))
           : [],
     },
   };
