@@ -527,14 +527,14 @@ describe('表單版面設計器的預覽（#252）', () => {
     expect(screen.getByTestId('layout-applies-to')).toHaveTextContent('分割檢視右側的唯讀預覽');
 
     await user.click(screen.getByText('預覽', { exact: true }));
-    // 預設為編輯表單、整頁
+    // 預設為編輯表單；固定為分割檢視右側的寬度，沒有「整頁」（#260）
     const preview = screen.getByRole('region', { name: '表單預覽' });
     expect(preview).toHaveAttribute('data-preview-kind', 'form');
-    expect(preview).toHaveAttribute('data-preview-width', 'full');
+    expect(preview).toHaveAttribute('data-preview-width', 'split');
+    expect(screen.queryByText('整頁', { exact: true })).not.toBeInTheDocument();
     expect(within(preview).getAllByRole('textbox').length).toBeGreaterThan(0);
 
     await user.click(screen.getByText('唯讀預覽', { exact: true }));
-    await user.click(screen.getByText('分割檢視右側', { exact: true }));
     const readonly = screen.getByRole('region', { name: '表單預覽' });
     expect(readonly).toHaveAttribute('data-preview-kind', 'readonly');
     expect(readonly).toHaveAttribute('data-preview-width', 'split');
@@ -553,7 +553,11 @@ describe('表單版面設計器的預覽（#252）', () => {
     await screen.findByText('表單版面：商品', {}, { timeout: PAGE_LOAD_TIMEOUT });
     await user.click(screen.getByText('預覽', { exact: true }));
     expect(screen.getByText('唯讀預覽', { exact: true })).toBeInTheDocument();
-    expect(screen.queryByText('分割檢視右側', { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('split-preview-note')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '表單預覽' })).toHaveAttribute(
+      'data-preview-width',
+      'full',
+    );
   });
 });
 

@@ -65,6 +65,7 @@ import {
   FORM_BLOCKS,
   MAX_FORM_COLUMNS,
   linesBlockDetail,
+  presetSections,
   resolveFormLayout,
   systemBlocks,
 } from '../../records/formLayout';
@@ -88,10 +89,14 @@ import type {
 import { detailEntitiesOf } from '../../records/lines';
 import { designerReturnPath } from '../../records/masterSplit';
 import {
+  SPLIT_DETAIL_PADDING,
   SPLIT_DETAIL_PREVIEW_WIDTH,
+  displayedColumns,
   hasSplitPreview,
   layoutAppliesTo,
+  resetDescription,
   sampleValue,
+  splitDetailWidth,
 } from '../../records/formLayoutPreview';
 import type { PreviewKind, PreviewWidth } from '../../records/formLayoutPreview';
 import { FieldValue } from '../records/FieldValue';
@@ -118,6 +123,32 @@ function blockLabel(code: string, details: readonly EntityDefinition[]): string 
     default:
       return code;
   }
+}
+
+/**
+ * 目前視窗下分割檢視右側卡片的寬度：設計器與分割檢視都在同一個內容區的 `.page` 內，
+ * 以設計器的 `.page` 寬度計算（側邊欄收合、視窗縮放時更新）。量不到寬度時（例如測試環境）
+ * 使用 1440px 視窗的寬度。
+ */
+function useSplitDetailWidth(enabled: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pageWidth, setPageWidth] = useState(0);
+  useEffect(() => {
+    const page = ref.current?.closest('.page');
+    if (!enabled || !page) {
+      return;
+    }
+    const update = () => setPageWidth(page.getBoundingClientRect().width);
+    update();
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const observer = new ResizeObserver(update);
+    observer.observe(page);
+    return () => observer.disconnect();
+  }, [enabled]);
+  const width = pageWidth > 0 ? splitDetailWidth(pageWidth) : SPLIT_DETAIL_PREVIEW_WIDTH;
+  return [ref, width] as const;
 }
 
 /** 設計器使用的資料類別資訊。 */
@@ -278,8 +309,10 @@ function Designer({
   const [state, dispatch] = useReducer(designerReducer, layout.config, toDesign);
   const [mode, setMode] = useState<'design' | 'preview'>('design');
   const [previewKind, setPreviewKind] = useState<PreviewKind>('form');
-  const [previewWidth, setPreviewWidth] = useState<PreviewWidth>('full');
   const splitPreview = hasSplitPreview(entityKey);
+  const [measureRef, splitWidth] = useSplitDetailWidth(splitPreview);
+  // 分割檢視右側的表單內容寬度（扣除卡片內距），用來提示欄數縮減
+  const splitContentWidth = splitPreview ? splitWidth - SPLIT_DETAIL_PADDING * 2 : undefined;
   const [conflict, setConflict] = useState(false);
   const save = useSaveFormLayout(entityKey);
   const reset = useResetFormLayout(entityKey);
@@ -364,7 +397,7 @@ function Designer({
         <Space>
           <Popconfirm
             title="還原成預設版面？"
-            description="表單會回到依欄位定義排列的單欄畫面。"
+            description={resetDescription(presetSections(entityKey) !== undefined)}
             okText="還原"
             cancelText="取消"
             onConfirm={onReset}
@@ -397,7 +430,7 @@ function Designer({
           loading={reloading}
         />
       )}
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Space ref={measureRef} direction="vertical" size="middle" style={{ width: '100%' }}>
         <Typography.Paragraph
           type="secondary"
           style={{ margin: 0 }}
@@ -426,15 +459,9 @@ function Designer({
             />
           )}
           {mode === 'preview' && splitPreview && (
-            <Segmented
-              aria-label="預覽寬度"
-              value={previewWidth}
-              onChange={(v) => setPreviewWidth(v as PreviewWidth)}
-              options={[
-                { value: 'full', label: '整頁' },
-                { value: 'split', label: '分割檢視右側' },
-              ]}
-            />
+            <Typography.Text type="secondary" data-testid="split-preview-note">
+              以目前視窗下分割檢視右側的寬度預覽
+            </Typography.Text>
           )}
         </Space>
         {mode === 'design' ? (
@@ -449,7 +476,12 @@ function Designer({
               schema={schema}
               dispatch={dispatch}
             />
-            <SectionsEditor state={state} schema={schema} dispatch={dispatch} />
+            <SectionsEditor
+              state={state}
+              schema={schema}
+              dispatch={dispatch}
+              splitContentWidth={splitContentWidth}
+            />
             <Button icon={<PlusOutlined />} onClick={() => dispatch({ type: 'addSection' })}>
               新增區塊
             </Button>
@@ -460,7 +492,8 @@ function Designer({
             schema={schema}
             fields={visibleFields}
             kind={previewKind}
-            width={splitPreview ? previewWidth : 'full'}
+            width={splitPreview ? 'split' : 'full'}
+            splitWidth={splitWidth}
           />
         )}
       </Space>
@@ -556,10 +589,13 @@ function SectionsEditor({
   state,
   schema,
   dispatch,
+  splitContentWidth,
 }: {
   state: DesignerState;
   schema: DesignerSchema;
   dispatch: (action: DesignerAction) => void;
+  /** 分割檢視右側的表單內容寬度；不使用分割檢視時為 `undefined`。 */
+  splitContentWidth?: number;
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -639,6 +675,7 @@ function SectionsEditor({
               canRemove={state.sections.length > 1}
               schema={schema}
               dispatch={dispatch}
+              splitContentWidth={splitContentWidth}
             />
           ))}
         </Space>
@@ -653,15 +690,22 @@ function SectionEditor({
   canRemove,
   schema,
   dispatch,
+  splitContentWidth,
 }: {
   section: DesignSection;
   index: number;
   canRemove: boolean;
   schema: DesignerSchema;
   dispatch: (action: DesignerAction) => void;
+  splitContentWidth?: number;
 }) {
   const { token } = theme.useToken();
   const name = section.title || `區塊 ${index + 1}`;
+  // 右側寬度不足時實際顯示的欄數（#260）
+  const shownColumns =
+    splitContentWidth === undefined
+      ? section.columns
+      : displayedColumns(section.columns, splitContentWidth);
   const {
     attributes,
     listeners,
@@ -736,6 +780,15 @@ function SectionEditor({
             >
               預設收折
             </Checkbox>
+            {shownColumns < section.columns && (
+              <Typography.Text
+                type="warning"
+                data-testid="split-columns-hint"
+                style={{ fontWeight: 'normal' }}
+              >
+                分割檢視右側會顯示為 {shownColumns} 欄
+              </Typography.Text>
+            )}
           </Space>
         }
         extra={
@@ -895,7 +948,7 @@ function ItemChip({
  *
  * - 編輯表單：欄位為停用的輸入框
  * - 唯讀預覽：與分割檢視右側的 `RecordPreview` 共用 {@link ReadonlyLayout}，值為範例
- * - 系統區塊（單號以外）為佔位；寬度為「分割檢視右側」時以 1440px 視窗的右側寬度呈現
+ * - 系統區塊（單號以外）為佔位；使用分割檢視的資料類別以目前視窗下分割檢視右側的寬度呈現
  */
 function LayoutPreview({
   state,
@@ -903,12 +956,15 @@ function LayoutPreview({
   fields,
   kind,
   width,
+  splitWidth,
 }: {
   state: DesignerState;
   schema: DesignerSchema;
   fields: FieldDefinition[];
   kind: PreviewKind;
   width: PreviewWidth;
+  /** 分割檢視右側卡片的寬度（`width = 'split'` 時）。 */
+  splitWidth: number;
 }) {
   const { token } = theme.useToken();
   const config = useMemo(
@@ -978,10 +1034,7 @@ function LayoutPreview({
     <section aria-label="表單預覽" data-preview-kind={kind} data-preview-width={width}>
       {width === 'split' ? (
         // 與分割檢視右側相同的卡片與寬度
-        <Card
-          data-testid="split-preview-frame"
-          style={{ width: SPLIT_DETAIL_PREVIEW_WIDTH, maxWidth: '100%' }}
-        >
+        <Card data-testid="split-preview-frame" style={{ width: splitWidth, maxWidth: '100%' }}>
           {content}
         </Card>
       ) : (

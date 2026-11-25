@@ -444,59 +444,6 @@ for (const { viewport, three } of [
   });
 }
 
-// 設計器預覽：唯讀預覽與分割檢視右側寬度，與實際的右側預覽一致（#252）
-test('form layout designer previews the split view right side', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await setup(page);
-
-  // 實際的右側預覽
-  await page.goto(`/#/entities/customer?selected=${customerId(1)}`);
-  const preview = page.getByTestId('record-preview');
-  await expect(preview.locator('[data-item="name"]')).toBeVisible();
-  const detail = (await page.locator('.master-split-detail').boundingBox())!;
-  expect(Math.round(detail.width), '右側寬度常數').toBe(SPLIT_DETAIL_PREVIEW_WIDTH);
-  const realGrid = (await preview.locator('.form-layout-container').first().boundingBox())!;
-  const realName = (await preview.locator('[data-item="name"]').boundingBox())!;
-  const realTax = (await preview.locator('[data-item="tax_id"]').boundingBox())!;
-
-  await page.goto('/#/schema/customer/form-layout');
-  await expect(page.getByTestId('layout-applies-to')).toHaveText(
-    '這份版面套用在：新增、編輯與檢視的表單、分割檢視右側的唯讀預覽、分割檢視右側的編輯與新增。',
-  );
-  await page.getByText('預覽', { exact: true }).click();
-  const designerPreview = page.getByRole('region', { name: '表單預覽' });
-  // 預設：編輯表單、整頁
-  await expect(designerPreview.locator('[data-item="name"] input')).toBeDisabled();
-  await expect(page.getByTestId('split-preview-frame')).toHaveCount(0);
-
-  // 唯讀預覽、分割檢視右側：寬度與欄位位置與實際的右側預覽相同
-  await page.getByText('唯讀預覽', { exact: true }).click();
-  await page.getByText('分割檢視右側', { exact: true }).click();
-  const frame = page.getByTestId('split-preview-frame');
-  await expect(frame).toBeVisible();
-  expect(Math.round((await frame.boundingBox())!.width)).toBe(SPLIT_DETAIL_PREVIEW_WIDTH);
-  await expect(designerPreview.getByRole('textbox')).toHaveCount(0);
-  await expect(frame.locator('[data-item="name"]')).toContainText('公司名稱範例');
-  const grid = (await frame.locator('.form-layout-container').first().boundingBox())!;
-  const name = (await frame.locator('[data-item="name"]').boundingBox())!;
-  const tax = (await frame.locator('[data-item="tax_id"]').boundingBox())!;
-  expect(Math.abs(grid.width - realGrid.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(name.width - realName.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(tax.width - realTax.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(name.height - realName.height)).toBeLessThanOrEqual(1);
-  await page.screenshot({ path: test.info().outputPath('readonly-split.png') });
-
-  // 編輯表單、分割檢視右側
-  await page.getByText('編輯表單', { exact: true }).click();
-  await expect(frame.locator('[data-item="name"] input')).toBeDisabled();
-  await page.screenshot({ path: test.info().outputPath('form-split.png') });
-
-  // 整頁：不再限制寬度
-  await page.getByText('整頁', { exact: true }).click();
-  await expect(page.getByTestId('split-preview-frame')).toHaveCount(0);
-  expect((await designerPreview.boundingBox())!.width).toBeGreaterThan(SPLIT_DETAIL_PREVIEW_WIDTH);
-});
-
 // 從分割檢視右側調整表單版面（#253）：返回與存檔後回到原本選取的資料
 test('adjust form layout from the split view and come back', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -621,6 +568,8 @@ for (const viewport of [1440, 1280]) {
 interface ItemPlace {
   item: string;
   section: string;
+  /** 區塊實際顯示的欄數（含寬度不足時的縮減）。 */
+  columns: number;
   row: number;
   x: number;
   width: number;
@@ -645,6 +594,7 @@ async function layoutPlaces(root: ReturnType<Page['locator']>): Promise<ItemPlac
       return items.map(({ el, box }) => ({
         item: el.getAttribute('data-item')!,
         section: title,
+        columns: getComputedStyle(grid).gridTemplateColumns.split(' ').length,
         row: rows.findIndex((y) => Math.abs(y - box.top) < 2),
         x: box.left - left,
         width: box.width,
@@ -654,8 +604,8 @@ async function layoutPlaces(root: ReturnType<Page['locator']>): Promise<ItemPlac
 }
 
 function expectSamePlaces(actual: ItemPlace[], expected: ItemPlace[], label: string) {
-  const outline = (places: ItemPlace[]) => places.map((p) => [p.section, p.item, p.row]);
-  expect(outline(actual), `${label}：區塊、項目與列`).toEqual(outline(expected));
+  const outline = (places: ItemPlace[]) => places.map((p) => [p.section, p.columns, p.item, p.row]);
+  expect(outline(actual), `${label}：區塊、欄數、項目與列`).toEqual(outline(expected));
   actual.forEach((p, i) => {
     const e = expected[i]!;
     expect(Math.abs(p.x - e.x), `${label}：${p.item} 的欄位置`).toBeLessThanOrEqual(1);
@@ -739,63 +689,120 @@ for (const { entity, label, fields, details } of [
   },
   { entity: 'supplier', label: '廠商', fields: FULL_SUPPLIER_FIELDS, details: [] },
 ]) {
-  for (const preset of [true, false]) {
-    const name = `${label}${preset ? '預設' : '自訂'}版面`;
-    test(`designer split preview matches the right side: ${name}`, async ({ page }) => {
-      await page.setViewportSize({ width: 1440, height: 1000 });
-      const layout = preset ? defaultLayout(entity, fields, details) : CUSTOMER_FORM_LAYOUT;
-      await setup(page, ADMIN, layout, { [entity]: fields });
+  for (const kind of ['preset', 'custom', 'wide'] as const) {
+    for (const viewport of [1440, 1280]) {
+      const name = `${label}${{ preset: '預設', custom: '自訂', wide: '3、4 欄' }[kind]}版面 ${viewport}px`;
+      test(`designer split preview matches the right side: ${name}`, async ({ page }) => {
+        await page.setViewportSize({ width: viewport, height: 1000 });
+        const layout =
+          kind === 'preset'
+            ? defaultLayout(entity, fields, details)
+            : kind === 'custom'
+              ? CUSTOMER_FORM_LAYOUT
+              : WIDE_CUSTOMER_LAYOUT;
+        await setup(page, ADMIN, layout, { [entity]: fields });
 
-      // 實際的分割檢視右側：唯讀、編輯、新增
-      await page.goto(`/#/entities/${entity}?selected=${customerId(1)}`);
-      const preview = page.getByTestId('record-preview');
-      await expect(preview.locator('[data-item="name"]')).toBeVisible();
-      await expect(preview.getByText('單號')).toHaveCount(0);
-      const readonly = await layoutPlaces(preview);
-      await page.goto(`/#/entities/${entity}?selected=${customerId(1)}&mode=edit`);
-      const panel = page.getByTestId('record-form-panel');
-      await expect(panel.locator('[data-item="name"] input')).toBeVisible();
-      const edit = await layoutPlaces(panel);
-      await page
-        .getByTestId('page-header')
-        .getByRole('button', { name: /新\s*增/ })
-        .click();
-      await expect(panel.getByRole('heading', { name: `新增${label}` })).toBeVisible();
-      const create = await layoutPlaces(panel);
-      await expect(panel.getByText('單號')).toHaveCount(0);
-      expectSamePlaces(create, edit, '新增與編輯');
+        // 實際的分割檢視右側：唯讀、編輯、新增
+        await page.goto(`/#/entities/${entity}?selected=${customerId(1)}`);
+        const preview = page.getByTestId('record-preview');
+        await expect(preview.locator('[data-item="name"]')).toBeVisible();
+        await expect(preview.getByText('單號')).toHaveCount(0);
+        const detailWidth = (await page.locator('.master-split-detail').boundingBox())!.width;
+        if (viewport === 1440) {
+          expect(Math.round(detailWidth), '右側寬度常數').toBe(SPLIT_DETAIL_PREVIEW_WIDTH);
+        }
+        const readonly = await layoutPlaces(preview);
+        await page.goto(`/#/entities/${entity}?selected=${customerId(1)}&mode=edit`);
+        const panel = page.getByTestId('record-form-panel');
+        await expect(panel.locator('[data-item="name"] input')).toBeVisible();
+        const edit = await layoutPlaces(panel);
+        await page
+          .getByTestId('page-header')
+          .getByRole('button', { name: /新\s*增/ })
+          .click();
+        await expect(panel.getByRole('heading', { name: `新增${label}` })).toBeVisible();
+        const create = await layoutPlaces(panel);
+        await expect(panel.getByText('單號')).toHaveCount(0);
+        expectSamePlaces(create, edit, '新增與編輯');
 
-      if (preset) {
-        // 基本資料第 1 列：編號｜公司名稱；第 2 列：簡稱｜統一編號
-        const basic = readonly.filter((p) => p.section === '基本資料');
-        expect(basic.slice(0, 4).map((p) => [p.item, p.row])).toEqual([
-          ['code', 0],
-          ['name', 0],
-          ['short_name', 1],
-          ['tax_id', 1],
-        ]);
-      }
+        if (kind === 'preset') {
+          // 基本資料第 1 列：編號｜公司名稱；第 2 列：簡稱｜統一編號
+          const basic = readonly.filter((p) => p.section === '基本資料');
+          expect(basic.slice(0, 4).map((p) => [p.item, p.row])).toEqual([
+            ['code', 0],
+            ['name', 0],
+            ['short_name', 1],
+            ['tax_id', 1],
+          ]);
+        }
+        if (kind === 'wide') {
+          // 4 欄區塊在右側為 2 欄；3 欄區塊在 1440px 為 3 欄、1280px 為 2 欄
+          const columnsOf = (title: string) => readonly.find((p) => p.section === title)!.columns;
+          expect(columnsOf('四欄區塊')).toBe(2);
+          expect(columnsOf('三欄區塊')).toBe(viewport === 1440 ? 3 : 2);
+        }
 
-      // 設計器：區塊與「尚未放進版面」都沒有單號
-      await page.goto(`/#/schema/${entity}/form-layout`);
-      await expect(page.getByText(`表單版面：${label}`)).toBeVisible();
-      await expect(page.getByText('單號', { exact: true })).toHaveCount(0);
-      await expect(page.getByRole('button', { name: '單號' })).toHaveCount(0);
+        // 設計器：區塊與「尚未放進版面」都沒有單號
+        await page.goto(`/#/schema/${entity}/form-layout`);
+        await expect(page.getByText(`表單版面：${label}`)).toBeVisible();
+        await expect(page.getByTestId('layout-applies-to')).toHaveText(
+          '這份版面套用在：分割檢視右側的唯讀預覽、分割檢視右側的編輯與新增。',
+        );
+        await expect(page.getByText('單號', { exact: true })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: '單號' })).toHaveCount(0);
+        // 設計畫面：欄數超過右側實際可顯示的欄數時提示
+        const hints = await page
+          .getByTestId('split-columns-hint')
+          .evaluateAll((els) =>
+            els.map((el) => [el.closest('section')!.getAttribute('aria-label'), el.textContent]),
+          );
+        expect(hints).toEqual(
+          kind === 'wide'
+            ? [
+                ['區塊：四欄區塊', '分割檢視右側會顯示為 2 欄'],
+                ...(viewport === 1280 ? [['區塊：三欄區塊', '分割檢視右側會顯示為 2 欄']] : []),
+              ]
+            : [],
+        );
+        await page.screenshot({ path: test.info().outputPath(`${entity}-${kind}-design.png`) });
 
-      await page.getByText('預覽', { exact: true }).click();
-      await page.getByText('分割檢視右側', { exact: true }).click();
-      const frame = page.getByTestId('split-preview-frame');
-      await page.getByText('唯讀預覽', { exact: true }).click();
-      await expect(frame.locator('[data-item="name"]')).toContainText('公司名稱範例');
-      await expect(frame.getByText('單號')).toHaveCount(0);
-      expectSamePlaces(await layoutPlaces(frame), readonly, '唯讀預覽');
-      await page.screenshot({ path: test.info().outputPath(`${entity}-${preset}-readonly.png`) });
+        // 預覽：沒有「整頁」，寬度與目前視窗下實際的右側相同
+        await page.getByText('預覽', { exact: true }).click();
+        await expect(page.getByText('整頁', { exact: true })).toHaveCount(0);
+        const frame = page.getByTestId('split-preview-frame');
+        await expect(frame).toBeVisible();
+        expect(
+          Math.abs((await frame.boundingBox())!.width - detailWidth),
+          '預覽寬度',
+        ).toBeLessThanOrEqual(1);
+        await page.getByText('唯讀預覽', { exact: true }).click();
+        await expect(frame.locator('[data-item="name"]')).toContainText('公司名稱範例');
+        await expect(frame.getByText('單號')).toHaveCount(0);
+        expectSamePlaces(await layoutPlaces(frame), readonly, '唯讀預覽');
+        await page.screenshot({ path: test.info().outputPath(`${entity}-${kind}-readonly.png`) });
 
-      await page.getByText('編輯表單', { exact: true }).click();
-      await expect(frame.locator('[data-item="name"] input')).toBeDisabled();
-      await expect(frame.getByText('單號')).toHaveCount(0);
-      expectSamePlaces(await layoutPlaces(frame), edit, '編輯表單');
-      await page.screenshot({ path: test.info().outputPath(`${entity}-${preset}-form.png`) });
-    });
+        await page.getByText('編輯表單', { exact: true }).click();
+        await expect(frame.locator('[data-item="name"] input')).toBeDisabled();
+        await expect(frame.getByText('單號')).toHaveCount(0);
+        expectSamePlaces(await layoutPlaces(frame), edit, '編輯表單');
+        await page.screenshot({ path: test.info().outputPath(`${entity}-${kind}-form.png`) });
+      });
+    }
   }
 }
+
+// 還原成預設的確認文字（#260）：客戶、廠商為分組的預設版面
+test('reset confirmation describes the grouped default layout', async ({ page }) => {
+  await setup(page);
+  await page.goto('/#/schema/customer/form-layout');
+  await page.getByRole('button', { name: /還原成預設/ }).click();
+  const confirm = page.locator('.ant-popconfirm');
+  await expect(confirm).toContainText('還原成預設版面？');
+  await expect(confirm).toContainText('預設的分組版面');
+  await expect(confirm).not.toContainText('單欄');
+  await expect(confirm.getByRole('button', { name: /還\s*原/ })).toBeVisible();
+  await page.screenshot({
+    path: test.info().outputPath('reset-confirm.png'),
+    animations: 'disabled',
+  });
+});

@@ -33,9 +33,10 @@ import { RecordPreview } from './RecordPreview';
 import { RecordViewToggle } from './RecordViewToggle';
 import { RecordFormPanel } from './RecordFormPage';
 import { useUnsavedGuard } from './useUnsavedGuard';
+import { SPLIT_PICKER_WIDTH } from '../../records/splitPreviewWidth';
 
 /** 左側列表的寬度。 */
-export const PICKER_WIDTH = 320;
+export const PICKER_WIDTH = SPLIT_PICKER_WIDTH;
 
 /** 捲動到距離底部多少 px 內時載入下一頁。 */
 const LOAD_MORE_THRESHOLD = 48;
