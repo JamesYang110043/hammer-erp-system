@@ -871,7 +871,7 @@ fn parse_bool(raw: &str) -> Result<bool, String> {
 // ---------------------------------------------------------------------------
 
 /// 載入有效的資料類別、其所有欄位定義（含已停用）與資料的存放位置。
-async fn load_entity(
+pub(crate) async fn load_entity(
     conn: &mut PgConnection,
     key: &str,
 ) -> Result<(EntityDefinition, Vec<FieldDefinition>, Store), CoreError> {
@@ -1082,7 +1082,9 @@ impl Store {
         }
     }
 
-    async fn list_before(
+    /// 選擇器的一批資料：未刪除（系統資料表另外排除 `is_active = false`）、`id` 小於 `before`、
+    /// 由新到舊。
+    pub(crate) async fn list_before(
         &self,
         conn: &mut PgConnection,
         entity_id: Id,

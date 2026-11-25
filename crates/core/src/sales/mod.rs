@@ -4,10 +4,12 @@
 //! - [`save`]：存檔時的稅別預設值、明細檢查與金額計算
 //! - [`orders`]：訂單的確認、手動結案、作廢（[`SalesOrderHandler`]）
 //! - [`shipments`]：出貨單存檔時的檢查、過帳與作廢（[`ShipmentHandler`]）
+//! - [`product_lookup`]：銷貨用商品選擇 API（可用客戶品名搜尋，M11）
 //! - [`returns`]：銷貨退回存檔時從出貨單帶入與檢查、過帳與作廢（[`SalesReturnHandler`]）
 
 pub mod amounts;
 pub mod orders;
+pub mod product_lookup;
 pub mod returns;
 pub mod save;
 pub mod shipments;

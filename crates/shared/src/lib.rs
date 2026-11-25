@@ -22,6 +22,7 @@ pub mod pagination;
 pub mod permission;
 pub mod record;
 pub mod role;
+pub mod sales;
 pub mod schema;
 pub mod setup;
 pub mod tax_rate;
