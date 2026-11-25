@@ -12,20 +12,35 @@ export type PreviewKind = 'form' | 'readonly';
 /** 預覽寬度：整頁，或分割檢視右側。 */
 export type PreviewWidth = 'full' | 'split';
 
-export { SPLIT_DETAIL_PREVIEW_WIDTH } from './splitPreviewWidth';
+export {
+  SPLIT_DETAIL_PADDING,
+  SPLIT_DETAIL_PREVIEW_WIDTH,
+  displayedColumns,
+  splitDetailWidth,
+} from './splitPreviewWidth';
 
-/** 這份版面套用的畫面（設計器上方的說明）。 */
+/**
+ * 這份版面套用的畫面（設計器上方的說明），只列實際存在的畫面：使用分割檢視的資料類別
+ *（客戶、廠商）只在分割檢視右側新增、編輯與檢視（#260）。
+ */
 export function layoutAppliesTo(entityKey: string): string[] {
-  const screens = ['新增、編輯與檢視的表單'];
-  if (usesSplitView(entityKey)) {
-    screens.push('分割檢視右側的唯讀預覽', '分割檢視右側的編輯與新增');
-  }
-  return screens;
+  return usesSplitView(entityKey)
+    ? ['分割檢視右側的唯讀預覽', '分割檢視右側的編輯與新增']
+    : ['新增、編輯與檢視的表單'];
 }
 
-/** 可以切換「整頁／分割檢視右側」寬度（使用分割檢視的資料類別）。 */
+/**
+ * 預覽固定為分割檢視右側的寬度（使用分割檢視的資料類別，#260）；其他資料類別為整頁。
+ */
 export function hasSplitPreview(entityKey: string): boolean {
   return usesSplitView(entityKey);
+}
+
+/** 「還原成預設」的確認文字：客戶、廠商為分組的預設版面（#254）。 */
+export function resetDescription(hasPreset: boolean): string {
+  return hasPreset
+    ? '表單會回到預設的分組版面（基本資料、發票資訊、交易條件、其他，每個區塊 2 欄）。'
+    : '表單會回到依欄位定義排列的單欄畫面。';
 }
 
 /**
