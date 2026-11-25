@@ -107,6 +107,38 @@ pub async fn product_tax_types<'e>(
     Ok(rows)
 }
 
+/// 客戶是否存在且未刪除（銷貨用商品選擇 API，§8.9）。
+pub async fn customer_exists<'e>(
+    executor: impl PgExecutor<'e>,
+    customer_id: Uuid,
+) -> Result<bool, DbError> {
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM customers WHERE id = $1 AND deleted_at IS NULL) AS "e!""#,
+        customer_id,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(exists)
+}
+
+/// 客戶 `customer_id` 所有未刪除的客戶品名 `(product_id, name)`（銷貨用商品選擇 API，§8.9）。
+pub async fn all_customer_product_names<'e>(
+    executor: impl PgExecutor<'e>,
+    customer_id: Uuid,
+) -> Result<Vec<(Uuid, String)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT product_id, name
+        FROM customer_product_names
+        WHERE customer_id = $1 AND deleted_at IS NULL
+        "#,
+        customer_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.product_id, r.name)).collect())
+}
+
 /// 品名的來源（§8.9「明細的品名」）：未刪除商品的 `name`，`(id, name)`。
 pub async fn product_names<'e>(
     executor: impl PgExecutor<'e>,

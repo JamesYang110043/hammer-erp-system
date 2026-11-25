@@ -24,6 +24,7 @@ pub mod inventory;
 pub mod invoicing;
 pub mod layouts;
 pub mod records;
+pub mod sales;
 pub mod setup;
 pub mod users;
 
@@ -140,6 +141,7 @@ fn protected_routes() -> Router<AppState> {
             "/inventory/allocation-preview",
             post(inventory::allocation_preview),
         )
+        .route("/sales/product-lookup", get(sales::product_lookup))
         .route("/entities", get(entities::list).post(entities::create))
         // 固定路徑 `order` 優先於 `{key}`。`order` 也是合法的資料類別代碼，
         // 所以同一路徑的 GET、PATCH、DELETE 轉給單一資料類別的端點
