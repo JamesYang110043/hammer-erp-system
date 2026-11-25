@@ -40,6 +40,7 @@ use hammer_shared::record::{
     CreateRecordRequest, DeleteRecordQuery, LookupItem, LookupQuery, Record, RecordListQuery,
     UpdateRecordRequest,
 };
+use hammer_shared::sales::{SalesProductLookupItem, SalesProductLookupQuery};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
@@ -1012,6 +1013,21 @@ impl ApiClient {
         let builder = self
             .http
             .get(entity_endpoint(server_url, key, None, "/records/lookup")?)
+            .bearer_auth(token)
+            .query(query);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/sales/product-lookup`（銷貨用商品選擇，可用客戶品名搜尋）。
+    pub async fn sales_product_lookup(
+        &self,
+        server_url: &str,
+        token: &str,
+        query: &SalesProductLookupQuery,
+    ) -> Result<Vec<SalesProductLookupItem>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/sales/product-lookup"))
             .bearer_auth(token)
             .query(query);
         authed(read_json(send(builder).await?).await)

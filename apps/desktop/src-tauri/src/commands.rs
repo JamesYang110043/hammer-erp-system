@@ -36,6 +36,7 @@ use hammer_shared::record::{
     CreateRecordRequest, DeleteRecordQuery, LookupItem, LookupQuery, Record, RecordListQuery,
     UpdateRecordRequest,
 };
+use hammer_shared::sales::{SalesProductLookupItem, SalesProductLookupQuery};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
@@ -839,6 +840,17 @@ pub async fn lookup_records(
     query: LookupQuery,
 ) -> Result<Vec<LookupItem>, ClientError> {
     state.lookup_records(&key, &query).await
+}
+
+/// 銷貨單據明細的商品選擇器（需要 `record.read`，docs/architecture.md §8.9「銷貨用商品選擇 API」）：
+/// 比對商品標題與這位客戶的客戶品名，回傳依帶入順序決定的品名。
+#[tauri::command]
+#[specta::specta]
+pub async fn sales_product_lookup(
+    state: State<'_, AppState>,
+    query: SalesProductLookupQuery,
+) -> Result<Vec<SalesProductLookupItem>, ClientError> {
+    state.sales_product_lookup(&query).await
 }
 
 /// 開啟選擇檔案的對話框並上傳（需要 `record.write`）。使用者取消時回傳 `null`。

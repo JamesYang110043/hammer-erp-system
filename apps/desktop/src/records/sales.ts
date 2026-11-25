@@ -52,6 +52,7 @@ export const SALES_FIELDS = {
   total: 'total',
   shipAddress: 'ship_address',
   product: 'product_id',
+  productName: 'product_name',
   qty: 'qty',
   unitPrice: 'unit_price',
   discountRate: 'discount_rate',
@@ -190,7 +191,7 @@ export function unshippedQty(qty: unknown, shippedQty: unknown): string | undefi
 }
 
 /**
- * 訂單帶入出貨單的明細（JSON 存值）：未出貨數量大於 0 的每一列，帶入訂單明細、商品、單價、折扣率，
+ * 訂單帶入出貨單的明細（JSON 存值）：未出貨數量大於 0 的每一列，帶入訂單明細、商品、品名、單價、折扣率，
  * 數量為未出貨數量，批號留空（先進先出）。
  */
 export function shipmentLinesFromOrder(order: Pick<DataRecord, 'lines'>): RecordData[] {
@@ -203,6 +204,7 @@ export function shipmentLinesFromOrder(order: Pick<DataRecord, 'lines'>): Record
       {
         [SALES_FIELDS.salesOrderLine]: line.id,
         [SALES_FIELDS.product]: line.data[SALES_FIELDS.product] ?? null,
+        [SALES_FIELDS.productName]: line.data[SALES_FIELDS.productName] ?? null,
         [SALES_FIELDS.qty]: qty!,
         [SALES_FIELDS.unitPrice]: line.data[SALES_FIELDS.unitPrice] ?? null,
         [SALES_FIELDS.discountRate]: line.data[SALES_FIELDS.discountRate] ?? '0',
@@ -539,8 +541,8 @@ export function salesReturnableQty(
 }
 
 /**
- * 出貨單帶入銷貨退回的明細（JSON 存值）：可退數量大於 0 的每一列，帶入出貨明細、商品、單價、折扣率
- * （商品、單價、折扣率為系統維護，只用於顯示與金額預覽，存檔時由伺服器帶入），數量為可退數量。
+ * 出貨單帶入銷貨退回的明細（JSON 存值）：可退數量大於 0 的每一列，帶入出貨明細、商品、品名、單價、
+ * 折扣率（商品、品名、單價、折扣率為系統維護，只用於顯示與金額預覽，存檔時由伺服器帶入），數量為可退數量。
  */
 export function returnLinesFromShipment(
   shipment: Pick<DataRecord, 'lines'>,
@@ -555,10 +557,34 @@ export function returnLinesFromShipment(
       {
         [SALES_FIELDS.shipmentLine]: line.id,
         [SALES_FIELDS.product]: line.data[SALES_FIELDS.product] ?? null,
+        [SALES_FIELDS.productName]: line.data[SALES_FIELDS.productName] ?? null,
         [SALES_FIELDS.unitPrice]: line.data[SALES_FIELDS.unitPrice] ?? null,
         [SALES_FIELDS.discountRate]: line.data[SALES_FIELDS.discountRate] ?? '0',
         [SALES_FIELDS.qty]: qty!,
       },
     ];
   });
+}
+
+/** 有品名帶入的明細子表：訂單、出貨明細（銷貨退回的品名由伺服器從出貨明細帶入，§8.9「明細的品名」）。 */
+export function namedSalesLine(detailKey: string): boolean {
+  return detailKey === SALES_ORDER_LINE || detailKey === SHIPMENT_LINE;
+}
+
+/** 銷貨用商品選擇 API 的一筆結果中與品名有關的部分。 */
+export interface ProductNameCandidate {
+  id: string;
+  product_name: string;
+}
+
+/**
+ * 商品 `productId` 要帶入的品名：選擇 API 的結果中有這個商品時用它的 `product_name`（客戶品名 ?? 商品名稱），
+ * 否則用 `fallback`（商品名稱）。
+ */
+export function productNameOf(
+  items: readonly ProductNameCandidate[] | undefined,
+  productId: string,
+  fallback: string | undefined,
+): string | undefined {
+  return items?.find((i) => i.id === productId)?.product_name ?? fallback;
 }

@@ -130,3 +130,33 @@ export function useDocumentLotTransactions(
     enabled: Boolean(id),
   });
 }
+
+/** 銷貨用商品選擇 API 的快取鍵（客戶品名、商品名稱改變時一併失效）。 */
+export const salesProductLookupKey = ['sales-product-lookup'] as const;
+
+/**
+ * 銷貨用商品選擇的查詢設定（docs/architecture.md §8.9「銷貨用商品選擇 API」，需要 `record.read`）：
+ * 比對商品標題與客戶 `customerId` 的客戶品名，回傳依帶入順序決定的品名。`useQuery` 與 `fetchQuery` 共用。
+ */
+export function salesProductLookupQuery(customerId: string | undefined, q: string, limit?: number) {
+  return {
+    queryKey: [...salesProductLookupKey, customerId ?? '', q, limit ?? null] as const,
+    queryFn: () =>
+      unwrap(
+        commands.salesProductLookup({
+          customer_id: customerId ?? null,
+          q: q || null,
+          limit: limit ?? null,
+        }),
+      ),
+  };
+}
+
+/** 銷貨單據明細的商品選擇器使用；`enabled` 為 `false` 時不查詢（下拉選單還沒打開）。 */
+export function useSalesProductLookup(customerId: string | undefined, q: string, enabled: boolean) {
+  return useQuery({
+    ...salesProductLookupQuery(customerId, q),
+    enabled,
+    placeholderData: keepPreviousData,
+  });
+}

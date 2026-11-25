@@ -213,6 +213,11 @@ export const commands = {
 	/**  關聯欄位的選擇器：依標題搜尋 `key` 的未刪除資料（需要 `record.read`）。 */
 	lookupRecords: (key: string, query: LookupQuery_Deserialize) => typedError<LookupItem[], ClientError_Serialize>(__TAURI_INVOKE("lookup_records", { key, query })),
 	/**
+	 *  銷貨單據明細的商品選擇器（需要 `record.read`，docs/architecture.md §8.9「銷貨用商品選擇 API」）：
+	 *  比對商品標題與這位客戶的客戶品名，回傳依帶入順序決定的品名。
+	 */
+	salesProductLookup: (query: SalesProductLookupQuery_Deserialize) => typedError<SalesProductLookupItem_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("sales_product_lookup", { query })),
+	/**
 	 *  開啟選擇檔案的對話框並上傳（需要 `record.write`）。使用者取消時回傳 `null`。
 	 * 
 	 *  選好檔案後先送一次進度（已送出 0），之後每送出一段送一次。超過伺服器的大小上限時回傳
@@ -2444,6 +2449,68 @@ export type RowPreview = {
 	values: { [key in string]: unknown },
 	/**  計算失敗的欄位 → 錯誤原因（繁體中文）。 */
 	errors: { [key in string]: string },
+};
+
+/**  銷貨用商品選擇 API 的一筆結果。 */
+export type SalesProductLookupItem = SalesProductLookupItem_Serialize | SalesProductLookupItem_Deserialize;
+
+/**  銷貨用商品選擇 API 的一筆結果。 */
+export type SalesProductLookupItem_Deserialize = {
+	id: string,
+	/**  商品標題（與通用 `lookup` 相同，預設 `{code} {name}`）。 */
+	title: string,
+	code: string,
+	name: string,
+	spec?: string | null,
+	/**  `goods` / `service`。 */
+	product_type: string,
+	/**  預設售價（未稅，4 位小數）；沒有設定時為 `null`。 */
+	default_sale_price: string | null,
+	/**  這位客戶的客戶品名；沒有設定或沒帶 `customer_id` 時為 `null`。 */
+	customer_product_name?: string | null,
+	/**  依帶入順序決定的品名（`customer_product_name` ?? `name`），選定後帶入明細的 `product_name`。 */
+	product_name: string,
+};
+
+/**  銷貨用商品選擇 API 的一筆結果。 */
+export type SalesProductLookupItem_Serialize = {
+	id: string,
+	/**  商品標題（與通用 `lookup` 相同，預設 `{code} {name}`）。 */
+	title: string,
+	code: string,
+	name: string,
+	spec: string | null,
+	/**  `goods` / `service`。 */
+	product_type: string,
+	/**  預設售價（未稅，4 位小數）；沒有設定時為 `null`。 */
+	default_sale_price: string | null,
+	/**  這位客戶的客戶品名；沒有設定或沒帶 `customer_id` 時為 `null`。 */
+	customer_product_name: string | null,
+	/**  依帶入順序決定的品名（`customer_product_name` ?? `name`），選定後帶入明細的 `product_name`。 */
+	product_name: string,
+};
+
+/**  `GET /api/v1/sales/product-lookup` 的 query string（桌面程式送出時使用；伺服器以參數清單解析）。 */
+export type SalesProductLookupQuery = SalesProductLookupQuery_Serialize | SalesProductLookupQuery_Deserialize;
+
+/**  `GET /api/v1/sales/product-lookup` 的 query string（桌面程式送出時使用；伺服器以參數清單解析）。 */
+export type SalesProductLookupQuery_Deserialize = {
+	/**  客戶 id；省略時與一般商品搜尋相同。 */
+	customer_id?: string | null,
+	/**  關鍵字（以空白分隔，每個詞都要出現）。 */
+	q?: string | null,
+	/**  筆數上限（預設 20、上限 50）。 */
+	limit?: number | null,
+};
+
+/**  `GET /api/v1/sales/product-lookup` 的 query string（桌面程式送出時使用；伺服器以參數清單解析）。 */
+export type SalesProductLookupQuery_Serialize = {
+	/**  客戶 id；省略時與一般商品搜尋相同。 */
+	customer_id?: string,
+	/**  關鍵字（以空白分隔，每個詞都要出現）。 */
+	q?: string,
+	/**  筆數上限（預設 20、上限 50）。 */
+	limit?: number,
 };
 
 /**  `PUT /api/v1/entities/{key}/form-layout` 的 request。 */
