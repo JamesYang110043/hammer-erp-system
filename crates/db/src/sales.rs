@@ -107,19 +107,57 @@ pub async fn product_tax_types<'e>(
     Ok(rows)
 }
 
-/// 未刪除商品 `product_id` 的 `name`（銷貨明細沒帶品名時的預設值，§8.9「明細的品名」）；
-/// 不存在或已刪除時為 `None`。
-pub async fn product_name<'e>(
+/// 品名的來源（§8.9「明細的品名」）：未刪除商品的 `name`，`(id, name)`。
+pub async fn product_names<'e>(
     executor: impl PgExecutor<'e>,
-    product_id: Uuid,
-) -> Result<Option<String>, DbError> {
-    let name = sqlx::query_scalar!(
-        "SELECT name FROM products WHERE id = $1 AND deleted_at IS NULL",
-        product_id,
+    ids: &[Uuid],
+) -> Result<Vec<(Uuid, String)>, DbError> {
+    let rows = sqlx::query!(
+        "SELECT id, name FROM products WHERE id = ANY($1) AND deleted_at IS NULL",
+        ids,
     )
-    .fetch_optional(executor)
+    .fetch_all(executor)
     .await?;
-    Ok(name)
+    Ok(rows.into_iter().map(|r| (r.id, r.name)).collect())
+}
+
+/// 品名的來源：客戶 `customer_id` 未刪除的客戶品名中，商品在 `product_ids` 內的 `(product_id, name)`
+/// （§8.7 `customer_product_names`，同一客戶同一商品最多一筆）。
+pub async fn customer_product_names<'e>(
+    executor: impl PgExecutor<'e>,
+    customer_id: Uuid,
+    product_ids: &[Uuid],
+) -> Result<Vec<(Uuid, String)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT product_id, name
+        FROM customer_product_names
+        WHERE customer_id = $1 AND product_id = ANY($2) AND deleted_at IS NULL
+        "#,
+        customer_id,
+        product_ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.product_id, r.name)).collect())
+}
+
+/// 品名的來源：未刪除的訂單明細的 `(id, product_name)`（出貨明細有 `sales_order_line_id` 時沿用）。
+pub async fn order_line_product_names<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+) -> Result<Vec<(Uuid, String)>, DbError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id, product_name
+        FROM sales_order_lines
+        WHERE id = ANY($1) AND deleted_at IS NULL
+        "#,
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.product_name)).collect())
 }
 
 /// 以 `FOR SHARE` 鎖定客戶（含已刪除）：回傳是否已刪除；不存在時為 `None`。鎖定後到 transaction 結束前

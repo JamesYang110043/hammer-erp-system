@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT product_id\n        FROM customer_product_names\n        WHERE customer_id = $1 AND product_id = ANY($2) AND NOT (id = ANY($3))\n          AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "customer_product_names",
+            "name": "product_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4627ce844050231856b3cdefc6237117efb376957f4bc3d3f1586613d7260761"
+}
