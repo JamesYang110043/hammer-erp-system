@@ -728,3 +728,126 @@ async fn relation_inactive_flag(pool: PgPool) {
     let r = product_ref(&get("customer", m.a).await);
     assert!(r.deleted && !r.inactive, "{r:?}");
 }
+
+/// 商品的客戶品名（#281，§8.7「商品畫面的客戶品名」）：依客戶編號排序；已刪除的客戶、客戶品名不出現，
+/// 停用的客戶出現；商品不存在或已刪除 → 404；沒有 `record.read` → 403。
+#[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
+async fn customer_names_of_product(pool: PgPool) {
+    let token = user(&pool).await;
+    let m = master_data(&pool, &token).await;
+    let uri = |product: Id| format!("/api/v1/products/{product}/customer-product-names");
+
+    // 依客戶編號排序：C000（後建立）在 C001 之前；C002 停用；C003 已刪除；C004 的客戶品名已刪除
+    let cpn = |name: &str, notes: Option<&str>| json!({ "data": { "product_id": m.p1, "name": name, "notes": notes } });
+    let c0 = create(
+        &pool,
+        &token,
+        "customer",
+        json!({ "data": { "code": "C000", "name": "客戶零" },
+                "lines": { "customer_product_name": [ cpn("零號扳手", Some("圖面 W-0")) ] } }),
+    )
+    .await;
+    let b = patch(
+        &pool,
+        &token,
+        "customer",
+        m.b,
+        json!({ "version": 1, "data": { "is_active": false },
+                "lines": { "customer_product_name": [ cpn("B 的扳手", None) ] } }),
+    )
+    .await;
+    let c3 = create(
+        &pool,
+        &token,
+        "customer",
+        json!({ "data": { "code": "C003", "name": "已刪除的客戶" },
+                "lines": { "customer_product_name": [ cpn("刪除客戶的扳手", None) ] } }),
+    )
+    .await;
+    sqlx::query("UPDATE customers SET deleted_at = now() WHERE id = $1")
+        .bind(c3.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let c4 = create(
+        &pool,
+        &token,
+        "customer",
+        json!({ "data": { "code": "C004", "name": "客戶四" },
+                "lines": { "customer_product_name": [ cpn("會被刪除", None) ] } }),
+    )
+    .await;
+    patch(
+        &pool,
+        &token,
+        "customer",
+        c4.id,
+        json!({ "version": c4.version, "data": {}, "lines": { "customer_product_name": [] } }),
+    )
+    .await;
+
+    let (status, body) = call(&pool, Method::GET, &uri(m.p1), &token, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().unwrap();
+    let summary: Vec<(&str, &str, bool)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r["customer_title"].as_str().unwrap(),
+                r["name"].as_str().unwrap(),
+                r["customer_is_active"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("C000 客戶零", "零號扳手", true),
+            ("C001 客戶 A", "X 型扳手", true),
+            ("C002 客戶 B", "B 的扳手", false),
+        ]
+    );
+    assert_eq!(rows[0]["customer_id"], json!(c0.id));
+    assert_eq!(rows[0]["notes"], "圖面 W-0");
+    assert_eq!(rows[2]["notes"], Value::Null);
+    assert_eq!(
+        rows[2]["id"],
+        json!(lines(&b, "customer_product_name")[0].id)
+    );
+
+    // 沒有客戶品名的商品：空陣列；停用的商品照常回傳
+    let (status, body) = call(&pool, Method::GET, &uri(m.p2), &token, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!([]));
+    sqlx::query("UPDATE products SET is_active = false WHERE id = $1")
+        .bind(m.p1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = call(&pool, Method::GET, &uri(m.p1), &token, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body.as_array().unwrap().len(), 3);
+
+    // 商品不存在、已刪除 → 404
+    let (status, body) = call(&pool, Method::GET, &uri(Id::now_v7()), &token, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["message"], "找不到此商品");
+    sqlx::query("UPDATE products SET deleted_at = now() WHERE id = $1")
+        .bind(m.p1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = call(&pool, Method::GET, &uri(m.p1), &token, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // 沒有 record.read → 403
+    sqlx::query(
+        "DELETE FROM role_permissions WHERE permission = 'record.read'
+           AND role_id = (SELECT id FROM roles WHERE code = 'editor')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (status, body) = call(&pool, Method::GET, &uri(m.p2), &token, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}

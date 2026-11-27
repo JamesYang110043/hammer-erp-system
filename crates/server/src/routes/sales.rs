@@ -4,13 +4,15 @@
 //! |---|---|---|
 //! | `GET /api/v1/sales/product-lookup?customer_id=&q=&limit=` | `record.read` | `200` `Vec<SalesProductLookupItem>` |
 //! | `GET /api/v1/sales/product-names?customer_id=&product_id=…` | `record.read` | `200` `Vec<SalesProductName>` |
+//! | `GET /api/v1/products/{id}/customer-product-names` | `record.read` | `200` `Vec<ProductCustomerName>` |
 //!
 //! 格式見 [`hammer_shared::sales`]。
 
 use axum::Json;
-use axum::extract::{Query, State};
-use hammer_core::sales::{product_lookup, product_names};
-use hammer_shared::sales::{SalesProductLookupItem, SalesProductName};
+use axum::extract::{Path, Query, State};
+use hammer_core::sales::{customer_names, product_lookup, product_names};
+use hammer_shared::Id;
+use hammer_shared::sales::{ProductCustomerName, SalesProductLookupItem, SalesProductName};
 
 use crate::{AppError, AppState, AuthUser};
 
@@ -37,5 +39,18 @@ pub async fn product_names(
 ) -> Result<Json<Vec<SalesProductName>>, AppError> {
     Ok(Json(
         product_names::product_names(&state.pool, &auth, &pairs).await?,
+    ))
+}
+
+/// `GET /api/v1/products/{id}/customer-product-names`
+///
+/// 商品的客戶品名：這個商品在各客戶的客戶品名（唯讀，M12）。
+pub async fn product_customer_names(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Id>,
+) -> Result<Json<Vec<ProductCustomerName>>, AppError> {
+    Ok(Json(
+        customer_names::product_customer_names(&state.pool, &auth, id).await?,
     ))
 }
