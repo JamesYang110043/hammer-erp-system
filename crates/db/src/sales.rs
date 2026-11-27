@@ -6,6 +6,7 @@
 //! - [`find_shipment_for_return`]：銷貨退回帶入表頭用的出貨單（`FOR SHARE`）
 //! - [`list_shipment_lines_for_return`]：銷貨退回帶入明細用的出貨明細
 //! - [`product_tax_types`]：新增時稅別的預設值（明細商品的稅別）
+//! - [`lookup_customer_name_matches`]、[`lookup_default_title_matches`]：銷貨用商品選擇 API 的 SQL 篩選
 //! - [`product_name_sources`]、[`order_line_product_names`]：明細品名的帶入來源
 //! - [`lock_customer`]、[`list_order_lines_for_update`]：確認訂單時鎖定客戶、讀取明細
 //! - [`count_customer_documents`]、[`count_open_orders_by_product`]：客戶、商品被銷貨單據引用時的限制
@@ -138,6 +139,76 @@ pub async fn all_customer_product_names<'e>(
     .fetch_all(executor)
     .await?;
     Ok(rows.into_iter().map(|r| (r.product_id, r.name)).collect())
+}
+
+/// 銷貨用商品選擇 API 的第一組（§8.9「效能」）：這位客戶未刪除的客戶品名中，`patterns` 每一個都符合
+/// 客戶品名（`ILIKE … ESCAPE '\'`）的未刪除、啟用中商品 id，由新到舊、最多 `limit` 筆。`patterns`
+/// 為空時為所有有客戶品名的商品。`patterns` 由呼叫端跳脫並加上前後的 `%`。
+pub async fn lookup_customer_name_matches<'e>(
+    executor: impl PgExecutor<'e>,
+    customer_id: Uuid,
+    patterns: &[String],
+    limit: i64,
+) -> Result<Vec<Uuid>, DbError> {
+    let ids = sqlx::query_scalar!(
+        r#"
+        SELECT p.id
+        FROM customer_product_names c
+        JOIN products p ON p.id = c.product_id
+        WHERE c.customer_id = $1 AND c.deleted_at IS NULL
+          AND p.deleted_at IS NULL AND p.is_active
+          AND NOT EXISTS (
+              SELECT 1 FROM UNNEST($2::text[]) AS t(pat)
+              WHERE c.name NOT ILIKE t.pat ESCAPE '\')
+        ORDER BY p.id DESC
+        LIMIT $3
+        "#,
+        customer_id,
+        patterns,
+        limit,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(ids)
+}
+
+/// 銷貨用商品選擇 API 的第二組（商品標題為預設範本 `{code} {name}` 時，§8.9「效能」）：未刪除、
+/// 啟用中的商品中，`patterns` 每一個都符合 `code`、`name` 或這位客戶的客戶品名任一個，且不屬於第一組
+/// （有客戶品名且每一個都符合客戶品名）的商品 id，由新到舊、最多 `limit` 筆。`customer_id` 為
+/// `None` 時只比對 `code`、`name`。
+pub async fn lookup_default_title_matches<'e>(
+    executor: impl PgExecutor<'e>,
+    customer_id: Option<Uuid>,
+    patterns: &[String],
+    limit: i64,
+) -> Result<Vec<Uuid>, DbError> {
+    let ids = sqlx::query_scalar!(
+        r#"
+        SELECT p.id
+        FROM products p
+        LEFT JOIN customer_product_names c
+          ON c.product_id = p.id AND c.customer_id = $1 AND c.deleted_at IS NULL
+        WHERE p.deleted_at IS NULL AND p.is_active
+          AND NOT EXISTS (
+              SELECT 1 FROM UNNEST($2::text[]) AS t(pat)
+              WHERE NOT (p.code ILIKE t.pat ESCAPE '\'
+                         OR p.name ILIKE t.pat ESCAPE '\'
+                         OR COALESCE(c.name ILIKE t.pat ESCAPE '\', false)))
+          AND NOT (
+              c.name IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM UNNEST($2::text[]) AS t(pat)
+                  WHERE c.name NOT ILIKE t.pat ESCAPE '\'))
+        ORDER BY p.id DESC
+        LIMIT $3
+        "#,
+        customer_id,
+        patterns,
+        limit,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(ids)
 }
 
 /// 帶入品名的來源（§8.9「明細的品名」）：未刪除商品（含停用）的 `name`，以及客戶 `customer_id`

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.id\n        FROM products p\n        LEFT JOIN customer_product_names c\n          ON c.product_id = p.id AND c.customer_id = $1 AND c.deleted_at IS NULL\n        WHERE p.deleted_at IS NULL AND p.is_active\n          AND NOT EXISTS (\n              SELECT 1 FROM UNNEST($2::text[]) AS t(pat)\n              WHERE NOT (p.code ILIKE t.pat ESCAPE '\\'\n                         OR p.name ILIKE t.pat ESCAPE '\\'\n                         OR COALESCE(c.name ILIKE t.pat ESCAPE '\\', false)))\n          AND NOT (\n              c.name IS NOT NULL\n              AND NOT EXISTS (\n                  SELECT 1 FROM UNNEST($2::text[]) AS t(pat)\n                  WHERE c.name NOT ILIKE t.pat ESCAPE '\\'))\n        ORDER BY p.id DESC\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "products",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "832cb6a8e1cb5d6cfbcbb6b9c815602dc94dbf236fc72cfccf1452bddff0d627"
+}
