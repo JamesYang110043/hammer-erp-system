@@ -55,7 +55,7 @@ function record(patch: Partial<DataRecord> = {}): DataRecord {
     record_no: null,
     title: '冷氣維修',
     data: { name: '冷氣維修', equipment: E1, photo: file.id },
-    relations: { equipment: { id: E1, title: '冷氣 A', deleted: true } },
+    relations: { equipment: { id: E1, title: '冷氣 A', deleted: true, inactive: false } },
     attachments: { photo: file },
     created_at: '2026-11-13T01:00:00Z',
     created_by: null,
@@ -300,7 +300,11 @@ describe('列表', () => {
       get_default_layout: () => GENERATED,
       list_layouts: () => [],
       list_records: () =>
-        page([record({ relations: { equipment: { id: E1, title: '冷氣 A', deleted: false } } })]),
+        page([
+          record({
+            relations: { equipment: { id: E1, title: '冷氣 A', deleted: false, inactive: false } },
+          }),
+        ]),
       ...extra,
     });
   }

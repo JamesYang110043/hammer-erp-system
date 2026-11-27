@@ -39,7 +39,7 @@ const OTHER_RETURN_ID = '0196f5a0-0000-7000-8000-000000000d32';
 const RETURN_LINE_1 = '0196f5a0-0000-7000-8000-000000000f11';
 
 const page = <T>(items: T[]) => ({ items, total: items.length, page: 1, page_size: 50 });
-const rel = (id: string, title: string) => ({ id, title, deleted: false });
+const rel = (id: string, title: string) => ({ id, title, deleted: false, inactive: false });
 const titleOf = (id: string) => (id === PRODUCT_ID ? PRODUCT_TITLE : PRODUCT2_TITLE);
 const DOC = {
   posted_at: null,

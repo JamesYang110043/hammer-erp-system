@@ -26,6 +26,7 @@ import type { Record as DataRecord, FieldDefinition, RelationRef } from '../../b
 import { relationLabel } from '../../records/display';
 import { useDebouncedValue } from '../../utils/useDebouncedValue';
 import { LOOKUP_DEBOUNCE_MS, RelationSelect } from './RelationSelect';
+import { RelationTitle } from './RelationTitle';
 import { documentStatus, formatQty } from '../../records/documents';
 import { initialFormValues } from '../../records/form';
 import { formatUnitCost, productStockPath } from '../../records/inventory';
@@ -430,6 +431,13 @@ export function SalesProductSelect({
       value={value || undefined}
       options={options}
       optionLabelProp="label"
+      labelRender={(props) =>
+        initial?.inactive && props.value === initial.id ? (
+          <RelationTitle relation={initial} />
+        ) : (
+          props.label
+        )
+      }
       optionRender={(option) => (
         <div>
           <div>{option.data.label}</div>

@@ -212,7 +212,12 @@ describe('盤點調整明細', () => {
             title: 'A001',
             data: { product_id: PRODUCT_ID, qty: '2.0000', reason: null, ...data },
             relations: {
-              product_id: { id: PRODUCT_ID, title: 'A001 不鏽鋼螺絲 M6', deleted: false },
+              product_id: {
+                id: PRODUCT_ID,
+                title: 'A001 不鏽鋼螺絲 M6',
+                deleted: false,
+                inactive: false,
+              },
             },
           },
         ],

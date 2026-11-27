@@ -41,7 +41,7 @@ const OLD_RETURN_ID = '0196f5a0-0000-7000-8000-000000000a30';
 const RETURN_LINE_ID = '0196f5a0-0000-7000-8000-000000000d01';
 
 const page = <T>(items: T[]) => ({ items, total: items.length, page: 1, page_size: 50 });
-const rel = (id: string, title: string) => ({ id, title, deleted: false });
+const rel = (id: string, title: string) => ({ id, title, deleted: false, inactive: false });
 const doc = (posted: string | null, voided: string | null = null) => ({
   posted_at: posted,
   posted_by: null,

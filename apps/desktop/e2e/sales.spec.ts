@@ -44,7 +44,7 @@ const CUSTOMER2_ID = '0196f5a0-0000-7000-8000-000000000d02';
 const CUSTOMER2_TITLE = 'C002 永和機械';
 
 const page = <T>(items: T[]) => ({ items, total: items.length, page: 1, page_size: 50 });
-const rel = (id: string, title: string) => ({ id, title, deleted: false });
+const rel = (id: string, title: string) => ({ id, title, deleted: false, inactive: false });
 const titleOf = (id: string) => (id === PRODUCT_ID ? PRODUCT_TITLE : PRODUCT2_TITLE);
 const DOC = {
   posted_at: null,
@@ -913,4 +913,57 @@ test('sales order: re-filling names on customer change uses one batch request', 
   await expect(cell(2, '品名')).toHaveValue('不鏽鋼螺絲 M6');
   expect(namesCalls).toHaveLength(2);
   await p.screenshot({ path: test.info().outputPath('order-batch-names-failed.png') });
+});
+
+test('sales order: line product that was deactivated is marked', async ({ page: p }) => {
+  const order = purchasingRecord({
+    id: SALES_ORDER_ID,
+    record_no: 'SO202611-0001',
+    title: ORDER_TITLE,
+    data: {
+      customer_id: CUSTOMER_ID,
+      order_date: '2026-11-19',
+      tax_type: 'taxable',
+      tax_included: false,
+      status: 'draft',
+      subtotal: '240.0000',
+      tax_amount: '12.0000',
+      total: '252.0000',
+    },
+    relations: { customer_id: rel(CUSTOMER_ID, CUSTOMER_TITLE) },
+    lines: {
+      sales_order_line: [
+        {
+          ...lineRecord(ORDER_LINE_1, {
+            product_id: PRODUCT_ID,
+            product_name: CUSTOMER_PRODUCT_NAME,
+            qty: '2',
+            unit_price: '120.0000',
+            discount_rate: '0',
+            amount: '240.0000',
+            shipped_qty: '0.0000',
+          }),
+          relations: { product_id: { ...rel(PRODUCT_ID, PRODUCT_TITLE), inactive: true } },
+        },
+      ],
+    },
+    document: DOC,
+  });
+  await mockTauri(p, {
+    ...baseHandlers(),
+    get_record: ({ key, id }) =>
+      key === 'customer'
+        ? customerRecord()
+        : key === 'product'
+          ? productRecord(id as string)
+          : order,
+  });
+  await p.goto(`/#/entities/sales_order/${SALES_ORDER_ID}`);
+  const lines = p.getByRole('region', { name: '訂單明細' });
+  const product = select(lines.locator('tbody tr.ant-table-row').first(), '商品');
+  await expect(product).toContainText(PRODUCT_TITLE);
+  await expect(product.getByText('已停用', { exact: true })).toBeVisible();
+  // 表頭的客戶沒有停用
+  await expect(select(p, '客戶').getByText('已停用', { exact: true })).toHaveCount(0);
+  await lines.screenshot({ path: test.info().outputPath('order-line-inactive-product.png') });
 });

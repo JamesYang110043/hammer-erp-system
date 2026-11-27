@@ -320,6 +320,7 @@ export function customerDetail(all: readonly DataRecord[], id: string): DataReco
                     id: PRODUCT_P001,
                     title: PRODUCT_TITLES[PRODUCT_P001]!,
                     deleted: false,
+                    inactive: false,
                   },
                 },
               },

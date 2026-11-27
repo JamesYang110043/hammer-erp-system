@@ -644,3 +644,87 @@ async fn shipment_and_return_product_names(pool: PgPool) {
     .await;
     assert_eq!(names(&so, "sales_order_line"), ["Y 型扳手", "尖嘴鉗"]);
 }
+
+/// `relations` 的 `inactive`（#280，§7.3）：指向停用的商品、客戶時為 `true`；已刪除時為 `false`
+/// （`deleted = true`）；沒有 `is_active` 的資料類別（單位）一律 `false`。存檔不受影響。
+#[sqlx::test(migrator = "hammer_core::db::MIGRATOR")]
+async fn relation_inactive_flag(pool: PgPool) {
+    let token = user(&pool).await;
+    let m = master_data(&pool, &token).await;
+    let get = |entity: &'static str, id: Id| {
+        let pool = pool.clone();
+        let token = token.clone();
+        async move {
+            let (status, body) =
+                call(&pool, Method::GET, &record_uri(entity, id), &token, None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            serde_json::from_value::<Record>(body).unwrap()
+        }
+    };
+    let product_ref = |customer: &Record| {
+        lines(customer, "customer_product_name")[0].relations["product_id"].clone()
+    };
+
+    let customer = get("customer", m.a).await;
+    let r = product_ref(&customer);
+    assert!(!r.inactive && !r.deleted);
+
+    // 停用商品 → 客戶品名的商品 inactive；修改客戶品名照常存檔
+    let product = get("product", m.p1).await;
+    assert!(!product.relations["unit_id"].inactive);
+    patch(
+        &pool,
+        &token,
+        "product",
+        m.p1,
+        json!({ "version": product.version, "data": { "is_active": false } }),
+    )
+    .await;
+    let customer = get("customer", m.a).await;
+    let r = product_ref(&customer);
+    assert!(r.inactive && !r.deleted, "{r:?}");
+    let row = lines(&customer, "customer_product_name")[0].id;
+    let customer = patch(
+        &pool,
+        &token,
+        "customer",
+        m.a,
+        json!({ "version": customer.version, "data": {},
+                "lines": { "customer_product_name": [
+                    { "id": row, "data": { "name": "停用後改名" } } ] } }),
+    )
+    .await;
+    assert!(product_ref(&customer).inactive);
+
+    // 單據的表頭與其他明細表：停用的客戶、商品
+    let (status, body) = call(
+        &pool,
+        Method::POST,
+        &records_uri("sales_order"),
+        &token,
+        Some(order_body(m.b, vec![line(m.p1), line(m.p2)])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let order: Record = serde_json::from_value(body).unwrap();
+    assert!(!order.relations["customer_id"].inactive);
+    let order_lines = lines(&order, "sales_order_line");
+    assert!(order_lines[0].relations["product_id"].inactive);
+    assert!(!order_lines[1].relations["product_id"].inactive);
+    sqlx::query("UPDATE customers SET is_active = false WHERE id = $1")
+        .bind(m.b)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let order = get("sales_order", order.id).await;
+    assert!(order.relations["customer_id"].inactive);
+
+    // 已刪除：deleted = true、inactive = false
+    sqlx::query("UPDATE products SET deleted_at = now() WHERE id = $1")
+        .bind(m.p1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let r = product_ref(&get("customer", m.a).await);
+    assert!(r.deleted && !r.inactive, "{r:?}");
+}

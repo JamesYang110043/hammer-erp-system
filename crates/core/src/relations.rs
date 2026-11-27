@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use hammer_db::record as record_db;
 use hammer_db::schema as schema_db;
 use hammer_db::sqlx::{PgConnection, PgTransaction};
-use hammer_db::system_record as system_db;
+use hammer_db::system_record::{self as system_db, ColumnType, IS_ACTIVE_COLUMN};
 use hammer_shared::Id;
 use hammer_shared::record::{Record, RelationRef};
 use hammer_shared::schema::{DataType, EntityStorage, FieldDefinition, FieldValue, parse_value};
@@ -163,6 +163,8 @@ pub async fn check_relations(
 /// 目標資料依目標資料類別的標題規則產生標題（含已刪除的資料；目標範本的關聯引用也讀取一層）；
 /// 目標為系統資料類別時讀取其專屬資料表（系統欄位與 `custom_data`）。找不到目標資料或目標資料類別時，
 /// `title` 為空字串、`deleted` 為 `true`。
+///
+/// `inactive`（M12）：目標未刪除、專屬資料表有 `is_active` 欄位且值為 `false`；與標題在同一次查詢讀取。
 pub async fn attach_relations(
     conn: &mut PgConnection,
     fields: &[FieldDefinition],
@@ -180,7 +182,8 @@ pub async fn attach_relations(
         return Ok(());
     }
 
-    let mut resolved: HashMap<(Id, Id), (String, bool)> = HashMap::new();
+    // (標題, 已刪除, 已停用)
+    let mut resolved: HashMap<(Id, Id), (String, bool, bool)> = HashMap::new();
     for (entity_id, mut ids) in by_entity {
         ids.sort();
         ids.dedup();
@@ -200,12 +203,19 @@ pub async fn attach_relations(
         let related = titles
             .related(conn, rows.iter().filter_map(|r| r.data.as_object()))
             .await?;
+        let has_is_active = table
+            .as_ref()
+            .and_then(|t| t.column(IS_ACTIVE_COLUMN))
+            .is_some_and(|c| c.column_type == ColumnType::Boolean);
         for row in rows {
             let title = match row.data.as_object() {
                 Some(data) => titles.render(row.id, row.record_no.as_deref(), data, &related),
                 None => String::new(),
             };
-            resolved.insert((entity_id, row.id), (title, row.deleted));
+            let inactive = has_is_active
+                && !row.deleted
+                && row.data.get(IS_ACTIVE_COLUMN) == Some(&Value::Bool(false));
+            resolved.insert((entity_id, row.id), (title, row.deleted, inactive));
         }
     }
 
@@ -213,16 +223,17 @@ pub async fn attach_relations(
         record.relations = values
             .into_iter()
             .map(|v| {
-                let (title, deleted) = resolved
+                let (title, deleted, inactive) = resolved
                     .get(&(v.entity_id, v.id))
                     .cloned()
-                    .unwrap_or_else(|| (String::new(), true));
+                    .unwrap_or_else(|| (String::new(), true, false));
                 (
                     v.field_key,
                     RelationRef {
                         id: v.id,
                         title,
                         deleted,
+                        inactive,
                     },
                 )
             })

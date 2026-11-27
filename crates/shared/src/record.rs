@@ -195,6 +195,10 @@ pub struct RelationRef {
     pub title: String,
     /// 目標資料已刪除（或找不到）。
     pub deleted: bool,
+    /// 目標資料已停用（M12，§7.3）：目標未刪除、目標資料類別有 `is_active` 欄位（系統資料表）且為
+    /// `false`。其他情況（沒有 `is_active`、自訂資料類別、已刪除）一律 `false`。只用於顯示。
+    #[serde(default)]
+    pub inactive: bool,
 }
 
 /// `GET /api/v1/entities/{key}/records/lookup` 的 query string（選擇器搜尋）。
@@ -787,13 +791,18 @@ mod tests {
                 id: target,
                 title: "EQ-001".into(),
                 deleted: true,
+                inactive: false,
             },
         );
         let v = serde_json::to_value(&with_relation).unwrap();
         assert_eq!(
             v["relations"],
-            json!({ "equipment": { "id": target, "title": "EQ-001", "deleted": true } })
+            json!({ "equipment": { "id": target, "title": "EQ-001", "deleted": true,
+                                   "inactive": false } })
         );
+        // 舊版伺服器沒有 inactive：視為 false
+        let old = json!({ "id": target, "title": "EQ-001", "deleted": false });
+        assert!(!serde_json::from_value::<RelationRef>(old).unwrap().inactive);
         assert_eq!(serde_json::from_value::<Record>(v).unwrap(), with_relation);
 
         let file_id = crate::new_id();

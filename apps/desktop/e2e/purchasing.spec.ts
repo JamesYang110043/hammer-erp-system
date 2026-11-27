@@ -90,7 +90,7 @@ function productRecord(id: string) {
   return purchasingRecord({ id, title, data: { code: title.split(' ')[0] } });
 }
 
-const rel = (id: string, title: string) => ({ id, title, deleted: false });
+const rel = (id: string, title: string) => ({ id, title, deleted: false, inactive: false });
 
 /** 採購明細（§8.8 範例二）。 */
 function orderLine(id: string, productId: string, qty: string, price: string, amount: string) {
