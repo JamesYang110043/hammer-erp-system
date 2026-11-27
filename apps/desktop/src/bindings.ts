@@ -218,6 +218,11 @@ export const commands = {
 	 */
 	salesProductLookup: (query: SalesProductLookupQuery_Deserialize) => typedError<SalesProductLookupItem_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("sales_product_lookup", { query })),
 	/**
+	 *  批次取得明細品名（需要 `record.read`，docs/architecture.md §8.9「批次取得明細品名 API」）：
+	 *  一次取得多個商品對客戶 `customer_id` 依帶入順序決定的品名。已刪除、不存在的商品不回傳。
+	 */
+	salesProductNames: (customerId: string, productIds: string[]) => typedError<SalesProductName_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("sales_product_names", { customerId, productIds })),
+	/**
 	 *  開啟選擇檔案的對話框並上傳（需要 `record.write`）。使用者取消時回傳 `null`。
 	 * 
 	 *  選好檔案後先送一次進度（已送出 0），之後每送出一段送一次。超過伺服器的大小上限時回傳
@@ -2511,6 +2516,27 @@ export type SalesProductLookupQuery_Serialize = {
 	q?: string,
 	/**  筆數上限（預設 20、上限 50）。 */
 	limit?: number,
+};
+
+/**  批次取得明細品名 API 的一筆結果。 */
+export type SalesProductName = SalesProductName_Serialize | SalesProductName_Deserialize;
+
+/**  批次取得明細品名 API 的一筆結果。 */
+export type SalesProductName_Deserialize = {
+	product_id: string,
+	/**  這位客戶的客戶品名；沒有設定時為 `null`。 */
+	customer_product_name?: string | null,
+	/**  依帶入順序決定的品名（`customer_product_name` ?? 商品的 `name`）。 */
+	product_name: string,
+};
+
+/**  批次取得明細品名 API 的一筆結果。 */
+export type SalesProductName_Serialize = {
+	product_id: string,
+	/**  這位客戶的客戶品名；沒有設定時為 `null`。 */
+	customer_product_name: string | null,
+	/**  依帶入順序決定的品名（`customer_product_name` ?? 商品的 `name`）。 */
+	product_name: string,
 };
 
 /**  `PUT /api/v1/entities/{key}/form-layout` 的 request。 */

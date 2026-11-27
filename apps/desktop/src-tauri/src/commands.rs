@@ -36,7 +36,7 @@ use hammer_shared::record::{
     CreateRecordRequest, DeleteRecordQuery, LookupItem, LookupQuery, Record, RecordListQuery,
     UpdateRecordRequest,
 };
-use hammer_shared::sales::{SalesProductLookupItem, SalesProductLookupQuery};
+use hammer_shared::sales::{SalesProductLookupItem, SalesProductLookupQuery, SalesProductName};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
@@ -851,6 +851,18 @@ pub async fn sales_product_lookup(
     query: SalesProductLookupQuery,
 ) -> Result<Vec<SalesProductLookupItem>, ClientError> {
     state.sales_product_lookup(&query).await
+}
+
+/// 批次取得明細品名（需要 `record.read`，docs/architecture.md §8.9「批次取得明細品名 API」）：
+/// 一次取得多個商品對客戶 `customer_id` 依帶入順序決定的品名。已刪除、不存在的商品不回傳。
+#[tauri::command]
+#[specta::specta]
+pub async fn sales_product_names(
+    state: State<'_, AppState>,
+    customer_id: Id,
+    product_ids: Vec<Id>,
+) -> Result<Vec<SalesProductName>, ClientError> {
+    state.sales_product_names(customer_id, &product_ids).await
 }
 
 /// 開啟選擇檔案的對話框並上傳（需要 `record.write`）。使用者取消時回傳 `null`。

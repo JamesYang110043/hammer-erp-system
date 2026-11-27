@@ -11,6 +11,7 @@ import {
   overShippedRows,
   previewInputs,
   previewRowErrors,
+  lineProductNames,
   productNameOf,
   returnLinesFromShipment,
   rowAllocations,
@@ -381,5 +382,23 @@ describe('product names (M11)', () => {
     expect(productNameOf(items, 'p3', '螺絲')).toBe('螺絲');
     expect(productNameOf(undefined, 'p1', '扳手 10mm')).toBe('扳手 10mm');
     expect(productNameOf([], 'p1', undefined)).toBeUndefined();
+  });
+});
+
+describe('lineProductNames (換客戶重新帶入)', () => {
+  it('maps each line by product id, keeping lines without a result', () => {
+    const names = [
+      { product_id: 'P001', product_name: 'X 型扳手' },
+      // 料號有包含關係（P001、P0011）也以 id 對應
+      { product_id: 'P0011', product_name: '扳手組' },
+    ];
+    expect(lineProductNames(['P0011', undefined, 'P001', 'P009', 'P001'], names)).toEqual([
+      '扳手組',
+      undefined,
+      'X 型扳手',
+      undefined,
+      'X 型扳手',
+    ]);
+    expect(lineProductNames([], names)).toEqual([]);
   });
 });

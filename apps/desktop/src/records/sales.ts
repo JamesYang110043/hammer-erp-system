@@ -571,6 +571,19 @@ export function namedSalesLine(detailKey: string): boolean {
   return detailKey === SALES_ORDER_LINE || detailKey === SHIPMENT_LINE;
 }
 
+/**
+ * 換客戶「重新帶入」品名：明細每一列（`lineProducts` 為各列的商品 id）依批次取得明細品名的結果
+ * `names`（`product_id` → `product_name`）對應的品名。沒有商品、或結果中沒有這個商品（已刪除）的列為
+ * `undefined`（保留原本的品名）。
+ */
+export function lineProductNames(
+  lineProducts: readonly (string | undefined)[],
+  names: readonly { product_id: string; product_name: string }[],
+): (string | undefined)[] {
+  const byId = new Map(names.map((n) => [n.product_id, n.product_name]));
+  return lineProducts.map((id) => (id ? byId.get(id) : undefined));
+}
+
 /** 銷貨用商品選擇 API 的一筆結果中與品名有關的部分。 */
 export interface ProductNameCandidate {
   id: string;
