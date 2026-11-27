@@ -174,7 +174,22 @@ function baseHandlers(): Record<string, E2eCommandHandler> {
             ],
     allocation_preview: allocationPreview,
     sales_product_lookup: ({ query }) => salesProductLookup(query as LookupArgs),
+    sales_product_names: ({ customerId, productIds }) =>
+      salesProductNames(customerId as string, productIds as string[]),
   };
+}
+
+/** 批次取得明細品名 API（§8.9）：客戶品名 ?? 商品名稱，依第一次出現的順序、去除重複。 */
+function salesProductNames(customerId: string, productIds: string[]) {
+  return [...new Set(productIds)].map((id) => {
+    const customerName =
+      customerId === CUSTOMER_ID && id === PRODUCT_ID ? CUSTOMER_PRODUCT_NAME : null;
+    return {
+      product_id: id,
+      customer_product_name: customerName,
+      product_name: customerName ?? titleOf(id).split(' ').slice(1).join(' '),
+    };
+  });
 }
 
 interface LookupArgs {
@@ -224,8 +239,13 @@ test('sales order: customer product names are filled, searchable and editable', 
   page: p,
 }) => {
   let created: { lines: { sales_order_line: { data: DataRecord['data'] }[] } } | undefined;
+  const namesCalls: unknown[] = [];
   await mockTauri(p, {
     ...baseHandlers(),
+    sales_product_names: (args) => {
+      namesCalls.push(args);
+      return salesProductNames(args.customerId as string, args.productIds as string[]);
+    },
     get_record: ({ key, id }) =>
       key === 'customer'
         ? customerRecord()
@@ -294,6 +314,8 @@ test('sales order: customer product names are filled, searchable and editable', 
   await expect(cell(0, '品名')).toHaveValue('不鏽鋼螺絲 M6');
   await expect(cell(1, '品名')).toHaveValue('不鏽鋼螺絲 M6');
   await expect(ask).toHaveCount(0);
+  // 一次請求取得所有明細的品名（同一商品只送一次）
+  expect(namesCalls).toEqual([{ customerId: CUSTOMER2_ID, productIds: [PRODUCT_ID] }]);
   await lines.screenshot({ path: test.info().outputPath('order-product-names.png') });
 
   // 送出的明細帶有品名
@@ -821,4 +843,74 @@ test('shipment from order: suggested lots, pick lots, quantity checks, post, use
   await expect(p.getByRole('table', { name: '批號' })).toContainText('L-02');
   await settled(p);
   await p.screenshot({ path: test.info().outputPath('shipment-stock.png') });
+});
+
+test('sales order: re-filling names on customer change uses one batch request', async ({
+  page: p,
+}) => {
+  const namesCalls: { customerId: string; productIds: string[] }[] = [];
+  let fail = false;
+  await mockTauri(p, {
+    ...baseHandlers(),
+    get_record: ({ key, id }) =>
+      key === 'customer'
+        ? customerRecord()
+        : key === 'product'
+          ? productRecord(id as string)
+          : null,
+    sales_product_names: (args) => {
+      const call = args as { customerId: string; productIds: string[] };
+      namesCalls.push(call);
+      if (fail) {
+        throw new CommandRejection({ kind: 'network', message: '測試：無法連線' });
+      }
+      return salesProductNames(call.customerId, call.productIds);
+    },
+  });
+  await p.goto('/#/entities/sales_order/new');
+  await select(p, '客戶').click();
+  await option(p, CUSTOMER2_TITLE).click();
+
+  const lines = p.getByRole('region', { name: '訂單明細' });
+  const rows = lines.locator('tbody tr.ant-table-row');
+  const cell = (i: number, name: string) => rows.nth(i).getByRole('textbox', { name, exact: true });
+  const picks: [string, string][] = [
+    [PRODUCT_TITLE, '不鏽鋼螺絲 M6'],
+    [PRODUCT2_TITLE, '六角螺帽 M6'],
+    [PRODUCT_TITLE, '不鏽鋼螺絲 M6'],
+  ];
+  for (let i = 0; i < picks.length; i++) {
+    await lines.getByRole('button', { name: /新增訂單明細/ }).click();
+  }
+  for (const [i, [title, name]] of picks.entries()) {
+    await select(rows.nth(i), '商品').click();
+    await option(p, title).click();
+    // 帶入完成後再新增下一列
+    await expect(cell(i, '品名')).toHaveValue(name);
+  }
+  await cell(1, '品名').fill('手改螺帽');
+
+  // 換成有客戶品名的客戶：一次請求，依商品 id 帶入
+  const ask = p.getByRole('dialog').filter({ hasText: '是否依新客戶重新帶入品名？' });
+  await select(p, '客戶').click();
+  await option(p, CUSTOMER_TITLE).click();
+  await ask.getByRole('button', { name: /重新帶入/ }).click();
+  await expect(cell(0, '品名')).toHaveValue(CUSTOMER_PRODUCT_NAME);
+  await expect(cell(1, '品名')).toHaveValue('六角螺帽 M6');
+  await expect(cell(2, '品名')).toHaveValue(CUSTOMER_PRODUCT_NAME);
+  expect(namesCalls).toEqual([{ customerId: CUSTOMER_ID, productIds: [PRODUCT_ID, PRODUCT2_ID] }]);
+  await expect(ask).toHaveCount(0);
+  await lines.screenshot({ path: test.info().outputPath('order-batch-names.png') });
+
+  // 查詢失敗：退回商品名稱並提示
+  fail = true;
+  await select(p, '客戶').click();
+  await option(p, CUSTOMER2_TITLE).click();
+  await ask.getByRole('button', { name: /重新帶入/ }).click();
+  await expect(p.getByText('無法取得客戶品名，已帶入商品名稱')).toBeVisible();
+  await expect(cell(0, '品名')).toHaveValue('不鏽鋼螺絲 M6');
+  await expect(cell(1, '品名')).toHaveValue('六角螺帽 M6');
+  await expect(cell(2, '品名')).toHaveValue('不鏽鋼螺絲 M6');
+  expect(namesCalls).toHaveLength(2);
+  await p.screenshot({ path: test.info().outputPath('order-batch-names-failed.png') });
 });

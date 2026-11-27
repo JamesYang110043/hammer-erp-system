@@ -15,6 +15,7 @@ import { MAX_PAGE_SIZE, recordKey, useRecord } from '../../api/records';
 import {
   salesOrderQuery,
   salesProductLookupQuery,
+  salesProductNamesQuery,
   shipmentReturnableQuery,
   useDocumentLotTransactions,
   useSalesProductLookup,
@@ -37,6 +38,7 @@ import {
   SALES_RETURN_LINE,
   SHIPMENT,
   SHIPMENT_LINE,
+  lineProductNames,
   lotPicksError,
   namedSalesLine,
   orderNotShippable,
@@ -169,14 +171,32 @@ export function SalesAutofill({
     onChange();
   };
 
-  /** 換了客戶：依新客戶重新帶入所有已選商品的明細的品名。 */
+  /**
+   * 換了客戶：依新客戶重新帶入所有已選商品的明細的品名。以批次取得明細品名 API 一次取得
+   * （§8.9「明細的品名」）；查詢失敗時退回商品名稱並提示。
+   */
   const applyCustomerNames = async (customerId: string) => {
     const ids = currentProducts();
-    const names = await Promise.all(
-      ids.map(async (id) =>
-        id ? productName(customerId, await fetchRecord('product', id)) : undefined,
-      ),
-    );
+    const products = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+    if (products.length === 0) {
+      return;
+    }
+    let names: (string | undefined)[];
+    try {
+      const items = await queryClient.fetchQuery({
+        ...salesProductNamesQuery(customerId, products),
+        staleTime: 0,
+      });
+      names = lineProductNames(ids, items);
+    } catch {
+      const records = await Promise.all(products.map((id) => fetchRecord('product', id)));
+      const fallback = records.flatMap((r) => {
+        const name = textOf(r?.data.name);
+        return r && name ? [{ product_id: r.id, product_name: name }] : [];
+      });
+      names = lineProductNames(ids, fallback);
+      message.error('無法取得客戶品名，已帶入商品名稱');
+    }
     // 等待期間又換了客戶或商品
     if (textOf(form.getFieldValue(F.customer)) !== customerId) {
       return;

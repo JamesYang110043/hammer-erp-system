@@ -160,3 +160,17 @@ export function useSalesProductLookup(customerId: string | undefined, q: string,
     placeholderData: keepPreviousData,
   });
 }
+
+/** 批次取得明細品名的快取鍵（客戶品名、商品名稱改變時一併失效）。 */
+export const salesProductNamesKey = ['sales-product-names'] as const;
+
+/**
+ * 批次取得明細品名的查詢設定（docs/architecture.md §8.9「批次取得明細品名 API」，需要 `record.read`）：
+ * 一次取得 `productIds`（1–200 個）對客戶 `customerId` 依帶入順序決定的品名。已刪除的商品不回傳。
+ */
+export function salesProductNamesQuery(customerId: string, productIds: readonly string[]) {
+  return {
+    queryKey: [...salesProductNamesKey, customerId, ...productIds] as const,
+    queryFn: () => unwrap(commands.salesProductNames(customerId, [...productIds])),
+  };
+}

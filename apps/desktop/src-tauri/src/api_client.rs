@@ -40,7 +40,9 @@ use hammer_shared::record::{
     CreateRecordRequest, DeleteRecordQuery, LookupItem, LookupQuery, Record, RecordListQuery,
     UpdateRecordRequest,
 };
-use hammer_shared::sales::{SalesProductLookupItem, SalesProductLookupQuery};
+use hammer_shared::sales::{
+    SalesProductLookupItem, SalesProductLookupQuery, SalesProductName, product_names_param,
+};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
@@ -1033,6 +1035,28 @@ impl ApiClient {
         authed(read_json(send(builder).await?).await)
     }
 
+    /// `GET /api/v1/sales/product-names?customer_id=&product_id=…`（批次取得明細品名，M12）。
+    pub async fn sales_product_names(
+        &self,
+        server_url: &str,
+        token: &str,
+        customer_id: Id,
+        product_ids: &[Id],
+    ) -> Result<Vec<SalesProductName>, ClientError> {
+        let mut pairs = vec![(product_names_param::CUSTOMER_ID, customer_id.to_string())];
+        pairs.extend(
+            product_ids
+                .iter()
+                .map(|id| (product_names_param::PRODUCT_ID, id.to_string())),
+        );
+        let builder = self
+            .http
+            .get(endpoint(server_url, "/sales/product-names"))
+            .bearer_auth(token)
+            .query(&pairs);
+        authed(read_json(send(builder).await?).await)
+    }
+
     /// `POST /api/v1/attachments`（`multipart/form-data`，檔案在 [`UPLOAD_FIELD`] 欄位）。
     ///
     /// 超過伺服器的大小上限時回傳 `413 PAYLOAD_TOO_LARGE`。
@@ -1299,6 +1323,35 @@ mod tests {
         let health = ApiClient::new().unwrap().health(&url).await.unwrap();
         assert_eq!(health.status, HealthStatus::Ok);
         assert_eq!(health.version, CLIENT_VERSION);
+    }
+
+    #[tokio::test]
+    async fn sales_product_names_repeats_product_id() {
+        use axum::extract::RawQuery;
+        let url = serve(Router::new().route(
+            "/sales/product-names",
+            get(|RawQuery(query): RawQuery| async move {
+                // 把收到的 query string 放進品名，方便驗證
+                axum::Json(
+                    json!([{ "product_id": "01a211f5-20e9-7b08-9d17-2a0dbce98c13",
+                                    "customer_product_name": null,
+                                    "product_name": query.unwrap_or_default() }]),
+                )
+            }),
+        ))
+        .await;
+        let c = Id::try_parse("01a211f5-20e9-7b08-9d17-2a0dbce98c12").unwrap();
+        let p1 = Id::try_parse("01a211f5-20e9-7b08-9d17-2a0dbce98c13").unwrap();
+        let p2 = Id::try_parse("01a211f5-20e9-7b08-9d17-2a0dbce98c14").unwrap();
+        let names = ApiClient::new()
+            .unwrap()
+            .sales_product_names(&url, "t", c, &[p1, p2])
+            .await
+            .unwrap();
+        assert_eq!(
+            names[0].product_name,
+            format!("customer_id={c}&product_id={p1}&product_id={p2}")
+        );
     }
 
     #[tokio::test]
