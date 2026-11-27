@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { InventoryTransaction_Serialize as InventoryTransaction } from '../bindings';
+import type {
+  InventoryTransaction_Serialize as InventoryTransaction,
+  Record as DataRecord,
+} from '../bindings';
 import { div, format, parse } from './decimal';
 import {
   lotPicksError,
@@ -11,7 +14,9 @@ import {
   overShippedRows,
   previewInputs,
   previewRowErrors,
+  changedCustomerNames,
   lineProductNames,
+  namedLineCandidates,
   productNameOf,
   returnLinesFromShipment,
   rowAllocations,
@@ -400,5 +405,53 @@ describe('lineProductNames (換客戶重新帶入)', () => {
       'X 型扳手',
     ]);
     expect(lineProductNames([], names)).toEqual([]);
+  });
+});
+
+describe('存成客戶品名 (§8.9「明細的品名」)', () => {
+  const line = (
+    product: string | null,
+    name: string | null,
+    title = `${product} 標題`,
+  ): Pick<DataRecord, 'data' | 'relations'> => ({
+    data: { product_id: product, product_name: name },
+    relations: product
+      ? { product_id: { id: product, title, deleted: false, inactive: false } }
+      : {},
+  });
+
+  it('takes the first line of each product with a non-blank name', () => {
+    expect(
+      namedLineCandidates([
+        line('P1', ' 手改 '),
+        line('P2', '  '),
+        line('P1', '第二列'),
+        line(null, '沒有商品'),
+        line('P2', '鉗子'),
+      ]),
+    ).toEqual([
+      { product_id: 'P1', product_title: 'P1 標題', product_name: '手改' },
+      { product_id: 'P2', product_title: 'P2 標題', product_name: '鉗子' },
+    ]);
+  });
+
+  it('lists products whose document name differs from the current name', () => {
+    const candidates = [
+      { product_id: 'P1', product_title: 'A', product_name: 'X 型扳手' },
+      { product_id: 'P2', product_title: 'B', product_name: '尖嘴鉗' },
+      { product_id: 'P3', product_title: 'C', product_name: 'abc' },
+      { product_id: 'P9', product_title: 'D', product_name: '已刪除' },
+    ];
+    expect(
+      changedCustomerNames(candidates, [
+        { product_id: 'P1', product_name: 'X 型扳手' },
+        { product_id: 'P2', product_name: '鉗子' },
+        { product_id: 'P3', product_name: 'ABC' },
+      ]),
+    ).toEqual([
+      { product_id: 'P2', product_title: 'B', current_name: '鉗子', document_name: '尖嘴鉗' },
+      // 區分大小寫
+      { product_id: 'P3', product_title: 'C', current_name: 'ABC', document_name: 'abc' },
+    ]);
   });
 });

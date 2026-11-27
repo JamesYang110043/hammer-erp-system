@@ -601,3 +601,69 @@ export function productNameOf(
 ): string | undefined {
   return items?.find((i) => i.id === productId)?.product_name ?? fallback;
 }
+
+/** 存檔後詢問是否存成客戶品名的對話框標題（§8.9「明細的品名」，M12）。 */
+export const SAVE_AS_CUSTOMER_NAMES_TITLE = '是否將以下品名設為此客戶的客戶品名？';
+
+/** 存檔後詢問是否存成客戶品名的一列（§8.9「明細的品名」，M12）。 */
+export interface CustomerNameSuggestion {
+  product_id: string;
+  /** 商品的標題（料號與名稱）。 */
+  product_title: string;
+  /** 這位客戶目前帶入的品名。 */
+  current_name: string;
+  /** 單據上的品名。 */
+  document_name: string;
+}
+
+/**
+ * 存檔後的明細中要比對的列：商品有值、品名去除前後空白後不是空字串；同一商品有多列時取第一列。
+ * `lines` 為存檔回應的明細（依順序）。
+ */
+export function namedLineCandidates(
+  lines: readonly Pick<DataRecord, 'data' | 'relations'>[],
+): { product_id: string; product_title: string; product_name: string }[] {
+  const seen = new Set<string>();
+  const out: { product_id: string; product_title: string; product_name: string }[] = [];
+  for (const line of lines) {
+    const product = line.data[SALES_FIELDS.product];
+    const name = line.data[SALES_FIELDS.productName];
+    if (typeof product !== 'string' || !product || seen.has(product)) {
+      continue;
+    }
+    if (typeof name !== 'string' || name.trim() === '') {
+      continue;
+    }
+    seen.add(product);
+    out.push({
+      product_id: product,
+      product_title: line.relations?.[SALES_FIELDS.product]?.title ?? '',
+      product_name: name.trim(),
+    });
+  }
+  return out;
+}
+
+/**
+ * 單據上的品名與這位客戶目前帶入的品名（批次取得明細品名 API 的結果 `names`）不同的列；去除前後空白後
+ * 比對、區分大小寫。結果中沒有的商品（已刪除）略過。
+ */
+export function changedCustomerNames(
+  candidates: readonly { product_id: string; product_title: string; product_name: string }[],
+  names: readonly { product_id: string; product_name: string }[],
+): CustomerNameSuggestion[] {
+  const current = new Map(names.map((n) => [n.product_id, n.product_name]));
+  return candidates.flatMap((c) => {
+    const name = current.get(c.product_id);
+    return name !== undefined && name.trim() !== c.product_name
+      ? [
+          {
+            product_id: c.product_id,
+            product_title: c.product_title,
+            current_name: name,
+            document_name: c.product_name,
+          },
+        ]
+      : [];
+  });
+}
