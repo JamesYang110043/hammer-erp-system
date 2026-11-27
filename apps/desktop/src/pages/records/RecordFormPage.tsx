@@ -121,6 +121,7 @@ import { DocumentStatusTag } from './DocumentStatusTag';
 import { FormulaValue } from './FieldValue';
 import { FormLayoutRenderer } from './FormLayoutRenderer';
 import { ProductCustomerNames } from './ProductCustomerNames';
+import { useOfferCustomerProductNames } from './SaveAsCustomerProductNames';
 import { LinesTable } from './LinesTable';
 import type { LineRefs } from './LinesTable';
 import { ExchangeRateInput, PurchaseReturnAutofill, PurchasingAutofill } from './PurchasingInputs';
@@ -520,6 +521,9 @@ function RecordForm({
     return false;
   };
 
+  // 訂單、出貨單存檔後詢問是否存成客戶品名（§8.9「明細的品名」）
+  const offerCustomerNames = useOfferCustomerProductNames();
+
   const onFinish = () => {
     // 包含 Form.List 內的明細列（onFinish 的參數只有註冊過的欄位，明細的 __id 不在其中）
     const values = form.getFieldsValue(true) as FormValues;
@@ -539,6 +543,7 @@ function RecordForm({
           onSuccess: (saved) => {
             markDirty(false);
             message.success('已新增');
+            void offerCustomerNames(entityKey, saved);
             if (panel) {
               panel.onSaved(saved);
             } else {
@@ -566,6 +571,7 @@ function RecordForm({
       .then((saved) => {
         markDirty(false);
         message.success('已儲存');
+        void offerCustomerNames(entityKey, saved);
         panel?.onSaved(saved);
       }, onSaveError);
   };

@@ -544,6 +544,8 @@ test('shipment from order: suggested lots, pick lots, quantity checks, post, use
 
   await mockTauri(p, {
     ...baseHandlers(),
+    // 這個測試不涵蓋存檔後詢問存成客戶品名（#285）：沒有可比對的品名，不會詢問
+    sales_product_names: () => [],
     get_record: ({ key, id }) =>
       key === 'customer'
         ? customerRecord()
@@ -966,4 +968,198 @@ test('sales order: line product that was deactivated is marked', async ({ page: 
   // 表頭的客戶沒有停用
   await expect(select(p, '客戶').getByText('已停用', { exact: true })).toHaveCount(0);
   await lines.screenshot({ path: test.info().outputPath('order-line-inactive-product.png') });
+});
+
+// ---- 存檔後詢問是否存成客戶品名（#285，§8.9「明細的品名」） ----
+
+interface SavedLine {
+  id?: string;
+  data: DataRecord['data'];
+}
+
+/** 訂單存檔的模擬：新增、修改都回傳含明細的訂單（明細依送出的內容合併）。 */
+function orderStore() {
+  let current: DataRecord | null = null;
+  const build = (lines: { id: string; data: DataRecord['data'] }[], version: number) =>
+    purchasingRecord({
+      id: SALES_ORDER_ID,
+      record_no: 'SO202611-0001',
+      title: ORDER_TITLE,
+      version,
+      data: {
+        customer_id: CUSTOMER_ID,
+        order_date: '2026-11-27',
+        tax_type: 'taxable',
+        tax_included: false,
+        status: 'draft',
+        subtotal: '0.0000',
+        tax_amount: '0.0000',
+        total: '0.0000',
+      },
+      relations: { customer_id: rel(CUSTOMER_ID, CUSTOMER_TITLE) },
+      lines: {
+        sales_order_line: lines.map((l) => lineRecord(l.id, { ...l.data, shipped_qty: '0.0000' })),
+      },
+      document: DOC,
+    });
+  return {
+    get: () => current,
+    create: (req: unknown) => {
+      const { lines } = req as { lines: { sales_order_line: SavedLine[] } };
+      current = build(
+        lines.sales_order_line.map((l, i) => ({
+          id: i === 0 ? ORDER_LINE_1 : ORDER_LINE_2,
+          data: l.data,
+        })),
+        1,
+      );
+      return current;
+    },
+    update: (req: unknown) => {
+      const { lines } = req as { lines?: { sales_order_line: SavedLine[] } };
+      const before = current!.lines!.sales_order_line!;
+      const next = lines
+        ? lines.sales_order_line.map((l) => {
+            const old = before.find((b) => b.id === l.id);
+            return { id: l.id!, data: { ...old?.data, ...l.data } };
+          })
+        : before.map((b) => ({ id: b.id, data: b.data }));
+      current = build(next, current!.version + 1);
+      return current;
+    },
+  };
+}
+
+test('sales order: after saving, offer to save edited names as customer product names', async ({
+  page: p,
+}) => {
+  const store = orderStore();
+  const batches: unknown[] = [];
+  await mockTauri(p, {
+    ...baseHandlers(),
+    get_record: ({ key, id }) =>
+      key === 'customer'
+        ? customerRecord()
+        : key === 'product'
+          ? productRecord(id as string)
+          : store.get(),
+    create_record: ({ req }) => store.create(req),
+    update_record: ({ req }) => store.update(req),
+    customer_product_names_batch: ({ req }) => {
+      batches.push(req);
+      const rows = (req as { rows: unknown[] }).rows;
+      return {
+        dry_run: false,
+        summary: { create: rows.length, update: 0, unchanged: 0, error: 0 },
+        rows: [],
+      };
+    },
+  });
+  await p.goto('/#/entities/sales_order/new');
+  await select(p, '客戶').click();
+  await option(p, CUSTOMER_TITLE).click();
+  const lines = p.getByRole('region', { name: '訂單明細' });
+  const rows = lines.locator('tbody tr.ant-table-row');
+  const cell = (i: number, name: string) => rows.nth(i).getByRole('textbox', { name, exact: true });
+  await lines.getByRole('button', { name: /新增訂單明細/ }).click();
+  await lines.getByRole('button', { name: /新增訂單明細/ }).click();
+  await select(rows.nth(0), '商品').click();
+  await option(p, PRODUCT_TITLE).click();
+  await expect(cell(0, '品名')).toHaveValue(CUSTOMER_PRODUCT_NAME);
+  await select(rows.nth(1), '商品').click();
+  await option(p, PRODUCT2_TITLE).click();
+  await expect(cell(1, '品名')).toHaveValue('六角螺帽 M6');
+  await cell(0, '品名').fill('手改螺絲');
+  await cell(1, '品名').fill('手改螺帽');
+  await cell(0, '數量').fill('1');
+  await cell(1, '數量').fill('1');
+
+  // 新增存檔：兩列都與目前的品名不同 → 詢問（預設全勾）
+  await p.getByRole('button', { name: /儲\s?存/ }).click();
+  const ask = p.getByRole('dialog').filter({ hasText: '是否將以下品名設為此客戶的客戶品名？' });
+  await expect(ask).toBeVisible();
+  const askRows = ask.locator('tbody tr.ant-table-row');
+  await expect(askRows).toHaveCount(2);
+  await expect(askRows.nth(0)).toContainText(PRODUCT_TITLE);
+  await expect(askRows.nth(0)).toContainText(CUSTOMER_PRODUCT_NAME);
+  await expect(askRows.nth(0)).toContainText('手改螺絲');
+  await expect(askRows.nth(1)).toContainText('六角螺帽 M6');
+  await expect(askRows.nth(1)).toContainText('手改螺帽');
+  await expect(askRows.getByRole('checkbox')).toHaveCount(2);
+  for (const box of await askRows.getByRole('checkbox').all()) {
+    await expect(box).toBeChecked();
+  }
+  await expect(ask.locator('.ant-zoom-appear, .ant-zoom-enter')).toHaveCount(0);
+  await p.waitForTimeout(300);
+  await p.screenshot({ path: test.info().outputPath('order-save-as-customer-names.png') });
+
+  // 只勾第一列 → 只寫入第一列（以 id 指定，不帶備註）
+  await askRows.nth(1).getByRole('checkbox').uncheck();
+  await ask.getByRole('button', { name: '設為客戶品名' }).click();
+  await expect(p.getByText('已設定 1 筆客戶品名')).toBeVisible();
+  expect(batches).toEqual([
+    {
+      dry_run: false,
+      rows: [{ customer_id: CUSTOMER_ID, product_id: PRODUCT_ID, name: '手改螺絲' }],
+    },
+  ]);
+  await expect(ask).toHaveCount(0);
+
+  // 修改存檔後選「略過」：不寫入
+  await expect(p).toHaveURL(new RegExp(`sales_order/${SALES_ORDER_ID}`));
+  await cell(0, '品名').fill('再改一次');
+  await p.getByRole('button', { name: /儲\s?存/ }).click();
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: /略\s?過/ }).click();
+  await expect(ask).toHaveCount(0);
+  expect(batches).toHaveLength(1);
+
+  // 品名都與目前帶入的相同 → 不詢問
+  await cell(0, '品名').fill(CUSTOMER_PRODUCT_NAME);
+  await cell(1, '品名').fill('六角螺帽 M6');
+  await p.getByRole('button', { name: /儲\s?存/ }).click();
+  await expect(p.getByText('已儲存').last()).toBeVisible();
+  await p.waitForTimeout(500);
+  await expect(ask).toHaveCount(0);
+  expect(batches).toHaveLength(1);
+});
+
+test('sales order: failing to save customer product names keeps the document', async ({
+  page: p,
+}) => {
+  const store = orderStore();
+  await mockTauri(p, {
+    ...baseHandlers(),
+    get_record: ({ key, id }) =>
+      key === 'customer'
+        ? customerRecord()
+        : key === 'product'
+          ? productRecord(id as string)
+          : store.get(),
+    create_record: ({ req }) => store.create(req),
+    customer_product_names_batch: () => {
+      throw new CommandRejection({ kind: 'network', message: '無法連線到伺服器' });
+    },
+  });
+  await p.goto('/#/entities/sales_order/new');
+  await select(p, '客戶').click();
+  await option(p, CUSTOMER_TITLE).click();
+  const lines = p.getByRole('region', { name: '訂單明細' });
+  const rows = lines.locator('tbody tr.ant-table-row');
+  const cell = (i: number, name: string) => rows.nth(i).getByRole('textbox', { name, exact: true });
+  await lines.getByRole('button', { name: /新增訂單明細/ }).click();
+  await lines.getByRole('button', { name: /新增訂單明細/ }).click();
+  await select(rows.nth(0), '商品').click();
+  await option(p, PRODUCT_TITLE).click();
+  await expect(cell(0, '品名')).toHaveValue(CUSTOMER_PRODUCT_NAME);
+  await lines.getByRole('button', { name: /刪除/ }).nth(1).click();
+  await cell(0, '品名').fill('手改螺絲');
+  await cell(0, '數量').fill('1');
+  await p.getByRole('button', { name: /儲\s?存/ }).click();
+  const ask = p.getByRole('dialog').filter({ hasText: '是否將以下品名設為此客戶的客戶品名？' });
+  await ask.getByRole('button', { name: '設為客戶品名' }).click();
+  await expect(p.getByText('設定客戶品名失敗：無法連線到伺服器')).toBeVisible();
+  // 單據已存檔
+  await expect(p).toHaveURL(new RegExp(`sales_order/${SALES_ORDER_ID}`));
+  await expect(cell(0, '品名')).toHaveValue('手改螺絲');
 });
