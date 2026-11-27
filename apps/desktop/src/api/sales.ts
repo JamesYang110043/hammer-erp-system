@@ -15,7 +15,7 @@ import {
 import type { PreviewInput } from '../records/sales';
 import { unwrap } from './client';
 import { inventoryKey } from './inventory';
-import { MAX_PAGE_SIZE, recordKey, recordsKey } from './records';
+import { MAX_PAGE_SIZE, productCustomerNamesKey, recordKey, recordsKey } from './records';
 
 /**
  * 出貨的建議批號（docs/architecture.md §8.9「建議批號 API」，需要 `record.read`）。
@@ -173,4 +173,16 @@ export function salesProductNamesQuery(customerId: string, productIds: readonly 
     queryKey: [...salesProductNamesKey, customerId, ...productIds] as const,
     queryFn: () => unwrap(commands.salesProductNames(customerId, [...productIds])),
   };
+}
+
+/**
+ * 商品 `productId` 的客戶品名（docs/architecture.md §8.7「商品畫面的客戶品名」，需要 `record.read`）：
+ * 各客戶的客戶品名，依客戶編號排序。客戶存檔後由 {@link productCustomerNamesKey} 清除快取。
+ */
+export function useProductCustomerNames(productId: string | undefined) {
+  return useQuery({
+    queryKey: [...productCustomerNamesKey, productId ?? ''] as const,
+    queryFn: () => unwrap(commands.productCustomerNames(productId!)),
+    enabled: Boolean(productId),
+  });
 }

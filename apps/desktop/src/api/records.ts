@@ -197,6 +197,17 @@ export function useFormulaPreview(req: FormulaPreviewRequest | undefined) {
   });
 }
 
+/**
+ * 商品的客戶品名（docs/architecture.md §8.7「商品畫面的客戶品名」）的快取鍵。客戶存檔、刪除，以及客戶品名
+ * 批次寫入後清除，回到商品畫面時看到新資料。
+ */
+export const productCustomerNamesKey = ['product-customer-names'] as const;
+
+/** 資料類別 `entityKey` 存檔、刪除後另外要清除的快取（客戶 → 商品的客戶品名）。 */
+function derivedKeys(entityKey: string): QueryKey[] {
+  return entityKey === 'customer' ? [productCustomerNamesKey] : [];
+}
+
 /** 新增、修改資料成功後更新單筆快取，並重新取得列表、操作紀錄與 `extraKeys`。 */
 function useRecordMutation<TVars>(
   entityKey: string,
@@ -211,7 +222,9 @@ function useRecordMutation<TVars>(
       return Promise.all([
         queryClient.invalidateQueries({ queryKey: recordsKey(entityKey) }),
         queryClient.invalidateQueries({ queryKey: auditLogsKey }),
-        ...extraKeys.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+        ...[...extraKeys, ...derivedKeys(entityKey)].map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }),
+        ),
       ]);
     },
   });
@@ -263,6 +276,7 @@ export function useDeleteRecord(entityKey: string) {
       Promise.all([
         queryClient.invalidateQueries({ queryKey: recordsKey(entityKey) }),
         queryClient.invalidateQueries({ queryKey: auditLogsKey }),
+        ...derivedKeys(entityKey).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
       ]),
   });
 }

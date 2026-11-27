@@ -223,6 +223,11 @@ export const commands = {
 	 */
 	salesProductNames: (customerId: string, productIds: string[]) => typedError<SalesProductName_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("sales_product_names", { customerId, productIds })),
 	/**
+	 *  商品的客戶品名（需要 `record.read`，docs/architecture.md §8.7「商品畫面的客戶品名」）：
+	 *  這個商品在各客戶的客戶品名，依客戶編號排序。商品不存在或已刪除時回傳 `404`。
+	 */
+	productCustomerNames: (productId: string) => typedError<ProductCustomerName_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("product_customer_names", { productId })),
+	/**
 	 *  開啟選擇檔案的對話框並上傳（需要 `record.write`）。使用者取消時回傳 `null`。
 	 * 
 	 *  選好檔案後先送一次進度（已送出 0），之後每送出一段送一次。超過伺服器的大小上限時回傳
@@ -2236,6 +2241,55 @@ export type PreviewField_Serialize = {
 	/**  明細子表代碼；主表的欄位為 `null`。 */
 	detail: string | null,
 	field_key: string,
+};
+
+/**
+ *  商品的客戶品名（§8.7「商品畫面的客戶品名」，M12）。
+ * 
+ *  `GET /api/v1/products/{id}/customer-product-names`，需要 `record.read`，回應陣列（不分頁）：這個商品
+ *  未刪除的客戶品名中，所屬客戶未刪除的（停用的客戶照常列出），依客戶編號、客戶品名的 id 排序。
+ *  商品不存在或已刪除 → `404 NOT_FOUND`。
+ */
+export type ProductCustomerName = ProductCustomerName_Serialize | ProductCustomerName_Deserialize;
+
+/**
+ *  商品的客戶品名（§8.7「商品畫面的客戶品名」，M12）。
+ * 
+ *  `GET /api/v1/products/{id}/customer-product-names`，需要 `record.read`，回應陣列（不分頁）：這個商品
+ *  未刪除的客戶品名中，所屬客戶未刪除的（停用的客戶照常列出），依客戶編號、客戶品名的 id 排序。
+ *  商品不存在或已刪除 → `404 NOT_FOUND`。
+ */
+export type ProductCustomerName_Deserialize = {
+	/**  客戶品名的 id。 */
+	id: string,
+	customer_id: string,
+	/**  客戶的標題（依客戶的 `title_template`，預設 `{code} {name}`）。 */
+	customer_title: string,
+	/**  客戶是否啟用。 */
+	customer_is_active: boolean,
+	/**  客戶品名。 */
+	name: string,
+	notes?: string | null,
+};
+
+/**
+ *  商品的客戶品名（§8.7「商品畫面的客戶品名」，M12）。
+ * 
+ *  `GET /api/v1/products/{id}/customer-product-names`，需要 `record.read`，回應陣列（不分頁）：這個商品
+ *  未刪除的客戶品名中，所屬客戶未刪除的（停用的客戶照常列出），依客戶編號、客戶品名的 id 排序。
+ *  商品不存在或已刪除 → `404 NOT_FOUND`。
+ */
+export type ProductCustomerName_Serialize = {
+	/**  客戶品名的 id。 */
+	id: string,
+	customer_id: string,
+	/**  客戶的標題（依客戶的 `title_template`，預設 `{code} {name}`）。 */
+	customer_title: string,
+	/**  客戶是否啟用。 */
+	customer_is_active: boolean,
+	/**  客戶品名。 */
+	name: string,
+	notes: string | null,
 };
 
 /**

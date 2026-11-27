@@ -12,12 +12,14 @@ import {
   CUSTOMER_PRODUCT_NAME_FIELDS,
   PRODUCT,
   PRODUCT_FIELDS,
+  PRODUCT_P001,
   PRODUCT_P002,
   PRODUCT_TITLES,
   customerDetail,
   customerId,
   fakeListRecords,
   manyCustomers,
+  partyRecord,
 } from '../src/test/masterSplitFixtures';
 import { CommandRejection, mockTauri } from './tauri-mock';
 
@@ -100,7 +102,44 @@ function withInactiveProduct(record: ReturnType<typeof customerDetail>) {
   };
 }
 
-async function setup(page: Page, onSave: (req: Saved) => void, inactiveProduct = false) {
+/** 商品的客戶品名 API 的回應（#282）。 */
+interface CustomerNameRow {
+  id: string;
+  customer_id: string;
+  customer_title: string;
+  customer_is_active: boolean;
+  name: string;
+  notes: string | null;
+}
+
+/** 商品表單的版面：料號、品名。 */
+const PRODUCT_LAYOUT = {
+  id: null,
+  version: null,
+  is_default: true,
+  config: {
+    sections: [
+      {
+        key: 'basic',
+        title: '基本資料',
+        columns: 2,
+        collapsible: false,
+        collapsed: false,
+        items: [
+          { type: 'field', field: 'code', span: 1 },
+          { type: 'field', field: 'name', span: 1 },
+        ],
+      },
+    ],
+  },
+};
+
+async function setup(
+  page: Page,
+  onSave: (req: Saved) => void,
+  inactiveProduct = false,
+  productNames: () => CustomerNameRow[] = () => [],
+) {
   const customers = manyCustomers(3);
   const detail = (id: string) => {
     const record = customerDetail(customers, id);
@@ -132,8 +171,15 @@ async function setup(page: Page, onSave: (req: Saved) => void, inactiveProduct =
     list_layouts: () => [],
     list_records: ({ key, query }) =>
       fakeListRecords(key === 'customer' ? customers : [], query as RecordListQuery),
-    get_record: ({ id }) => detail(id as string),
-    get_form_layout: () => DEFAULT_LAYOUT,
+    get_record: ({ key, id }) =>
+      key === 'product'
+        ? partyRecord(id as string, {
+            code: PRODUCT_TITLES[id as string]!.split(' ')[0],
+            name: PRODUCT_TITLES[id as string]!.split(' ').slice(1).join(' '),
+          })
+        : detail(id as string),
+    get_form_layout: ({ key }) => (key === 'product' ? PRODUCT_LAYOUT : DEFAULT_LAYOUT),
+    product_customer_names: () => productNames(),
     lookup_records: ({ key }) =>
       key === 'product' ? Object.entries(PRODUCT_TITLES).map(([id, title]) => ({ id, title })) : [],
     update_record: ({ id, req }) => {
@@ -304,4 +350,86 @@ test('inactive product is marked in preview and edit, and saving still works', a
   expect(saved!.lines?.customer_product_name).toEqual([
     { id: CUSTOMER_PRODUCT_NAME_A, data: { name: 'X 型扳手（停用後）' } },
   ]);
+});
+
+test('product form lists customer product names and opens the customer', async ({ page }) => {
+  let rows: CustomerNameRow[] = [
+    {
+      id: CUSTOMER_PRODUCT_NAME_A,
+      customer_id: customerId(1),
+      customer_title: 'C001 大華實業股份有限公司',
+      customer_is_active: true,
+      name: 'X 型扳手',
+      notes: '客戶圖面編號 W-10',
+    },
+    {
+      id: '0196f5a0-0000-7000-8000-000000000c02',
+      customer_id: customerId(3),
+      customer_title: 'C003 東昇貿易',
+      customer_is_active: false,
+      name: '東昇的扳手',
+      notes: null,
+    },
+  ];
+  await setup(
+    page,
+    () => {
+      // 客戶存檔後伺服器回傳新的客戶品名
+      rows = [{ ...rows[0]!, name: 'X 型扳手（新）' }, rows[1]!];
+    },
+    false,
+    () => rows,
+  );
+  await page.goto(`/#/entities/product/${PRODUCT_P001}`);
+
+  // 表單最後的唯讀區塊：客戶、客戶品名、備註
+  const block = page.getByRole('region', { name: '客戶品名' });
+  await expect(block.locator('thead')).toContainText('客戶');
+  await expect(block.locator('thead')).toContainText('備註');
+  const tableRows = block.locator('tbody tr.ant-table-row');
+  await expect(tableRows).toHaveCount(2);
+  await expect(tableRows.nth(0)).toContainText('C001 大華實業股份有限公司');
+  await expect(tableRows.nth(0)).toContainText('X 型扳手');
+  await expect(tableRows.nth(0)).toContainText('客戶圖面編號 W-10');
+  await expect(tableRows.nth(1)).toContainText('C003 東昇貿易');
+  await expect(tableRows.nth(1).getByText('停用', { exact: true })).toBeVisible();
+  // 區塊在表單欄位之後、不能編輯
+  const codeBox = await page.getByRole('textbox', { name: '料號' }).boundingBox();
+  const blockBox = await block.boundingBox();
+  expect(blockBox!.y).toBeGreaterThan(codeBox!.y);
+  await expect(block.getByRole('textbox')).toHaveCount(0);
+  await block.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath('product-customer-names.png') });
+
+  // 點客戶 → 客戶畫面選取該客戶
+  await block.getByRole('link', { name: 'C001 大華實業股份有限公司' }).click();
+  await expect(page).toHaveURL(new RegExp(`selected=${customerId(1)}`));
+  await expect(page.getByTestId('preview-title')).toHaveText('C001 大華實業股份有限公司');
+
+  // 在客戶畫面修改客戶品名後回到商品：看到新資料
+  await page.getByRole('button', { name: /編\s*輯/ }).click();
+  const panel = page.getByTestId('record-form-panel');
+  await panel
+    .getByRole('region', { name: '客戶品名' })
+    .getByRole('textbox', { name: '客戶品名' })
+    .fill('X 型扳手（新）');
+  await panel.getByRole('button', { name: /儲\s*存/ }).click();
+  await expect(page.getByTestId('record-preview')).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`entities/product/${PRODUCT_P001}`));
+  await expect(block.locator('tbody tr.ant-table-row').nth(0)).toContainText('X 型扳手（新）');
+});
+
+test('product form shows empty state when no customer product names', async ({ page }) => {
+  await setup(page, () => undefined);
+  await page.goto(`/#/entities/product/${PRODUCT_P002}`);
+  const block = page.getByRole('region', { name: '客戶品名' });
+  await expect(block).toContainText('尚未設定客戶品名');
+  await block.scrollIntoViewIfNeeded();
+  await block.screenshot({ path: test.info().outputPath('product-customer-names-empty.png') });
+
+  // 新增商品時不顯示
+  await page.goto('/#/entities/product/new');
+  await expect(page.getByRole('textbox', { name: '料號' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '客戶品名' })).toHaveCount(0);
 });
