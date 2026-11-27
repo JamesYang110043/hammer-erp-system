@@ -108,6 +108,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::lookup_records,
             commands::sales_product_lookup,
             commands::sales_product_names,
+            commands::product_customer_names,
             commands::upload_attachment,
             commands::download_attachment,
         ])

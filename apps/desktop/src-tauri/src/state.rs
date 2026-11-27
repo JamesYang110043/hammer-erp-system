@@ -33,7 +33,9 @@ use hammer_shared::record::{
     CreateRecordRequest, DeleteRecordQuery, LookupItem, LookupQuery, Record, RecordListQuery,
     UpdateRecordRequest,
 };
-use hammer_shared::sales::{SalesProductLookupItem, SalesProductLookupQuery, SalesProductName};
+use hammer_shared::sales::{
+    ProductCustomerName, SalesProductLookupItem, SalesProductLookupQuery, SalesProductName,
+};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
@@ -694,6 +696,17 @@ impl AppState {
             client
                 .sales_product_names(url, token, customer_id, product_ids)
                 .await
+        })
+        .await
+    }
+
+    /// 商品的客戶品名（唯讀）。
+    pub async fn product_customer_names(
+        &self,
+        product_id: Id,
+    ) -> Result<Vec<ProductCustomerName>, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.product_customer_names(url, token, product_id).await
         })
         .await
     }

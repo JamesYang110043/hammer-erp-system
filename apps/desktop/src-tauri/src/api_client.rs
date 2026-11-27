@@ -41,7 +41,8 @@ use hammer_shared::record::{
     UpdateRecordRequest,
 };
 use hammer_shared::sales::{
-    SalesProductLookupItem, SalesProductLookupQuery, SalesProductName, product_names_param,
+    ProductCustomerName, SalesProductLookupItem, SalesProductLookupQuery, SalesProductName,
+    product_names_param,
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
@@ -1054,6 +1055,23 @@ impl ApiClient {
             .get(endpoint(server_url, "/sales/product-names"))
             .bearer_auth(token)
             .query(&pairs);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `GET /api/v1/products/{id}/customer-product-names`（商品的客戶品名，M12）。
+    pub async fn product_customer_names(
+        &self,
+        server_url: &str,
+        token: &str,
+        product_id: Id,
+    ) -> Result<Vec<ProductCustomerName>, ClientError> {
+        let builder = self
+            .http
+            .get(endpoint(
+                server_url,
+                &format!("/products/{product_id}/customer-product-names"),
+            ))
+            .bearer_auth(token);
         authed(read_json(send(builder).await?).await)
     }
 

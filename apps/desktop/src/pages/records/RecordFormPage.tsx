@@ -120,6 +120,7 @@ import { formatTaipei, taipeiToday } from '../../utils/time';
 import { DocumentStatusTag } from './DocumentStatusTag';
 import { FormulaValue } from './FieldValue';
 import { FormLayoutRenderer } from './FormLayoutRenderer';
+import { ProductCustomerNames } from './ProductCustomerNames';
 import { LinesTable } from './LinesTable';
 import type { LineRefs } from './LinesTable';
 import { ExchangeRateInput, PurchaseReturnAutofill, PurchasingAutofill } from './PurchasingInputs';
@@ -892,6 +893,8 @@ function RecordForm({
           )}
         </Form>
       )}
+      {/* 商品的客戶品名（§8.7，唯讀）：固定在表單最後，不納入表單版面；新增時不顯示 */}
+      {entityKey === 'product' && record && <ProductCustomerNames productId={record.id} />}
       {invoicing && record && (
         <VoidInvoiceModal
           open={voidOpen}

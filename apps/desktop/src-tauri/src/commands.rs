@@ -36,7 +36,9 @@ use hammer_shared::record::{
     CreateRecordRequest, DeleteRecordQuery, LookupItem, LookupQuery, Record, RecordListQuery,
     UpdateRecordRequest,
 };
-use hammer_shared::sales::{SalesProductLookupItem, SalesProductLookupQuery, SalesProductName};
+use hammer_shared::sales::{
+    ProductCustomerName, SalesProductLookupItem, SalesProductLookupQuery, SalesProductName,
+};
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
     DeleteEntityQuery, EntityDefinition, EntityDetail, FieldDefinition, ListEntitiesQuery,
@@ -863,6 +865,17 @@ pub async fn sales_product_names(
     product_ids: Vec<Id>,
 ) -> Result<Vec<SalesProductName>, ClientError> {
     state.sales_product_names(customer_id, &product_ids).await
+}
+
+/// 商品的客戶品名（需要 `record.read`，docs/architecture.md §8.7「商品畫面的客戶品名」）：
+/// 這個商品在各客戶的客戶品名，依客戶編號排序。商品不存在或已刪除時回傳 `404`。
+#[tauri::command]
+#[specta::specta]
+pub async fn product_customer_names(
+    state: State<'_, AppState>,
+    product_id: Id,
+) -> Result<Vec<ProductCustomerName>, ClientError> {
+    state.product_customer_names(product_id).await
 }
 
 /// 開啟選擇檔案的對話框並上傳（需要 `record.write`）。使用者取消時回傳 `null`。
