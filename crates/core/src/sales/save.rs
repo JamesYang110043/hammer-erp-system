@@ -29,6 +29,7 @@ use hammer_shared::schema::FieldDefinition;
 use serde_json::{Map, Value};
 
 use super::amounts;
+use super::product_names;
 use super::{
     SALES_ORDER, SALES_ORDER_LINE, SALES_RETURN, SALES_RETURN_LINE, SHIPMENT, SHIPMENT_LINE,
 };
@@ -222,30 +223,21 @@ pub(crate) async fn line_product_names(
     let mut products: Vec<Id> = wanted.iter().filter_map(|w| w.1).collect();
     products.sort_unstable();
     products.dedup();
-    let (customer_names, product_names): (HashMap<Id, String>, HashMap<Id, String>) =
-        if products.is_empty() {
-            (HashMap::new(), HashMap::new())
-        } else {
-            let customer_names = match customer_id {
-                Some(customer) => db::customer_product_names(&mut *conn, customer, &products)
-                    .await?
-                    .into_iter()
-                    .collect(),
-                None => HashMap::new(),
-            };
-            let product_names = db::product_names(&mut *conn, &products)
-                .await?
-                .into_iter()
-                .collect();
-            (customer_names, product_names)
-        };
+    let names = if products.is_empty() {
+        HashMap::new()
+    } else {
+        product_names::resolve(&mut *conn, customer_id, &products).await?
+    };
 
     for (i, product, order_line) in wanted {
         out[i] = order_line
             .and_then(|l| order_names.get(&l))
-            .or_else(|| product.and_then(|p| customer_names.get(&p)))
-            .or_else(|| product.and_then(|p| product_names.get(&p)))
-            .cloned();
+            .cloned()
+            .or_else(|| {
+                product
+                    .and_then(|p| names.get(&p))
+                    .map(|n| n.product_name.clone())
+            });
     }
     Ok(out)
 }

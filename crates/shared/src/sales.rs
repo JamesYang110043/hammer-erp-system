@@ -13,6 +13,10 @@
 //! - 比對：每個詞都要出現在「商品標題 + 客戶品名」中（不分大小寫）
 //! - 排序：每個詞都出現在客戶品名中的商品在前（`q` 空白時為所有有客戶品名的商品），其他在後；
 //!   同一組內由新到舊
+//!
+//! # 批次取得明細品名 API（§8.9，M12）
+//!
+//! 見 [`product_names_param`]、[`SalesProductName`]。
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -58,5 +62,34 @@ pub struct SalesProductLookupItem {
     /// 這位客戶的客戶品名；沒有設定或沒帶 `customer_id` 時為 `null`。
     pub customer_product_name: Option<String>,
     /// 依帶入順序決定的品名（`customer_product_name` ?? `name`），選定後帶入明細的 `product_name`。
+    pub product_name: String,
+}
+
+/// [`SalesProductName`] 的參數名稱與上限（§8.9「批次取得明細品名 API」，M12）。
+///
+/// `GET /api/v1/sales/product-names?customer_id=&product_id=&product_id=…`，需要 `record.read`，回應
+/// [`SalesProductName`] 陣列（依 `product_id` 第一次出現的順序）。
+///
+/// - `customer_id`：必填；省略、空字串或不是 uuid → `422 VALIDATION`（`details.field = customer_id`）；
+///   客戶不存在或已刪除 → `404 NOT_FOUND`
+/// - `product_id`：可重複，1–[`MAX_PRODUCTS`] 個（以參數個數計）；沒有帶、超過上限、不是 uuid →
+///   `422 VALIDATION`（`details.field = product_id`）
+/// - 範圍：未刪除的商品（含停用）；不存在、已刪除的略過，重複的只回傳一筆
+pub mod product_names_param {
+    /// 客戶 id。
+    pub const CUSTOMER_ID: &str = "customer_id";
+    /// 商品 id（可重複）。
+    pub const PRODUCT_ID: &str = "product_id";
+    /// 一次最多幾個 `product_id`。
+    pub const MAX_PRODUCTS: usize = 200;
+}
+
+/// 批次取得明細品名 API 的一筆結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct SalesProductName {
+    pub product_id: Id,
+    /// 這位客戶的客戶品名；沒有設定時為 `null`。
+    pub customer_product_name: Option<String>,
+    /// 依帶入順序決定的品名（`customer_product_name` ?? 商品的 `name`）。
     pub product_name: String,
 }

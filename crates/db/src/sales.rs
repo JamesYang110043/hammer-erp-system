@@ -6,6 +6,7 @@
 //! - [`find_shipment_for_return`]：銷貨退回帶入表頭用的出貨單（`FOR SHARE`）
 //! - [`list_shipment_lines_for_return`]：銷貨退回帶入明細用的出貨明細
 //! - [`product_tax_types`]：新增時稅別的預設值（明細商品的稅別）
+//! - [`product_name_sources`]、[`order_line_product_names`]：明細品名的帶入來源
 //! - [`lock_customer`]、[`list_order_lines_for_update`]：確認訂單時鎖定客戶、讀取明細
 //! - [`count_customer_documents`]、[`count_open_orders_by_product`]：客戶、商品被銷貨單據引用時的限制
 //! - 出貨單（訂單轉出貨單、過帳、作廢）：[`find_order_for_shipment`]、[`lock_order_for_shipment`]、
@@ -139,39 +140,39 @@ pub async fn all_customer_product_names<'e>(
     Ok(rows.into_iter().map(|r| (r.product_id, r.name)).collect())
 }
 
-/// 品名的來源（§8.9「明細的品名」）：未刪除商品的 `name`，`(id, name)`。
-pub async fn product_names<'e>(
+/// 帶入品名的來源（§8.9「明細的品名」）：未刪除商品（含停用）的 `name`，以及客戶 `customer_id`
+/// 未刪除的客戶品名（`customer_id` 為 `None` 或沒有設定時為 `None`）。一次查詢；不存在、已刪除的
+/// 商品不回傳，順序不固定。
+pub async fn product_name_sources<'e>(
     executor: impl PgExecutor<'e>,
-    ids: &[Uuid],
-) -> Result<Vec<(Uuid, String)>, DbError> {
-    let rows = sqlx::query!(
-        "SELECT id, name FROM products WHERE id = ANY($1) AND deleted_at IS NULL",
-        ids,
-    )
-    .fetch_all(executor)
-    .await?;
-    Ok(rows.into_iter().map(|r| (r.id, r.name)).collect())
-}
-
-/// 品名的來源：客戶 `customer_id` 未刪除的客戶品名中，商品在 `product_ids` 內的 `(product_id, name)`
-/// （§8.7 `customer_product_names`，同一客戶同一商品最多一筆）。
-pub async fn customer_product_names<'e>(
-    executor: impl PgExecutor<'e>,
-    customer_id: Uuid,
+    customer_id: Option<Uuid>,
     product_ids: &[Uuid],
-) -> Result<Vec<(Uuid, String)>, DbError> {
-    let rows = sqlx::query!(
+) -> Result<Vec<ProductNameSource>, DbError> {
+    let rows = sqlx::query_as!(
+        ProductNameSource,
         r#"
-        SELECT product_id, name
-        FROM customer_product_names
-        WHERE customer_id = $1 AND product_id = ANY($2) AND deleted_at IS NULL
+        SELECT p.id AS product_id, p.name, c.name AS "customer_product_name?"
+        FROM products p
+        LEFT JOIN customer_product_names c
+          ON c.product_id = p.id AND c.customer_id = $1 AND c.deleted_at IS NULL
+        WHERE p.id = ANY($2) AND p.deleted_at IS NULL
         "#,
         customer_id,
         product_ids,
     )
     .fetch_all(executor)
     .await?;
-    Ok(rows.into_iter().map(|r| (r.product_id, r.name)).collect())
+    Ok(rows)
+}
+
+/// [`product_name_sources`] 的一列。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductNameSource {
+    pub product_id: Uuid,
+    /// 商品的 `name`。
+    pub name: String,
+    /// 這位客戶的客戶品名。
+    pub customer_product_name: Option<String>,
 }
 
 /// 品名的來源：未刪除的訂單明細的 `(id, product_name)`（出貨明細有 `sales_order_line_id` 時沿用）。
