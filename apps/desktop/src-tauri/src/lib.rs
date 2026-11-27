@@ -12,6 +12,7 @@ pub mod formula;
 pub mod settings;
 pub mod state;
 pub mod token_store;
+pub mod xlsx_import;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -109,6 +110,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::sales_product_lookup,
             commands::sales_product_names,
             commands::product_customer_names,
+            commands::customer_product_names_batch,
+            commands::pick_customer_product_names_xlsx,
             commands::upload_attachment,
             commands::download_attachment,
         ])

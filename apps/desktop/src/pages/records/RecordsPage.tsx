@@ -69,6 +69,7 @@ import { ColumnSettingsModal } from './ColumnSettingsModal';
 import { FieldValue } from './FieldValue';
 import { FilterPanel } from './FilterPanel';
 import { MasterSplitView } from './MasterSplitView';
+import { CustomerProductNamesImport } from './CustomerProductNamesImport';
 import { RecordViewToggle } from './RecordViewToggle';
 import { DocumentStatusTag } from './DocumentStatusTag';
 import { SaveLayoutModal } from './SaveLayoutModal';
@@ -274,6 +275,7 @@ function RecordList({
           >
             重新整理
           </Button>
+          {canWrite && entityKey === 'customer' && <CustomerProductNamesImport />}
           {canWrite && (
             <Button
               type="primary"

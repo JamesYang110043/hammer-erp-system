@@ -41,8 +41,8 @@ use hammer_shared::record::{
     UpdateRecordRequest,
 };
 use hammer_shared::sales::{
-    ProductCustomerName, SalesProductLookupItem, SalesProductLookupQuery, SalesProductName,
-    product_names_param,
+    CustomerProductNameBatchRequest, CustomerProductNameBatchResult, ProductCustomerName,
+    SalesProductLookupItem, SalesProductLookupQuery, SalesProductName, product_names_param,
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
@@ -1072,6 +1072,21 @@ impl ApiClient {
                 &format!("/products/{product_id}/customer-product-names"),
             ))
             .bearer_auth(token);
+        authed(read_json(send(builder).await?).await)
+    }
+
+    /// `POST /api/v1/sales/customer-product-names/batch`（客戶品名批次寫入，M12）。
+    pub async fn customer_product_names_batch(
+        &self,
+        server_url: &str,
+        token: &str,
+        req: &CustomerProductNameBatchRequest,
+    ) -> Result<CustomerProductNameBatchResult, ClientError> {
+        let builder = self
+            .http
+            .post(endpoint(server_url, "/sales/customer-product-names/batch"))
+            .bearer_auth(token)
+            .json(req);
         authed(read_json(send(builder).await?).await)
     }
 

@@ -30,6 +30,7 @@ import type { SplitMode } from '../../records/masterSplit';
 import { useDebouncedValue } from '../../utils/useDebouncedValue';
 import { entityIcon } from '../schema/entityIcons';
 import { RecordPreview } from './RecordPreview';
+import { CustomerProductNamesImport } from './CustomerProductNamesImport';
 import { RecordViewToggle } from './RecordViewToggle';
 import { RecordFormPanel } from './RecordFormPage';
 import { useUnsavedGuard } from './useUnsavedGuard';
@@ -288,6 +289,7 @@ export function MasterSplitView({
             >
               重新整理
             </Button>
+            {canWrite && entity.key === 'customer' && <CustomerProductNamesImport />}
             {canWrite && (
               <Button
                 type="primary"

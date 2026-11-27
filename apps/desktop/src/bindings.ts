@@ -228,6 +228,18 @@ export const commands = {
 	 */
 	productCustomerNames: (productId: string) => typedError<ProductCustomerName_Serialize[], ClientError_Serialize>(__TAURI_INVOKE("product_customer_names", { productId })),
 	/**
+	 *  客戶品名批次寫入（需要 `record.write`，docs/architecture.md §8.9「客戶品名批次寫入 API」）：
+	 *  `dry_run = true` 只回傳每列的動作與錯誤；寫入時任一列有錯誤整批不寫入（`422 VALIDATION`，
+	 *  `details` 與 dry_run 的回應同格式）。
+	 */
+	customerProductNamesBatch: (req: CustomerProductNameBatchRequest_Deserialize) => typedError<CustomerProductNameBatchResult_Serialize, ClientError_Serialize>(__TAURI_INVOKE("customer_product_names_batch", { req })),
+	/**
+	 *  開啟選擇 `.xlsx` 的對話框並解析客戶品名（docs/architecture.md §8.7「Excel 匯入客戶品名」）。
+	 *  使用者取消時回傳 `null`。檔案無法讀取、缺少必要的標題、沒有資料、超過列數上限時回傳
+	 *  [`ClientError::InvalidInput`]（訊息顯示給使用者）。只解析，不呼叫伺服器。
+	 */
+	pickCustomerProductNamesXlsx: () => typedError<CustomerProductNameImport_Serialize | null, ClientError_Serialize>(__TAURI_INVOKE("pick_customer_product_names_xlsx")),
+	/**
 	 *  開啟選擇檔案的對話框並上傳（需要 `record.write`）。使用者取消時回傳 `null`。
 	 * 
 	 *  選好檔案後先送一次進度（已送出 0），之後每送出一段送一次。超過伺服器的大小上限時回傳
@@ -1036,6 +1048,167 @@ export type CurrentUser = {
 	permissions: string[],
 	/**  為 `true` 時必須先修改密碼，其他 API 會回傳 `PASSWORD_CHANGE_REQUIRED`。 */
 	must_change_password: boolean,
+};
+
+/**  批次寫入一列的動作。 */
+export type CustomerProductNameBatchAction = 
+/**  新增（排在該客戶既有客戶品名之後）。 */
+"create" | 
+/**  更新 `name`（與有帶的 `notes`）。 */
+"update" | 
+/**  沒有變動，不寫入。 */
+"unchanged";
+
+/**  批次寫入一列的錯誤。 */
+export type CustomerProductNameBatchError = CustomerProductNameBatchError_Serialize | CustomerProductNameBatchError_Deserialize;
+
+/**  批次寫入一列的錯誤。 */
+export type CustomerProductNameBatchError_Deserialize = {
+	/**  request 中的鍵（例如 `product_code`）；不屬於某個鍵時為 `null`。 */
+	field?: string | null,
+	message: string,
+	/**  同一批重複時，第一次出現的列的 `index`。 */
+	duplicate_of?: number | null,
+};
+
+/**  批次寫入一列的錯誤。 */
+export type CustomerProductNameBatchError_Serialize = {
+	/**  request 中的鍵（例如 `product_code`）；不屬於某個鍵時為 `null`。 */
+	field: string | null,
+	message: string,
+	/**  同一批重複時，第一次出現的列的 `index`。 */
+	duplicate_of: number | null,
+};
+
+/**
+ *  `POST /api/v1/sales/customer-product-names/batch` 的 request（需要 `record.write`）。
+ * 
+ *  Excel 匯入與開單時存成客戶品名共用：依（客戶，商品）upsert 客戶品名。`dry_run = true` 只檢查並回傳
+ *  每列的動作與錯誤；`false` 時任一列有錯誤整批不寫入（`422 VALIDATION`，`details` 為
+ *  [`CustomerProductNameBatchResult`]）。`rows` 1–[`customer_product_name_batch::MAX_ROWS`] 列。
+ */
+export type CustomerProductNameBatchRequest = CustomerProductNameBatchRequest_Serialize | CustomerProductNameBatchRequest_Deserialize;
+
+/**
+ *  `POST /api/v1/sales/customer-product-names/batch` 的 request（需要 `record.write`）。
+ * 
+ *  Excel 匯入與開單時存成客戶品名共用：依（客戶，商品）upsert 客戶品名。`dry_run = true` 只檢查並回傳
+ *  每列的動作與錯誤；`false` 時任一列有錯誤整批不寫入（`422 VALIDATION`，`details` 為
+ *  [`CustomerProductNameBatchResult`]）。`rows` 1–[`customer_product_name_batch::MAX_ROWS`] 列。
+ */
+export type CustomerProductNameBatchRequest_Deserialize = {
+	dry_run: boolean,
+	rows: CustomerProductNameBatchRow_Deserialize[],
+};
+
+/**
+ *  `POST /api/v1/sales/customer-product-names/batch` 的 request（需要 `record.write`）。
+ * 
+ *  Excel 匯入與開單時存成客戶品名共用：依（客戶，商品）upsert 客戶品名。`dry_run = true` 只檢查並回傳
+ *  每列的動作與錯誤；`false` 時任一列有錯誤整批不寫入（`422 VALIDATION`，`details` 為
+ *  [`CustomerProductNameBatchResult`]）。`rows` 1–[`customer_product_name_batch::MAX_ROWS`] 列。
+ */
+export type CustomerProductNameBatchRequest_Serialize = {
+	dry_run: boolean,
+	rows: CustomerProductNameBatchRow_Serialize[],
+};
+
+/**  批次寫入的回應（`dry_run`，或寫入成功）；寫入時有錯誤則為 `422` 的 `details`。 */
+export type CustomerProductNameBatchResult = CustomerProductNameBatchResult_Serialize | CustomerProductNameBatchResult_Deserialize;
+
+/**  批次寫入的回應（`dry_run`，或寫入成功）；寫入時有錯誤則為 `422` 的 `details`。 */
+export type CustomerProductNameBatchResult_Deserialize = {
+	dry_run: boolean,
+	summary: CustomerProductNameBatchSummary,
+	/**  依 request 順序的每一列。 */
+	rows: CustomerProductNameBatchRowResult_Deserialize[],
+};
+
+/**  批次寫入的回應（`dry_run`，或寫入成功）；寫入時有錯誤則為 `422` 的 `details`。 */
+export type CustomerProductNameBatchResult_Serialize = {
+	dry_run: boolean,
+	summary: CustomerProductNameBatchSummary,
+	/**  依 request 順序的每一列。 */
+	rows: CustomerProductNameBatchRowResult_Serialize[],
+};
+
+/**  批次寫入的一列：以 `customer_code` + `product_code`，或 `customer_id` + `product_id` 指定（二擇一）。 */
+export type CustomerProductNameBatchRow = CustomerProductNameBatchRow_Serialize | CustomerProductNameBatchRow_Deserialize;
+
+/**  批次寫入一列的結果。 */
+export type CustomerProductNameBatchRowResult = CustomerProductNameBatchRowResult_Serialize | CustomerProductNameBatchRowResult_Deserialize;
+
+/**  批次寫入一列的結果。 */
+export type CustomerProductNameBatchRowResult_Deserialize = {
+	/**  在 request `rows` 中的位置（從 0 開始）。 */
+	index: number,
+	/**  有錯誤時為 `null`。 */
+	action?: CustomerProductNameBatchAction | null,
+	/**  解析後的客戶、商品 id（解析不到為 `null`）。 */
+	customer_id?: string | null,
+	product_id?: string | null,
+	errors: CustomerProductNameBatchError_Deserialize[],
+};
+
+/**  批次寫入一列的結果。 */
+export type CustomerProductNameBatchRowResult_Serialize = {
+	/**  在 request `rows` 中的位置（從 0 開始）。 */
+	index: number,
+	/**  有錯誤時為 `null`。 */
+	action: CustomerProductNameBatchAction | null,
+	/**  解析後的客戶、商品 id（解析不到為 `null`）。 */
+	customer_id: string | null,
+	product_id: string | null,
+	errors: CustomerProductNameBatchError_Serialize[],
+};
+
+/**  批次寫入的一列：以 `customer_code` + `product_code`，或 `customer_id` + `product_id` 指定（二擇一）。 */
+export type CustomerProductNameBatchRow_Deserialize = {
+	customer_code?: string | null,
+	product_code?: string | null,
+	customer_id?: string | null,
+	product_id?: string | null,
+	/**  客戶品名（必填）。 */
+	name?: string | null,
+	/**  備註：沒帶這個鍵 → 不更新（`None`）；帶 `null` → 清空（`Some(None)`）；帶字串 → 更新。 */
+	notes?: string | null,
+};
+
+/**  批次寫入的一列：以 `customer_code` + `product_code`，或 `customer_id` + `product_id` 指定（二擇一）。 */
+export type CustomerProductNameBatchRow_Serialize = {
+	customer_code?: string,
+	product_code?: string,
+	customer_id?: string,
+	product_id?: string,
+	/**  客戶品名（必填）。 */
+	name: string | null,
+	/**  備註：沒帶這個鍵 → 不更新（`None`）；帶 `null` → 清空（`Some(None)`）；帶字串 → 更新。 */
+	notes?: string,
+};
+
+/**  各動作與錯誤的列數。 */
+export type CustomerProductNameBatchSummary = {
+	create: number,
+	update: number,
+	unchanged: number,
+	error: number,
+};
+
+/**  解析結果。 */
+export type CustomerProductNameImport = CustomerProductNameImport_Serialize | CustomerProductNameImport_Deserialize;
+
+/**  解析結果。 */
+export type CustomerProductNameImport_Deserialize = {
+	/**  選擇的檔名（不含路徑）。 */
+	file_name: string,
+	rows: ImportedCustomerProductName_Deserialize[],
+};
+
+/**  解析結果。 */
+export type CustomerProductNameImport_Serialize = {
+	/**  選擇的檔名（不含路徑）。 */
+	file_name: string,
+	rows: ImportedCustomerProductName_Serialize[],
 };
 
 /**  欄位資料型態（§7.3）。對應 `field_definitions.data_type`。 */
@@ -1873,6 +2046,31 @@ export type HealthResponse = {
 
 /**  健康狀態。JSON 中為小寫字串（`"ok"`、`"error"`）。 */
 export type HealthStatus = "ok" | "error";
+
+/**  檔案中的一列。 */
+export type ImportedCustomerProductName = ImportedCustomerProductName_Serialize | ImportedCustomerProductName_Deserialize;
+
+/**  檔案中的一列。 */
+export type ImportedCustomerProductName_Deserialize = {
+	/**  Excel 的列號（標題為第 1 列）。 */
+	row_no: number,
+	customer_code: string,
+	product_code: string,
+	name: string,
+	/**  沒有「備註」欄或空白時為 `null`（不更新既有的備註）。 */
+	notes?: string | null,
+};
+
+/**  檔案中的一列。 */
+export type ImportedCustomerProductName_Serialize = {
+	/**  Excel 的列號（標題為第 1 列）。 */
+	row_no: number,
+	customer_code: string,
+	product_code: string,
+	name: string,
+	/**  沒有「備註」欄或空白時為 `null`（不更新既有的備註）。 */
+	notes: string | null,
+};
 
 /**  `INVALID_STATUS` 的 `details`：單據目前的狀態。 */
 export type InvalidStatusDetails = {

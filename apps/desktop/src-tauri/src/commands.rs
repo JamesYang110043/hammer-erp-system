@@ -37,7 +37,8 @@ use hammer_shared::record::{
     UpdateRecordRequest,
 };
 use hammer_shared::sales::{
-    ProductCustomerName, SalesProductLookupItem, SalesProductLookupQuery, SalesProductName,
+    CustomerProductNameBatchRequest, CustomerProductNameBatchResult, ProductCustomerName,
+    SalesProductLookupItem, SalesProductLookupQuery, SalesProductName,
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
@@ -58,6 +59,7 @@ use crate::error::ClientError;
 use crate::formula::{FormulaPreview, FormulaPreviewRequest, FormulaSyntaxError};
 use crate::settings::normalize_server_url;
 use crate::state::{AppState, UploadProgress};
+use crate::xlsx_import::{self, CustomerProductNameImport};
 
 /// 呼叫伺服器的 `GET /api/v1/health`。
 ///
@@ -876,6 +878,41 @@ pub async fn product_customer_names(
     product_id: Id,
 ) -> Result<Vec<ProductCustomerName>, ClientError> {
     state.product_customer_names(product_id).await
+}
+
+/// 客戶品名批次寫入（需要 `record.write`，docs/architecture.md §8.9「客戶品名批次寫入 API」）：
+/// `dry_run = true` 只回傳每列的動作與錯誤；寫入時任一列有錯誤整批不寫入（`422 VALIDATION`，
+/// `details` 與 dry_run 的回應同格式）。
+#[tauri::command]
+#[specta::specta]
+pub async fn customer_product_names_batch(
+    state: State<'_, AppState>,
+    req: CustomerProductNameBatchRequest,
+) -> Result<CustomerProductNameBatchResult, ClientError> {
+    state.customer_product_names_batch(&req).await
+}
+
+/// 開啟選擇 `.xlsx` 的對話框並解析客戶品名（docs/architecture.md §8.7「Excel 匯入客戶品名」）。
+/// 使用者取消時回傳 `null`。檔案無法讀取、缺少必要的標題、沒有資料、超過列數上限時回傳
+/// [`ClientError::InvalidInput`]（訊息顯示給使用者）。只解析，不呼叫伺服器。
+#[tauri::command]
+#[specta::specta]
+pub async fn pick_customer_product_names_xlsx(
+    window: WebviewWindow,
+) -> Result<Option<CustomerProductNameImport>, ClientError> {
+    let dialog = window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("選擇要匯入的客戶品名 Excel 檔")
+        .add_filter("Excel 活頁簿", &["xlsx"]);
+    let Some(path) = run_dialog(dialog, FileDialogBuilder::blocking_pick_file).await? else {
+        return Ok(None);
+    };
+    let parsed = tauri::async_runtime::spawn_blocking(move || xlsx_import::read_file(&path))
+        .await
+        .map_err(|err| ClientError::storage(format!("無法讀取檔案：{err}")))?;
+    parsed.map(Some).map_err(ClientError::invalid_input)
 }
 
 /// 開啟選擇檔案的對話框並上傳（需要 `record.write`）。使用者取消時回傳 `null`。
