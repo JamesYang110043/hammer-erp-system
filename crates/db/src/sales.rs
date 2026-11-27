@@ -7,6 +7,7 @@
 //! - [`list_shipment_lines_for_return`]：銷貨退回帶入明細用的出貨明細
 //! - [`product_tax_types`]：新增時稅別的預設值（明細商品的稅別）
 //! - [`lookup_customer_name_matches`]、[`lookup_default_title_matches`]：銷貨用商品選擇 API 的 SQL 篩選
+//! - [`product_exists`]、[`customer_names_of_product`]：商品的客戶品名（§8.7）
 //! - [`product_name_sources`]、[`order_line_product_names`]：明細品名的帶入來源
 //! - [`lock_customer`]、[`list_order_lines_for_update`]：確認訂單時鎖定客戶、讀取明細
 //! - [`count_customer_documents`]、[`count_open_orders_by_product`]：客戶、商品被銷貨單據引用時的限制
@@ -209,6 +210,53 @@ pub async fn lookup_default_title_matches<'e>(
     .fetch_all(executor)
     .await?;
     Ok(ids)
+}
+
+/// 商品是否存在且未刪除（商品的客戶品名，§8.7）。
+pub async fn product_exists<'e>(
+    executor: impl PgExecutor<'e>,
+    product_id: Uuid,
+) -> Result<bool, DbError> {
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM products WHERE id = $1 AND deleted_at IS NULL) AS "e!""#,
+        product_id,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(exists)
+}
+
+/// [`customer_names_of_product`] 的一列。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomerNameOfProduct {
+    /// 客戶品名的 id。
+    pub id: Uuid,
+    pub customer_id: Uuid,
+    pub customer_is_active: bool,
+    pub name: String,
+    pub notes: Option<String>,
+}
+
+/// 商品 `product_id` 未刪除的客戶品名中，所屬客戶未刪除的，依客戶編號、客戶品名的 id 排序
+/// （§8.7「商品畫面的客戶品名」）。
+pub async fn customer_names_of_product<'e>(
+    executor: impl PgExecutor<'e>,
+    product_id: Uuid,
+) -> Result<Vec<CustomerNameOfProduct>, DbError> {
+    let rows = sqlx::query_as!(
+        CustomerNameOfProduct,
+        r#"
+        SELECT n.id, n.customer_id, c.is_active AS customer_is_active, n.name, n.notes
+        FROM customer_product_names n
+        JOIN customers c ON c.id = n.customer_id
+        WHERE n.product_id = $1 AND n.deleted_at IS NULL AND c.deleted_at IS NULL
+        ORDER BY c.code, n.id
+        "#,
+        product_id,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
 }
 
 /// 帶入品名的來源（§8.9「明細的品名」）：未刪除商品（含停用）的 `name`，以及客戶 `customer_id`

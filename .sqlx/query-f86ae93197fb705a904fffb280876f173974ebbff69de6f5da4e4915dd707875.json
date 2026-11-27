@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT n.id, n.customer_id, c.is_active AS customer_is_active, n.name, n.notes\n        FROM customer_product_names n\n        JOIN customers c ON c.id = n.customer_id\n        WHERE n.product_id = $1 AND n.deleted_at IS NULL AND c.deleted_at IS NULL\n        ORDER BY c.code, n.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "customer_product_names",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "customer_product_names",
+            "name": "customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "customer_is_active",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "customers",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "customer_product_names",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "notes",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "customer_product_names",
+            "name": "notes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "f86ae93197fb705a904fffb280876f173974ebbff69de6f5da4e4915dd707875"
+}

@@ -17,6 +17,10 @@
 //! # 批次取得明細品名 API（§8.9，M12）
 //!
 //! 見 [`product_names_param`]、[`SalesProductName`]。
+//!
+//! # 商品的客戶品名（§8.7，M12）
+//!
+//! 見 [`ProductCustomerName`]。
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -92,4 +96,23 @@ pub struct SalesProductName {
     pub customer_product_name: Option<String>,
     /// 依帶入順序決定的品名（`customer_product_name` ?? 商品的 `name`）。
     pub product_name: String,
+}
+
+/// 商品的客戶品名（§8.7「商品畫面的客戶品名」，M12）。
+///
+/// `GET /api/v1/products/{id}/customer-product-names`，需要 `record.read`，回應陣列（不分頁）：這個商品
+/// 未刪除的客戶品名中，所屬客戶未刪除的（停用的客戶照常列出），依客戶編號、客戶品名的 id 排序。
+/// 商品不存在或已刪除 → `404 NOT_FOUND`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ProductCustomerName {
+    /// 客戶品名的 id。
+    pub id: Id,
+    pub customer_id: Id,
+    /// 客戶的標題（依客戶的 `title_template`，預設 `{code} {name}`）。
+    pub customer_title: String,
+    /// 客戶是否啟用。
+    pub customer_is_active: bool,
+    /// 客戶品名。
+    pub name: String,
+    pub notes: Option<String>,
 }
