@@ -7,6 +7,10 @@
 //! - [`list_shipment_lines_for_return`]：銷貨退回帶入明細用的出貨明細
 //! - [`product_tax_types`]：新增時稅別的預設值（明細商品的稅別）
 //! - [`lookup_customer_name_matches`]、[`lookup_default_title_matches`]：銷貨用商品選擇 API 的 SQL 篩選
+//! - 客戶品名批次寫入（§8.9）：[`customers_by_codes`]、[`products_by_codes`]、[`existing_customers`]、
+//!   [`existing_products`]、[`lock_customers_for_update`]、[`lock_products_for_share`]、
+//!   [`customer_product_names_of`]、[`insert_customer_product_name`]、[`update_customer_product_name`]、
+//!   [`touch_customer`]
 //! - [`product_exists`]、[`customer_names_of_product`]：商品的客戶品名（§8.7）
 //! - [`product_name_sources`]、[`order_line_product_names`]：明細品名的帶入來源
 //! - [`lock_customer`]、[`list_order_lines_for_update`]：確認訂單時鎖定客戶、讀取明細
@@ -257,6 +261,190 @@ pub async fn customer_names_of_product<'e>(
     .fetch_all(executor)
     .await?;
     Ok(rows)
+}
+
+/// 依編號找未刪除的客戶（不分大小寫，與唯一索引相同）：`(lower(code), id)`（客戶品名批次寫入，§8.9）。
+pub async fn customers_by_codes<'e>(
+    executor: impl PgExecutor<'e>,
+    lower_codes: &[String],
+) -> Result<Vec<(String, Uuid)>, DbError> {
+    let rows = sqlx::query!(
+        r#"SELECT lower(code) AS "code!", id FROM customers
+           WHERE lower(code) = ANY($1) AND deleted_at IS NULL"#,
+        lower_codes,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.code, r.id)).collect())
+}
+
+/// 依料號找未刪除的商品（含停用；不分大小寫）：`(lower(code), id)`。
+pub async fn products_by_codes<'e>(
+    executor: impl PgExecutor<'e>,
+    lower_codes: &[String],
+) -> Result<Vec<(String, Uuid)>, DbError> {
+    let rows = sqlx::query!(
+        r#"SELECT lower(code) AS "code!", id FROM products
+           WHERE lower(code) = ANY($1) AND deleted_at IS NULL"#,
+        lower_codes,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.code, r.id)).collect())
+}
+
+/// `ids` 中未刪除的客戶。
+pub async fn existing_customers<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+) -> Result<Vec<Uuid>, DbError> {
+    let ids = sqlx::query_scalar!(
+        "SELECT id FROM customers WHERE id = ANY($1) AND deleted_at IS NULL",
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(ids)
+}
+
+/// `ids` 中未刪除的商品（含停用）。
+pub async fn existing_products<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+) -> Result<Vec<Uuid>, DbError> {
+    let ids = sqlx::query_scalar!(
+        "SELECT id FROM products WHERE id = ANY($1) AND deleted_at IS NULL",
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(ids)
+}
+
+/// 以 `FOR UPDATE` 依 id 順序鎖定客戶，回傳其中未刪除的。必須在 transaction 內呼叫。
+pub async fn lock_customers_for_update<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+) -> Result<Vec<Uuid>, DbError> {
+    let ids = sqlx::query_scalar!(
+        r#"SELECT id FROM customers WHERE id = ANY($1) AND deleted_at IS NULL
+           ORDER BY id FOR UPDATE"#,
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(ids)
+}
+
+/// 以 `FOR SHARE` 依 id 順序鎖定商品，回傳其中未刪除的。必須在 transaction 內呼叫。
+pub async fn lock_products_for_share<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[Uuid],
+) -> Result<Vec<Uuid>, DbError> {
+    let ids = sqlx::query_scalar!(
+        r#"SELECT id FROM products WHERE id = ANY($1) AND deleted_at IS NULL
+           ORDER BY id FOR SHARE"#,
+        ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(ids)
+}
+
+/// 客戶品名的一列（批次寫入比對既有資料用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomerProductNameRow {
+    pub id: Uuid,
+    pub customer_id: Uuid,
+    pub product_id: Uuid,
+    pub sort_order: i32,
+    pub name: String,
+    pub notes: Option<String>,
+}
+
+/// 客戶 `customer_ids` 未刪除的客戶品名。
+pub async fn customer_product_names_of<'e>(
+    executor: impl PgExecutor<'e>,
+    customer_ids: &[Uuid],
+) -> Result<Vec<CustomerProductNameRow>, DbError> {
+    let rows = sqlx::query_as!(
+        CustomerProductNameRow,
+        r#"SELECT id, customer_id, product_id, sort_order, name, notes
+           FROM customer_product_names
+           WHERE customer_id = ANY($1) AND deleted_at IS NULL"#,
+        customer_ids,
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// 新增一筆客戶品名。
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_customer_product_name<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    customer_id: Uuid,
+    sort_order: i32,
+    product_id: Uuid,
+    name: &str,
+    notes: Option<&str>,
+    user_id: Uuid,
+) -> Result<(), DbError> {
+    sqlx::query!(
+        r#"INSERT INTO customer_product_names
+             (id, customer_id, sort_order, product_id, name, notes, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7)"#,
+        id,
+        customer_id,
+        sort_order,
+        product_id,
+        name,
+        notes,
+        user_id,
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// 更新一筆客戶品名的 `name`、`notes`（`version` + 1）。
+pub async fn update_customer_product_name<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    name: &str,
+    notes: Option<&str>,
+    user_id: Uuid,
+) -> Result<(), DbError> {
+    sqlx::query!(
+        r#"UPDATE customer_product_names
+           SET name = $2, notes = $3, updated_at = now(), updated_by = $4, version = version + 1
+           WHERE id = $1 AND deleted_at IS NULL"#,
+        id,
+        name,
+        notes,
+        user_id,
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// 客戶的明細有變動：`version` + 1、更新 `updated_at` / `updated_by`（§8.5「明細子表」、§9.4）。
+pub async fn touch_customer<'e>(
+    executor: impl PgExecutor<'e>,
+    id: Uuid,
+    user_id: Uuid,
+) -> Result<(), DbError> {
+    sqlx::query!(
+        r#"UPDATE customers SET updated_at = now(), updated_by = $2, version = version + 1
+           WHERE id = $1"#,
+        id,
+        user_id,
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 /// 帶入品名的來源（§8.9「明細的品名」）：未刪除商品（含停用）的 `name`，以及客戶 `customer_id`

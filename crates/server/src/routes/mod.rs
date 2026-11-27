@@ -144,6 +144,10 @@ fn protected_routes() -> Router<AppState> {
         .route("/sales/product-lookup", get(sales::product_lookup))
         .route("/sales/product-names", get(sales::product_names))
         .route(
+            "/sales/customer-product-names/batch",
+            post(sales::customer_product_names_batch),
+        )
+        .route(
             "/products/{id}/customer-product-names",
             get(sales::product_customer_names),
         )

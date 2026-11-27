@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO customer_product_names\n             (id, customer_id, sort_order, product_id, name, notes, created_by, updated_by)\n           VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3698d0816c3bce2e039e30ca1d893832e4b27b90b635105083a6bce8c179e934"
+}
