@@ -7,6 +7,7 @@ import { useEntities } from '../../api/schema';
 import type { FieldDefinition, RelationRef } from '../../bindings';
 import { relationLabel } from '../../records/display';
 import { useDebouncedValue } from '../../utils/useDebouncedValue';
+import { RelationTitle } from './RelationTitle';
 
 /** 輸入關鍵字後等待多久才查詢（毫秒）。 */
 export const LOOKUP_DEBOUNCE_MS = 300;
@@ -108,6 +109,13 @@ export function RelationSelect({
       notFoundContent={lookup.isFetching ? <Spin size="small" /> : '找不到資料'}
       value={value || undefined}
       options={options}
+      labelRender={(props) =>
+        initial?.inactive && props.value === initial.id ? (
+          <RelationTitle relation={initial} />
+        ) : (
+          props.label
+        )
+      }
       onChange={(next: string | undefined, option) => {
         if (next && option && !Array.isArray(option)) {
           const label = String(option.label ?? '');

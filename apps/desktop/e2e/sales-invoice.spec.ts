@@ -43,7 +43,7 @@ const DOC = {
 };
 
 const page = <T>(items: T[]) => ({ items, total: items.length, page: 1, page_size: 50 });
-const rel = (id: string, title: string) => ({ id, title, deleted: false });
+const rel = (id: string, title: string) => ({ id, title, deleted: false, inactive: false });
 
 async function settled(p: Page) {
   await expect(p.locator('.ant-spin-spinning, .ant-spin-blur')).toHaveCount(0);

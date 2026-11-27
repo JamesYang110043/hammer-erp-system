@@ -100,7 +100,9 @@ describe('出貨明細帶入發票明細', () => {
     const line = (name: unknown) =>
       ({
         data: { product_name: name },
-        relations: { product_id: { id: 'p1', title: 'A001 扳手 10mm', deleted: false } },
+        relations: {
+          product_id: { id: 'p1', title: 'A001 扳手 10mm', deleted: false, inactive: false },
+        },
       }) as never;
     expect(sourceDescription(line('X 型扳手'))).toBe('X 型扳手');
     expect(sourceDescription(line(undefined))).toBe('扳手 10mm');
@@ -119,7 +121,14 @@ describe('出貨明細帶入發票明細', () => {
               unit_price: '120.0000',
               discount_rate: '0.1500',
             },
-            relations: { product_id: { id: 'p1', title: 'A001 不鏽鋼螺絲 M6', deleted: false } },
+            relations: {
+              product_id: {
+                id: 'p1',
+                title: 'A001 不鏽鋼螺絲 M6',
+                deleted: false,
+                inactive: false,
+              },
+            },
           },
         ],
       },

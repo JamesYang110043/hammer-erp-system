@@ -83,8 +83,29 @@ interface Saved {
   lines?: Record<string, { id?: string; data: Record<string, unknown> }[]>;
 }
 
-async function setup(page: Page, onSave: (req: Saved) => void) {
+/** 客戶品名的商品已停用（`relations.product_id.inactive`，§7.3）。 */
+function withInactiveProduct(record: ReturnType<typeof customerDetail>) {
+  if (!record?.lines) {
+    return record;
+  }
+  return {
+    ...record,
+    lines: {
+      ...record.lines,
+      customer_product_name: record.lines.customer_product_name!.map((l) => ({
+        ...l,
+        relations: { product_id: { ...l.relations!.product_id!, inactive: true } },
+      })),
+    },
+  };
+}
+
+async function setup(page: Page, onSave: (req: Saved) => void, inactiveProduct = false) {
   const customers = manyCustomers(3);
+  const detail = (id: string) => {
+    const record = customerDetail(customers, id);
+    return inactiveProduct ? withInactiveProduct(record) : record;
+  };
   await mockTauri(page, {
     get_server_url: () => 'http://localhost:8080',
     health_check: () => ({ status: 'ok', version: '0.1.0', database: 'ok' }),
@@ -111,13 +132,13 @@ async function setup(page: Page, onSave: (req: Saved) => void) {
     list_layouts: () => [],
     list_records: ({ key, query }) =>
       fakeListRecords(key === 'customer' ? customers : [], query as RecordListQuery),
-    get_record: ({ id }) => customerDetail(customers, id as string),
+    get_record: ({ id }) => detail(id as string),
     get_form_layout: () => DEFAULT_LAYOUT,
     lookup_records: ({ key }) =>
       key === 'product' ? Object.entries(PRODUCT_TITLES).map(([id, title]) => ({ id, title })) : [],
     update_record: ({ id, req }) => {
       onSave(req as Saved);
-      return customerDetail(customers, id as string);
+      return detail(id as string);
     },
     list_currencies: () => [],
   });
@@ -244,4 +265,43 @@ test('duplicate product error is shown on the row', async ({ page }) => {
     .toBe('1');
   await expect(rows.nth(0)).not.toContainText('此商品已設定客戶品名');
   await page.screenshot({ path: test.info().outputPath('customer-product-names-error.png') });
+});
+
+test('inactive product is marked in preview and edit, and saving still works', async ({ page }) => {
+  let saved: Saved | undefined;
+  await setup(
+    page,
+    (req) => {
+      saved = req;
+    },
+    true,
+  );
+  await page.goto(`/#/entities/customer?selected=${customerId(1)}`);
+
+  // 預覽：商品欄顯示「已停用」標籤
+  const preview = page.getByTestId('record-preview');
+  const names = preview.getByRole('region', { name: '客戶品名' });
+  const row = names.locator('tbody tr.ant-table-row').first();
+  await expect(row).toContainText('P001 扳手 10mm');
+  await expect(row.getByText('已停用', { exact: true })).toBeVisible();
+  await names.screenshot({ path: test.info().outputPath('customer-product-names-inactive.png') });
+
+  // 編輯：選擇器目前的值也顯示「已停用」；存檔照常送出
+  await page.goto(`/#/entities/customer?selected=${customerId(1)}&mode=edit`);
+  const panel = page.getByTestId('record-form-panel');
+  const editRows = panel
+    .getByRole('region', { name: '客戶品名' })
+    .locator('tbody tr.ant-table-row');
+  const product = select(editRows.nth(0), '商品');
+  await expect(product).toContainText('P001 扳手 10mm');
+  await expect(product.getByText('已停用', { exact: true })).toBeVisible();
+  await panel
+    .getByRole('region', { name: '客戶品名' })
+    .screenshot({ path: test.info().outputPath('customer-product-names-inactive-edit.png') });
+  await editRows.nth(0).getByRole('textbox', { name: '客戶品名' }).fill('X 型扳手（停用後）');
+  await panel.getByRole('button', { name: /儲\s*存/ }).click();
+  await expect.poll(() => saved).toBeDefined();
+  expect(saved!.lines?.customer_product_name).toEqual([
+    { id: CUSTOMER_PRODUCT_NAME_A, data: { name: 'X 型扳手（停用後）' } },
+  ]);
 });

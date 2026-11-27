@@ -10,11 +10,11 @@ import {
   formatFieldText,
   formulaErrorLabel,
   isNumericType,
-  relationLabel,
   valueField,
 } from '../../records/display';
 import { NumberText } from '../../components/NumberText';
 import { AttachmentLink } from './AttachmentLink';
+import { RelationTitle } from './RelationTitle';
 import { MISSING_ATTACHMENT_TEXT } from './FileInput';
 
 function OptionTag({ field, value }: { field: FieldDefinition; value: string }) {
@@ -27,7 +27,7 @@ function OptionTag({ field, value }: { field: FieldDefinition; value: string }) 
  *
  * - 勾選：唯讀的勾選框
  * - 單選、多選：選項顏色標籤
- * - 關聯：關聯資料的標題（`record.relations`），已刪除時加上「（已刪除）」
+ * - 關聯：關聯資料的標題（`record.relations`），已刪除時加上「（已刪除）」，已停用時加上「已停用」標籤
  * - 附件：檔名（`record.attachments`），點擊下載
  * - 公式：依結果型態顯示；`record.formula_errors` 有該欄位時加上錯誤圖示（見 {@link FormulaValue}）
  * - 其他：見 {@link formatFieldText}（金額千分位、日期時間為台北時間）
@@ -69,9 +69,7 @@ export function FieldValue({
     case 'relation': {
       const ref = record?.relations?.[field.field_key];
       return ref ? (
-        <Typography.Text type={ref.deleted ? 'secondary' : undefined}>
-          {relationLabel(ref)}
-        </Typography.Text>
+        <RelationTitle relation={ref} />
       ) : (
         <Typography.Text type="secondary">{DELETED_SUFFIX}</Typography.Text>
       );

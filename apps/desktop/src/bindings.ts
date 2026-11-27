@@ -2325,7 +2325,7 @@ export type Record_Deserialize = {
 	 *  關聯欄位所指的資料，鍵為 `field_key`；只包含 `data` 中有值的 `relation` 欄位
 	 *  （見模組說明「關聯欄位」）。
 	 */
-	relations?: { [key in string]: RelationRef },
+	relations?: { [key in string]: RelationRef_Deserialize },
 	/**
 	 *  附件欄位所指的附件，鍵為 `field_key`；只包含 `data` 中有值、且附件未標記刪除的 `file` 欄位
 	 *  （見模組說明「附件欄位」）。
@@ -2366,7 +2366,7 @@ export type Record_Serialize = {
 	 *  關聯欄位所指的資料，鍵為 `field_key`；只包含 `data` 中有值的 `relation` 欄位
 	 *  （見模組說明「關聯欄位」）。
 	 */
-	relations: { [key in string]: RelationRef },
+	relations: { [key in string]: RelationRef_Serialize },
 	/**
 	 *  附件欄位所指的附件，鍵為 `field_key`；只包含 `data` 中有值、且附件未標記刪除的 `file` 欄位
 	 *  （見模組說明「附件欄位」）。
@@ -2395,13 +2395,36 @@ export type Record_Serialize = {
 };
 
 /**  關聯欄位所指的一筆資料（[`Record::relations`] 的值）。 */
-export type RelationRef = {
+export type RelationRef = RelationRef_Serialize | RelationRef_Deserialize;
+
+/**  關聯欄位所指的一筆資料（[`Record::relations`] 的值）。 */
+export type RelationRef_Deserialize = {
 	/**  目標資料的 id（與 `data` 中的值相同）。 */
 	id: string,
 	/**  目標資料的標題；找不到目標資料時為空字串。 */
 	title: string,
 	/**  目標資料已刪除（或找不到）。 */
 	deleted: boolean,
+	/**
+	 *  目標資料已停用（M12，§7.3）：目標未刪除、目標資料類別有 `is_active` 欄位（系統資料表）且為
+	 *  `false`。其他情況（沒有 `is_active`、自訂資料類別、已刪除）一律 `false`。只用於顯示。
+	 */
+	inactive?: boolean,
+};
+
+/**  關聯欄位所指的一筆資料（[`Record::relations`] 的值）。 */
+export type RelationRef_Serialize = {
+	/**  目標資料的 id（與 `data` 中的值相同）。 */
+	id: string,
+	/**  目標資料的標題；找不到目標資料時為空字串。 */
+	title: string,
+	/**  目標資料已刪除（或找不到）。 */
+	deleted: boolean,
+	/**
+	 *  目標資料已停用（M12，§7.3）：目標未刪除、目標資料類別有 `is_active` 欄位（系統資料表）且為
+	 *  `false`。其他情況（沒有 `is_active`、自訂資料類別、已刪除）一律 `false`。只用於顯示。
+	 */
+	inactive: boolean,
 };
 
 /**

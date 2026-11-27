@@ -87,7 +87,14 @@ test('opening stock: enter, post and check inventory', async ({ page: p }) => {
               document: null,
               title: PRODUCT_TITLE,
               data: { ...line.data },
-              relations: { product_id: { id: PRODUCT_ID, title: PRODUCT_TITLE, deleted: false } },
+              relations: {
+                product_id: {
+                  id: PRODUCT_ID,
+                  title: PRODUCT_TITLE,
+                  deleted: false,
+                  inactive: false,
+                },
+              },
             },
           ],
         },

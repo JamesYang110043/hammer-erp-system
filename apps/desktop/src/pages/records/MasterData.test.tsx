@@ -306,8 +306,8 @@ describe('商品表單', () => {
           { code: 'A001', name: '手機殼', category_id: CAT_PHONE, unit_id: UNIT_PCS },
           {
             relations: {
-              category_id: { id: CAT_PHONE, title: '手機', deleted: false },
-              unit_id: { id: UNIT_PCS, title: '個', deleted: false },
+              category_id: { id: CAT_PHONE, title: '手機', deleted: false, inactive: false },
+              unit_id: { id: UNIT_PCS, title: '個', deleted: false, inactive: false },
             },
           },
         ),
