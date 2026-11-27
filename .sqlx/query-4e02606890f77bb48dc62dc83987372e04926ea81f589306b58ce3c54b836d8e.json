@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE customers SET updated_at = now(), updated_by = $2, version = version + 1\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4e02606890f77bb48dc62dc83987372e04926ea81f589306b58ce3c54b836d8e"
+}

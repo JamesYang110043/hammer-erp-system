@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE customer_product_names\n           SET name = $2, notes = $3, updated_at = now(), updated_by = $4, version = version + 1\n           WHERE id = $1 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e2de1fee93a5e29882587a00a8ba5e8896e1faedaa54403a572f38806c78b23c"
+}

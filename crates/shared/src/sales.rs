@@ -21,6 +21,10 @@
 //! # 商品的客戶品名（§8.7，M12）
 //!
 //! 見 [`ProductCustomerName`]。
+//!
+//! # 客戶品名批次寫入 API（§8.9，M12）
+//!
+//! 見 [`CustomerProductNameBatchRequest`]、[`CustomerProductNameBatchResult`]。
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -115,4 +119,109 @@ pub struct ProductCustomerName {
     /// 客戶品名。
     pub name: String,
     pub notes: Option<String>,
+}
+
+/// 客戶品名批次寫入 API 的上限（§8.9「客戶品名批次寫入 API」，M12）。
+pub mod customer_product_name_batch {
+    /// 一次最多幾列。
+    pub const MAX_ROWS: usize = 5000;
+    /// `rows` 錯誤時 `details.field` 的值。
+    pub const ROWS: &str = "rows";
+}
+
+/// `POST /api/v1/sales/customer-product-names/batch` 的 request（需要 `record.write`）。
+///
+/// Excel 匯入與開單時存成客戶品名共用：依（客戶，商品）upsert 客戶品名。`dry_run = true` 只檢查並回傳
+/// 每列的動作與錯誤；`false` 時任一列有錯誤整批不寫入（`422 VALIDATION`，`details` 為
+/// [`CustomerProductNameBatchResult`]）。`rows` 1–[`customer_product_name_batch::MAX_ROWS`] 列。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct CustomerProductNameBatchRequest {
+    pub dry_run: bool,
+    pub rows: Vec<CustomerProductNameBatchRow>,
+}
+
+/// 批次寫入的一列：以 `customer_code` + `product_code`，或 `customer_id` + `product_id` 指定（二擇一）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct CustomerProductNameBatchRow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub customer_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub customer_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<Id>,
+    /// 客戶品名（必填）。
+    #[serde(default)]
+    pub name: Option<String>,
+    /// 備註：沒帶這個鍵 → 不更新（`None`）；帶 `null` → 清空（`Some(None)`）；帶字串 → 更新。
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[specta(optional, type = Option<String>)]
+    pub notes: Option<Option<String>>,
+}
+
+/// 有帶這個鍵（含 `null`）時為 `Some`。
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// 批次寫入一列的動作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomerProductNameBatchAction {
+    /// 新增（排在該客戶既有客戶品名之後）。
+    Create,
+    /// 更新 `name`（與有帶的 `notes`）。
+    Update,
+    /// 沒有變動，不寫入。
+    Unchanged,
+}
+
+/// 批次寫入一列的錯誤。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct CustomerProductNameBatchError {
+    /// request 中的鍵（例如 `product_code`）；不屬於某個鍵時為 `null`。
+    pub field: Option<String>,
+    pub message: String,
+    /// 同一批重複時，第一次出現的列的 `index`。
+    pub duplicate_of: Option<u32>,
+}
+
+/// 批次寫入一列的結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct CustomerProductNameBatchRowResult {
+    /// 在 request `rows` 中的位置（從 0 開始）。
+    pub index: u32,
+    /// 有錯誤時為 `null`。
+    pub action: Option<CustomerProductNameBatchAction>,
+    /// 解析後的客戶、商品 id（解析不到為 `null`）。
+    pub customer_id: Option<Id>,
+    pub product_id: Option<Id>,
+    pub errors: Vec<CustomerProductNameBatchError>,
+}
+
+/// 各動作與錯誤的列數。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct CustomerProductNameBatchSummary {
+    pub create: u32,
+    pub update: u32,
+    pub unchanged: u32,
+    pub error: u32,
+}
+
+/// 批次寫入的回應（`dry_run`，或寫入成功）；寫入時有錯誤則為 `422` 的 `details`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct CustomerProductNameBatchResult {
+    pub dry_run: bool,
+    pub summary: CustomerProductNameBatchSummary,
+    /// 依 request 順序的每一列。
+    pub rows: Vec<CustomerProductNameBatchRowResult>,
 }

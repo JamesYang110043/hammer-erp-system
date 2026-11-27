@@ -143,6 +143,14 @@ pub enum CoreError {
         details: LotInUseDetails,
     },
 
+    /// 輸入不合法，`details` 為該 API 專屬的格式（例如客戶品名批次寫入的每列結果，§8.9）。
+    /// API 回應為 `VALIDATION`。
+    #[error("{message}")]
+    ValidationDetails {
+        message: String,
+        details: serde_json::Value,
+    },
+
     /// 操作後系統沒有任何有效（啟用、未刪除）的管理者（§6.2）。
     /// API 回應為 `VALIDATION`，`details.reason` 為 [`LAST_ADMIN_REASON`]。
     #[error("系統至少需要保留一個有效的管理者，無法停用、刪除最後一個管理者或變更其角色")]
@@ -217,6 +225,7 @@ impl CoreError {
             | Self::FormulaReferenced(_)
             | Self::RecordInUse { .. }
             | Self::DocumentsInUse { .. }
+            | Self::ValidationDetails { .. }
             | Self::LastAdmin => ErrorCode::Validation,
             Self::InvalidStatus { .. } => ErrorCode::InvalidStatus,
             Self::StockInsufficient { .. } => ErrorCode::StockInsufficient,
@@ -258,6 +267,8 @@ impl From<CoreError> for ApiError {
             ApiError::new(code, message).with_details(serde_json::json!({ "field": field }))
         } else if let CoreError::InvalidParam { param, message } = err {
             ApiError::new(code, message).with_details(serde_json::json!({ "field": param }))
+        } else if let CoreError::ValidationDetails { message, details } = err {
+            ApiError::new(code, message).with_details(details)
         } else if let CoreError::InvalidFields(errors) = &err {
             let fields: Vec<_> = errors
                 .iter()
