@@ -2152,7 +2152,8 @@ request：
 **效能**（M12）：
 
 - **目標**：1 萬筆商品、這位客戶 500 筆客戶品名時，`q` 有值（一個詞、兩個詞）的本機回應時間 p95 < 200 ms。`q` 空白時量測並記錄，不設目標。
-- **量測方式**：以 `#[ignore]` 的整合測試建立上述資料（商品的 `code`、`name` 混合中英文，客戶品名指向其中 500 筆），對 `q` 為空白、一個詞、兩個詞（含有符合與沒有符合的詞）各呼叫 50 次（先暖機 5 次，不計入），計算 p50、p95；以 `cargo test --release -p hammer-server -- --ignored <測試名稱> --nocapture` 執行，結果記在 PR。
+- **量測方式**：以 `#[ignore]` 的整合測試建立上述資料（商品的 `code`、`name` 混合中英文，客戶品名指向其中 500 筆），對 `q` 為空白、一個詞、兩個詞（含有符合與沒有符合的詞）各呼叫 50 次（先暖機 5 次，不計入），計算 p50、p95；以 `cargo test --release -p hammer-server --test sales_product_lookup_api -- --ignored --nocapture lookup_performance` 執行，結果記在 PR。
+- **量測結果**（#279，本機 PostgreSQL 16、release build）：M11 的做法 p95 約 225–255 ms（第一組沒滿時讀完全部商品）；SQL 篩選後 `q` 有值時 p95 2–19 ms、`q` 空白 3 ms，未加 `pg_trgm` 索引。
 - **實作**（結果與排序必須與上方規格**完全相同**）：
   - 第 1 組由 SQL 取得：這位客戶未刪除的客戶品名 JOIN 未刪除、`is_active = true` 的商品，每個詞都符合 `customer_product_names.name ILIKE '%詞%' ESCAPE '\'`，`ORDER BY products.id DESC LIMIT limit`。
   - 商品的 `title_template` **正好是** `{code} {name}`（預設）時，第 2 組也由 SQL 取得：未刪除、啟用中、不在第 1 組的商品（LEFT JOIN 這位客戶的客戶品名），每個詞符合 `code`、`name`、客戶品名任一個 `ILIKE`（詞不含空白，不會跨欄位符合，與比對「以空白連接的比對文字」結果相同），`ORDER BY id DESC LIMIT (limit - 第 1 組筆數)`。只讀需要的筆數。

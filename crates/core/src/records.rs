@@ -1082,6 +1082,19 @@ impl Store {
         }
     }
 
+    /// 依 id 讀取資料（**含已軟刪除**，順序不固定）。
+    pub(crate) async fn find_by_ids(
+        &self,
+        conn: &mut PgConnection,
+        entity_id: Id,
+        ids: &[Id],
+    ) -> Result<Vec<hammer_db::record::RelatedRecordRow>, DbError> {
+        match self {
+            Self::CustomRecords => db::find_records_by_ids(conn, entity_id, ids).await,
+            Self::Table(table) => system_db::find_records_by_ids(conn, table, ids).await,
+        }
+    }
+
     /// 選擇器的一批資料：未刪除（系統資料表另外排除 `is_active = false`）、`id` 小於 `before`、
     /// 由新到舊。
     pub(crate) async fn list_before(
