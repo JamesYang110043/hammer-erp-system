@@ -402,7 +402,9 @@ desktop(src-tauri) ──▶ shared, formula
 - 寫入：值必須是目標資料類別中**未刪除**的資料 id，否則 `422 VALIDATION`（`details.fields` 指出欄位）。修改資料時只檢查有變動的關聯欄位，並以 `FOR SHARE` 鎖定目標資料到 transaction 結束，避免同時被刪除。目標是系統資料類別時查詢並鎖定它的專屬資料表；目標的 `is_active = false` 不影響寫入（§7.1）。
 - 系統資料表的外鍵（`unit_id`、`category_id`、`parent_id`）也是指向系統資料類別的 `relation` 系統欄位，寫入、回應、篩選的規則與此相同；另外有資料庫外鍵（`REFERENCES`）。
 - 目標資料之後被刪除：允許刪除，關聯欄位保留原值。
-- 回應：列表與單筆回應有 `relations: { "<field_key>": { "id", "title", "deleted" } }`，列出 `data` 中每個有值的關聯欄位；`title` 依目標資料類別的標題規則產生（§8.5），目標已刪除時 `deleted = true`、`title` 為刪除前的標題。
+- 回應：列表與單筆回應有 `relations: { "<field_key>": { "id", "title", "deleted", "inactive" } }`，列出 `data` 中每個有值的關聯欄位；`title` 依目標資料類別的標題規則產生（§8.5），目標已刪除時 `deleted = true`、`title` 為刪除前的標題。
+- `inactive`（M12）：目標資料**未刪除**、目標資料類別有 `is_active` 欄位（系統資料表的 `is_active`，例如 `product`、`customer`、`supplier`）且值為 `false` 時為 `true`；其他情況（沒有 `is_active` 的資料類別、自訂資料類別、目標已刪除）一律 `false`。與 `title` 在同一次查詢讀取，不增加查詢次數。只用於顯示：寫入規則不變（停用的目標仍可寫入），選擇器仍不列出停用的資料。
+  - 桌面程式：明細表與唯讀預覽的關聯儲存格在 `inactive` 時於標題後加上 `neutral` 的「已停用」標籤（標題為次要色，灰字）；`deleted` 維持現行的已刪除顯示（兩者不會同時為 `true`）。存檔不阻擋，也不自動移除。
 - 篩選只支援 `eq`（值為資料 id）、`empty`；不能排序（§10）。
 - 選擇器：`GET /api/v1/entities/{key}/records/lookup?q=&limit=` 依標題比對（以空白分隔的每個詞都要出現，不分大小寫），回傳未刪除資料的 `id`、`title`，由新到舊（系統資料類別另外排除 `is_active = false` 的資料）；`limit` 預設 20、上限 50。需要 `record.read`。標題不存入資料庫，所以依 id 分批讀取資料、產生標題後比對。
 - 不做：反向列表（「這台設備的所有維修單」）、多選關聯。
@@ -1298,8 +1300,87 @@ M11 的 migration 寫入 `entity_definitions`（規則同 §8.6「M3 的系統�
 - **商品刪除、停用**：客戶品名**不阻擋**刪除或停用商品，也不連動刪除（列保留，客戶表單照常顯示，關聯的 `deleted = true`）。
   - 商品已刪除：銷貨明細不能選已刪除的商品（§7.3），所以帶入用不到；選擇 API 不列出。
   - 商品已停用：選擇 API 不列出（與通用 `lookup` 相同）；已在明細上的停用商品（§7.1 允許）仍依客戶品名帶入，品名才會與之前開的單據一致。
+  - **停用提示**（M12）：客戶品名的 `product_id` 指向停用商品時，`relations.product_id.inactive = true`（§7.3），客戶的預覽與編輯畫面的商品欄顯示「已停用」標籤，提醒使用者這個商品在開單時選不到。存檔不阻擋。
 - 修改客戶品名或商品的 `name`，**不影響**已開的銷貨單據（明細存的是品名快照）。
 - 只有銷貨端；進貨端沿用商品主檔的名稱，不做廠商品名。依客戶不同的單位、規格、數量換算、售價都不做。
+- 一次寫入多位客戶的客戶品名（Excel 匯入、開單時存成客戶品名）使用「客戶品名批次寫入 API」（§8.9，M12），結果與經由客戶 API 存檔相同（`version`、操作紀錄）。
+
+#### 商品畫面的客戶品名（M12）
+
+從商品這邊查看每位客戶使用的名稱。第一版**唯讀**，新增、修改、刪除仍在客戶畫面。
+
+**API**：`GET /api/v1/products/{id}/customer-product-names`（需要 `record.read`；型別在 `hammer_shared::sales`，邏輯在 `hammer_core::sales`）。通用關聯不支援反向列表（§7.3），所以另外提供這支專屬端點（§10）。
+
+- 商品不存在或已刪除 → `404 NOT_FOUND`「找不到此商品」；`id` 不是 uuid 時與其他路徑參數相同。停用的商品照常回傳。
+- 範圍：這個商品未刪除的客戶品名，且所屬客戶**未刪除**（停用的客戶照常列出）。
+- 排序：客戶編號（`customers.code`）由小到大，再依客戶品名的 `id`（確定的順序）。一個商品的客戶數有限，不分頁，直接回傳陣列。
+
+回應 `200`：
+
+```json
+[ { "id": "…", "customer_id": "…", "customer_title": "C001 大華五金", "customer_is_active": true,
+    "name": "X 型扳手", "notes": null },
+  { "id": "…", "customer_id": "…", "customer_title": "C002 永昌工具", "customer_is_active": false,
+    "name": "工具組零件 03", "notes": "2026 年起改名" } ]
+```
+
+- `id` 為客戶品名的 id；`customer_title` 依客戶的 `title_template`（預設 `{code} {name}`）產生。
+
+**畫面**：商品的全頁表單（編輯既有商品，`/entities/product/:id`；新增時不顯示）在表單版面的所有區塊之後，固定加上唯讀區塊「客戶品名」，不納入表單版面（`form_layouts`、設計器都看不到）。商品之後若改用分割檢視（§8.7「畫面：分割檢視」），右側預覽同樣在最後顯示這個區塊。
+
+- 表格欄位：客戶（`customer_title`，停用的客戶加上 `neutral` 的「停用」標籤）、客戶品名、備註；排序依 API。
+- 沒有資料時顯示「尚未設定客戶品名」；查詢失敗時顯示錯誤訊息，不影響表單其他部分。
+- 點客戶 → 開啟客戶畫面並選取該客戶（`/entities/customer?selected=<customer_id>`）；表單有未存檔的修改時先確認（`useUnsavedGuard`）。
+- 客戶存檔（通用資料 API）、客戶品名批次寫入成功後，清除這支 API 的查詢快取，回到商品畫面時看到新資料。
+
+#### Excel 匯入客戶品名（M12）
+
+導入初期一次匯入大量客戶品名。寫入使用「客戶品名批次寫入 API」（§8.9）。
+
+**入口**：客戶畫面（`/entities/customer`，分割與表格檢視都有）頁首的「匯入客戶品名」按鈕；只有 `record.write` 顯示。
+
+**檔案格式**：
+
+- `.xlsx`，只讀**第一個工作表**。Tauri 端以檔案對話框（篩選 `.xlsx`）選檔，以 `calamine` 讀取；取消選檔時不做任何事。
+- 第一列為標題，依**標題名稱**對應欄位，順序不限；標題去除前後空白後比對，其他標題的欄位忽略：
+
+  | 標題 | 必要 | 對應 |
+  |---|---|---|
+  | 客戶編號 | 是 | `customer_code` |
+  | 料號 | 是 | `product_code` |
+  | 客戶品名 | 是 | `name` |
+  | 備註 | 否 | `notes` |
+
+- 儲存格轉成文字：文字去除前後空白；整數值的數字不帶小數（`1001`，不是 `1001.0`），其他數字以最短的十進位表示；日期為 `YYYY-MM-DD`；布林為 `TRUE` / `FALSE`；空白儲存格為空字串。
+- 四個欄位都空白的列略過（不送出，也不計入列數）。
+- 「備註」：沒有這一欄、或該列的儲存格空白 → 該列**不帶** `notes`（既有的備註保留）；有值 → 更新備註。Excel 無法清空備註。
+
+**檔案層級的錯誤**（Tauri 端回傳，不呼叫 API；顯示錯誤訊息，維持在客戶畫面）：
+
+| 情況 | 訊息 |
+|---|---|
+| 檔案無法開啟或不是有效的 `.xlsx` | 「無法讀取檔案：<原因>」 |
+| 沒有工作表、或第一個工作表沒有資料 | 「檔案中沒有資料」 |
+| 缺少必要的標題 | 「缺少標題：客戶編號、料號」（列出缺少的，依上表順序） |
+| 同一個標題出現兩次 | 「標題「料號」重複」 |
+| 略過空白列後沒有資料列 | 「檔案中沒有資料」 |
+| 資料列超過 5000 列 | 「一次最多匯入 5000 列，這個檔案有 6200 列」 |
+
+**列層級的錯誤**由 API 的 `dry_run` 檢查（訊息見 §8.9「客戶品名批次寫入 API」）：客戶不存在、料號不存在、編號空白、品名空白或過長、同一批重複等。
+
+**流程**：
+
+1. 選檔 → Tauri 解析，回傳每列的 Excel 列號（標題為第 1 列）與四個欄位
+2. 以 `dry_run = true` 呼叫批次寫入 API，開啟預覽對話框：
+   - 上方顯示「新增 N、修改 N、不變 N、錯誤 N」
+   - 表格：列號（Excel 列號）、客戶編號、料號、客戶品名、動作（新增／修改／不變）、錯誤訊息；有錯誤的列以錯誤色標示
+   - 有錯誤時「匯入」按鈕停用，並提示「請修正 Excel 後重新選擇檔案」；「重新選擇檔案」回到步驟 1
+   - 全部都是「不變」時「匯入」按鈕停用（「沒有需要匯入的資料」）
+3. 按「匯入」→ 以同一組資料、`dry_run = false` 呼叫：
+   - 成功：關閉對話框，顯示「已匯入客戶品名：新增 N 筆、修改 N 筆」，清除客戶相關的查詢快取（客戶列表、客戶資料、商品畫面的客戶品名）
+   - `422 VALIDATION`（預覽之後資料被別人改了）：以回應更新預覽表格，維持在對話框
+   - 其他錯誤：顯示錯誤訊息，維持在對話框
+- 不做：範本下載（M7 的 Excel 匯出完成後再加）、CSV、多個工作表、刪除客戶品名、通用的匯入框架。
 
 #### 畫面：分割檢視（M10）
 
@@ -1851,7 +1932,7 @@ M4c 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 | 修改既有的列：帶了 `null` / 空白 | 依「新增的列」重新帶入 |
 
 - 一次存檔的所有列一起查詢客戶品名（`customer_id = C AND product_id = ANY(…) AND deleted_at IS NULL`），不要每列各查一次。
-- 表頭**換客戶**時，伺服器**不**重新帶入既有列的品名（已手動修改的品名不應被覆蓋）；由桌面程式詢問使用者後，把要重新帶入的列的 `product_name` 送空白或新值。
+- 表頭**換客戶**時，伺服器**不**重新帶入既有列的品名（已手動修改的品名不應被覆蓋）；由桌面程式詢問使用者後，把要重新帶入的列的 `product_name` 送空白或新值。桌面程式「重新帶入」時以「批次取得明細品名 API」（M12，見下方）**一次**取得所有明細的品名，以 `product_id` 對應；API 沒有回傳的商品（已刪除）保留該列原本的品名；查詢失敗時退回商品名稱，並顯示「無法取得客戶品名，已帶入商品名稱」。
 - **銷貨退回**：存檔時與 `product_id`、`unit_price` 一起由伺服器從出貨明細帶入（系統維護，request 帶了一律忽略，§7.1）。
 - 確認、過帳時不重新帶入品名（只檢查）；品名不影響庫存與成本。
 
@@ -1871,6 +1952,20 @@ M4c 的 migration 寫入下列 `entity_definitions`（`is_system = true`、`stor
 **既有資料**（M11 的 migration）：三張表先加可為 `NULL` 的 `product_name` → 訂單明細、出貨明細以當時商品的 `name` 補上（含已刪除的商品、已刪除的明細）；銷貨退回明細以出貨明細補好的 `product_name` 補上（與商品的 `name` 相同）→ 再設 `NOT NULL`。
 
 **內部報表與查詢**：庫存、異動流水帳（§8.10 的 `product_name` 是商品主檔的名稱）、統計等以商品主檔的名稱為主；需要時另加一欄「單據品名」（明細的 `product_name`）。明細子表的 `title_template` 不變（仍為商品的料號與名稱）。
+
+**存檔後詢問是否存成客戶品名**（M12，桌面程式）：業務開單時手動修改的品名通常就是客戶慣用的名稱，存檔後詢問是否存成客戶品名，讓客戶品名從日常開單累積。只有訂單、出貨單（銷貨退回的品名不能修改，不詢問）。
+
+1. 訂單、出貨單存檔（新增或修改）成功後，使用者有 `record.write` 時才進行；沒有則不詢問。
+2. 取存檔回應的明細：`product_id` 有值、`product_name` 去除前後空白後不是空字串的列；同一個商品有多列時取**第一列**（依明細順序）。沒有這種列 → 不詢問。
+3. 以「批次取得明細品名 API」取得這位客戶（表頭的 `customer_id`）目前帶入的品名（`product_name`）。查詢失敗 → 不詢問、不顯示錯誤（單據已存檔）。
+4. 找出單據上的品名與目前帶入的品名**不同**的列（去除前後空白後比對，區分大小寫）；API 沒有回傳的商品（已刪除）略過。沒有不同的列 → 不詢問。
+5. 顯示對話框「是否將以下品名設為此客戶的客戶品名？」：
+   - 表格：勾選（預設全勾）、商品（料號與名稱，即明細 `product_id` 的關聯標題）、目前的品名、單據上的品名
+   - 「設為客戶品名」（沒有勾選任何列時停用）→ 以 id 呼叫「客戶品名批次寫入 API」（`dry_run = false`，每列 `customer_id`、`product_id`、`name` = 單據上的品名，不帶 `notes`）。成功：顯示「已設定 N 筆客戶品名」（N = 新增 + 修改），清除客戶相關的查詢快取；失敗：顯示「設定客戶品名失敗：<錯誤訊息>」。
+   - 「略過」→ 關閉，不寫入。
+   - 不論結果，已存檔的單據都不受影響；對話框關閉後繼續存檔後原本的畫面行為。
+- 範例：客戶 A 的 P001 客戶品名為「X 型扳手」，P002 沒有設定（商品名稱「鉗子」）。訂單明細依序為 P001「X 型扳手」、P002「尖嘴鉗」、P002「鉗子」、P003（品名不變）→ 對話框只列出 P002：目前「鉗子」、單據「尖嘴鉗」（P002 取第一列）。按「設為客戶品名」後新增「P002 → 尖嘴鉗」，之後客戶 A 新開的單據選 P002 帶入「尖嘴鉗」。
+- 不做：「不再詢問」的設定、銷項發票。
 
 #### 金額與稅額
 
@@ -2053,6 +2148,115 @@ request：
 - `default_sale_price` 為未稅價（§8.6），`null` 表示沒有設定；含稅單據的換算仍由桌面程式處理（§8.9「金額與稅額」）。
 - 沒帶 `customer_id`：只比對商品標題，`customer_product_name` 都是 `null`、`product_name` = `name`，排序只有第 2 組。
 - 範例：客戶 A 有「P001 → X 型扳手」「P003 → 工具組零件 03」。`q = "扳手"` → P001（第 1 組：客戶品名含「扳手」），之後是其他名稱含「扳手」的商品（第 2 組）；`q = "零件"` → P003（商品名稱沒有「零件」也找得到）；客戶 B 查 `q = "零件"` → 找不到 P003（不比對其他客戶的客戶品名）。
+
+**效能**（M12）：
+
+- **目標**：1 萬筆商品、這位客戶 500 筆客戶品名時，`q` 有值（一個詞、兩個詞）的本機回應時間 p95 < 200 ms。`q` 空白時量測並記錄，不設目標。
+- **量測方式**：以 `#[ignore]` 的整合測試建立上述資料（商品的 `code`、`name` 混合中英文，客戶品名指向其中 500 筆），對 `q` 為空白、一個詞、兩個詞（含有符合與沒有符合的詞）各呼叫 50 次（先暖機 5 次，不計入），計算 p50、p95；以 `cargo test --release -p hammer-server -- --ignored <測試名稱> --nocapture` 執行，結果記在 PR。
+- **實作**（結果與排序必須與上方規格**完全相同**）：
+  - 第 1 組由 SQL 取得：這位客戶未刪除的客戶品名 JOIN 未刪除、`is_active = true` 的商品，每個詞都符合 `customer_product_names.name ILIKE '%詞%' ESCAPE '\'`，`ORDER BY products.id DESC LIMIT limit`。
+  - 商品的 `title_template` **正好是** `{code} {name}`（預設）時，第 2 組也由 SQL 取得：未刪除、啟用中、不在第 1 組的商品（LEFT JOIN 這位客戶的客戶品名），每個詞符合 `code`、`name`、客戶品名任一個 `ILIKE`（詞不含空白，不會跨欄位符合，與比對「以空白連接的比對文字」結果相同），`ORDER BY id DESC LIMIT (limit - 第 1 組筆數)`。只讀需要的筆數。
+  - 範本被修改過時：第 1 組同上；第 2 組維持現行做法（依 id 分批讀取、產生標題後比對）。
+  - 詞中的 `\`、`%`、`_` 先跳脫，視為一般字元。
+  - 不分大小寫：SQL 端使用 `ILIKE`；回歸測試涵蓋英文大小寫混用、中文、全形字元，與 Rust 端的比對（現行做法）結果相同。
+  - SQL 篩選後仍達不到目標時，以 migration 加上 `pg_trgm` 的 GIN 索引（`products (code, name)`、`customer_product_names (name)`），並在 §8.6、§8.7 的索引說明補上。
+- **回歸測試**：同一組資料、同一組查詢，新舊做法（預設範本與自訂範本各一組）的結果與排序完全相同；既有的選擇 API 測試全部通過。
+- 不做：通用 `lookup`（§7.3）的效能（另開 issue）；不改變比對與排序規則。
+
+#### 批次取得明細品名 API（M12）
+
+`GET /api/v1/sales/product-names?customer_id=&product_id=&product_id=…`（需要 `record.read`；型別在 `hammer_shared::sales`，邏輯在 `hammer_core::sales`，帶入順序與存檔時共用「明細的品名」的同一個函式）。桌面程式換客戶「重新帶入」、存檔後詢問是否存成客戶品名時，一次取得多個商品的品名。
+
+| 參數 | 說明 |
+|---|---|
+| `customer_id` | 必填。不是 uuid、省略或空字串 → `422 VALIDATION`（`details.field = customer_id`）；客戶不存在或已刪除 → `404 NOT_FOUND`「找不到此客戶」（停用的客戶可以） |
+| `product_id` | 可重複，1–200 個（以參數個數計，含重複）。沒有帶、超過 200 個、任一個不是 uuid → `422 VALIDATION`（`details.field = product_id`） |
+
+- **範圍**：未刪除的商品，**含停用的商品**（已在明細上的停用商品仍要帶入，§8.7）。不存在或已刪除的 id 略過（不是錯誤）；重複的 id 只回傳一筆。
+- **帶入**：依「明細的品名」的帶入順序：這位客戶未刪除的客戶品名 → 商品的 `name`。只使用這位客戶的客戶品名。
+- 一次請求只查一次資料庫（`products.id = ANY(…)` LEFT JOIN 這位客戶的客戶品名），不逐個商品查詢。
+- 回應 `200`（陣列，依 `product_id` 在 request 中第一次出現的順序）：
+
+```json
+[ { "product_id": "…", "customer_product_name": "X 型扳手", "product_name": "X 型扳手" },
+  { "product_id": "…", "customer_product_name": null, "product_name": "鉗子" } ]
+```
+
+- `customer_product_name`、`product_name` 的意義與「銷貨用商品選擇 API」相同。
+- 範例：客戶 A 有「P001 → X 型扳手」；查 `product_id = P001, P002, P001, <已刪除的 P009>` → 回傳 P001「X 型扳手」、P002「鉗子」兩筆。
+
+#### 客戶品名批次寫入 API（M12）
+
+`POST /api/v1/sales/customer-product-names/batch`（需要 `record.write`；型別在 `hammer_shared::sales`，邏輯在 `hammer_core::sales`）。一次寫入多位客戶的多筆客戶品名，Excel 匯入（§8.7）與存檔後存成客戶品名（「明細的品名」）共用。結果與經由客戶的通用資料 API 存檔相同（§8.7 `customer_product_names` 的檢查、`version`、操作紀錄）。
+
+request：
+
+```json
+{ "dry_run": true,
+  "rows": [
+    { "customer_code": "C001", "product_code": "P001", "name": "X 型扳手", "notes": "2026 年起" },
+    { "customer_code": "C001", "product_code": "P002", "name": "尖嘴鉗" },
+    { "customer_id": "…", "product_id": "…", "name": "工具組零件 03", "notes": null } ] }
+```
+
+- `dry_run`：必填。`true` 只檢查、回傳每列的動作與錯誤，不鎖定、不寫入；`false` 檢查後寫入。
+- `rows`：1–5000 列；0 列或超過 5000 列 → `422 VALIDATION`（`details.field = rows`）。request 本身格式錯誤（JSON 不合法、型態不符）→ `400`。
+- 每列以 **`customer_code` + `product_code`**，或 **`customer_id` + `product_id`** 指定（二擇一，一列內不可混用）。
+- `name`：必填。`notes`：可省略；**有帶這個鍵才更新**（字串去除前後空白，空字串視為 `null`；`null` = 清空），沒帶 → 保留既有的備註（新增時為 `null`）。
+
+**每列的檢查**（一列可以有多個錯誤，依下表順序列出；`field` 為 request 中的鍵，不屬於某個鍵時為 `null`）：
+
+| 檢查 | `field` | 訊息 |
+|---|---|---|
+| 指定方式：兩種都帶、都沒帶、一列內混用（例如 `customer_code` + `product_id`）| `null` | 「請以編號或 id 指定客戶與商品（二擇一）」 |
+| `customer_code`、`product_code` 去除前後空白後為空字串 | 該鍵 | 「客戶編號不可空白」／「料號不可空白」 |
+| 客戶不存在或已刪除（編號去除前後空白後完全相符，區分大小寫；停用的客戶可以） | `customer_code` / `customer_id` | 「找不到客戶編號 C009」／「找不到此客戶」 |
+| 商品不存在或已刪除（同上；停用的商品可以，與客戶 API 相同） | `product_code` / `product_id` | 「找不到料號 P009」／「找不到此商品」 |
+| `name` 的規則與客戶 API 相同：去除前後空白、不可為空、最長 200 字元、不可有控制字元 | `name` | 與客戶 API 相同（「此欄位為必填」、`max_length` 的一般訊息、「客戶品名不可包含控制字元」） |
+| 同一批中（客戶，商品）重複（以解析後的 id 比對，不論以編號或 id 指定）→ 第二列以後錯誤 | `null` | 「與第 N 列重複（同一客戶、同一商品）」，N 為第一次出現的列的 `index` + 1；另有 `duplicate_of`（該列的 `index`） |
+
+**動作**（沒有錯誤的列）：依（客戶，商品）找這位客戶未刪除的客戶品名——
+
+| 情況 | `action` |
+|---|---|
+| 沒有 | `create`：新增，`sort_order` 排在該客戶既有客戶品名之後（多列時依 `rows` 順序） |
+| 有，且 `name` 不同，或有帶 `notes` 且不同 | `update`：更新 `name`（與有帶的 `notes`），該列 `version` + 1 |
+| 有，`name` 相同、沒帶 `notes` 或 `notes` 相同 | `unchanged`：不寫入 |
+
+**回應**（`dry_run = true`，或 `dry_run = false` 寫入成功）`200`：
+
+```json
+{ "dry_run": true,
+  "summary": { "create": 1, "update": 1, "unchanged": 0, "error": 1 },
+  "rows": [
+    { "index": 0, "action": "update", "customer_id": "…", "product_id": "…", "errors": [] },
+    { "index": 1, "action": "create", "customer_id": "…", "product_id": "…", "errors": [] },
+    { "index": 2, "action": null, "customer_id": null, "product_id": "…",
+      "errors": [ { "field": "customer_id", "message": "找不到此客戶", "duplicate_of": null } ] } ] }
+```
+
+- `rows` 依 request 順序列出每一列；`customer_id`、`product_id` 為解析後的 id（解析不到為 `null`）；有錯誤的列 `action` 為 `null`。
+- **全有或全無**：`dry_run = false` 時任一列有錯誤 → **整批不寫入**，回傳 `422 VALIDATION`，訊息「有 N 列錯誤，未寫入」，`details` 的格式與上方的回應相同（`{ "dry_run": false, "summary", "rows" }`，桌面程式直接以它更新預覽）。
+
+**寫入**（`dry_run = false`、沒有錯誤；一個 transaction）：
+
+1. 以 `FOR UPDATE` 依 id 順序鎖定所有受影響（有 `create` 或 `update` 的列）的客戶，以 `FOR SHARE` 鎖定用到的商品（§7.3 關聯欄位的一般規則）；鎖定後重新檢查並決定動作（預覽之後的變動以寫入當下為準）。
+2. 新增、更新客戶品名；全部 `unchanged` 時不寫入任何資料（回應 `200`）。
+3. 每位受影響的客戶：`version` + 1、更新 `updated_at` / `updated_by`（§8.5 `custom_records`「明細子表」：明細變動時主表 `version` 遞增；樂觀鎖定 §9.4——之後以舊 `version` 存檔這位客戶會 `409 CONFLICT`）。
+4. 每位受影響的客戶寫入**一筆**操作紀錄，格式與經由客戶 API 存檔相同：`action = update`、`entity_key = customer`、`record_id` 為客戶 id，`before_data` / `after_data` 為 `{ "lines.customer_product_name": [ { "id", "data" }, … ] }`（該客戶所有客戶品名依順序，§8.5）。沒有受影響的客戶不寫紀錄；`dry_run` 不寫紀錄。
+5. 與同時進行的其他存檔違反唯一索引 `uq_customer_product_names_customer_product` → rollback，`422 VALIDATION`，以上方相同格式在該列加上 `{ "field": "product_code" 或 "product_id", "message": "此商品已設定客戶品名" }`。
+
+**範例**：客戶 C001 已有「P001 → X 型扳手」（備註「舊名稱」）、「P003 → 零件 03」。
+
+| rows | 結果 |
+|---|---|
+| `{C001, P001, "X 型扳手"}` | `unchanged`（沒帶 `notes`，備註保留「舊名稱」） |
+| `{C001, P001, "X 型扳手", notes: null}` | `update`：清空備註 |
+| `{C001, P001, "Y 型扳手"}`、`{C001, P002, "尖嘴鉗"}` | P001 `update`、P002 `create`（排在 P003 之後）；C001 `version` + 1、一筆操作紀錄 |
+| 上一列再加 `{C001, P009, "…"}`（料號不存在）且 `dry_run = false` | `422`，第 3 列「找不到料號 P009」，P001、P002 都不寫入 |
+| `{C001, P002, "A"}`、`{customer_id: C001 的 id, product_id: P002 的 id, "B"}` | 第 2 列「與第 1 列重複（同一客戶、同一商品）」 |
+
+- 不做：刪除客戶品名、調整既有客戶品名的順序。
 
 #### 出貨過帳與作廢
 
@@ -2831,7 +3035,7 @@ tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
 - **通用資料 API**：`/api/v1/entities/{entity_key}/records`（列表、單筆、新增、修改、刪除、`lookup`）。自訂資料類別與系統資料類別（M3 起的 `unit`、`product_category`、`product`、`customer`、`supplier` 與其明細子表）都使用這組端點，行為相同（§7.1「系統資料類別共用通用資料 API」）。
 - **專屬端點**，只用於以下兩種情況：
   - 系統資料類別在一般新增、修改、刪除以外的動作：系統單據的過帳、作廢（見下方「單據動作」），這些動作有自己的權限（`record.post`）與規則。單據的一般新增、修改、刪除仍使用通用資料 API。
-  - 不是資料類別的資料：幣別 `/api/v1/currencies`、匯率 `/api/v1/exchange-rates`、稅別 `/api/v1/tax-rates`（§8.6）、庫存查詢 `/api/v1/inventory/…`（§8.10；建議批號 §8.9）、銷貨用商品選擇 `/api/v1/sales/product-lookup`（§8.9，M11）。它們沒有自訂欄位、版面、關聯，也不出現在 `GET /api/v1/entities`。
+  - 不是資料類別的資料：幣別 `/api/v1/currencies`、匯率 `/api/v1/exchange-rates`、稅別 `/api/v1/tax-rates`（§8.6）、庫存查詢 `/api/v1/inventory/…`（§8.10；建議批號 §8.9）、銷貨用商品選擇 `/api/v1/sales/product-lookup`（§8.9，M11）、批次取得明細品名 `/api/v1/sales/product-names`、客戶品名批次寫入 `/api/v1/sales/customer-product-names/batch`（§8.9，M12）、商品的客戶品名 `/api/v1/products/{id}/customer-product-names`（§8.7，M12）。它們沒有自訂欄位、版面、關聯，也不出現在 `GET /api/v1/entities`。
 - 重新計算公式：`POST /api/v1/entities/{entity_key}/recalculate`（需要 `schema.manage`，無 request body），回應 `{ "processed": 120, "changed": 37, "with_errors": 2 }`（型別 `hammer_shared::schema::RecalculateResult`；規則見 §7.6「重新計算」）。
 - 表單版面（§7.7、§8.5 `form_layouts`；型別在 `hammer_shared::form_layout`）：
   | 端點 | 權限 | 說明 |
@@ -2945,6 +3149,7 @@ tax_period = 年（4 位）+ 該期第一個月（奇數月，2 位）
 | M7 | 報表、Excel 匯出、列印、備份與還原介面 |
 | M8 | 表單畫面自訂排版：表單版面（`form_layouts`）資料表與 API、表單依版面渲染、表單版面設計器（§7.7） |
 | M11 | 客戶品名：同一商品依客戶使用不同的銷貨品名，庫存仍以同一商品計算。`customer_product_names`（§8.7）、銷貨明細的 `product_name` 與帶入規則、銷貨用商品選擇 API（§8.9）、發票帶入品名（§8.11） |
+| M12 | 客戶品名優化：批次取得明細品名 API 與換客戶時批次重新帶入、銷貨用商品選擇 API 的效能（§8.9）；關聯欄位的「已停用」提示（§7.3）；商品畫面顯示客戶品名（§8.7）；客戶品名批次寫入 API、Excel 匯入客戶品名（§8.7、§8.9）；開單存檔後詢問是否存成客戶品名（§8.9「明細的品名」） |
 
 ---
 
