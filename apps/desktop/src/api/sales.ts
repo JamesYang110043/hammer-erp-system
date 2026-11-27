@@ -1,7 +1,10 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { commands } from '../bindings';
-import type { Record as DataRecord } from '../bindings';
+import type {
+  CustomerProductNameBatchRequest_Deserialize as CustomerProductNameBatchRequest,
+  Record as DataRecord,
+} from '../bindings';
 import { documentStatus } from '../records/documents';
 import {
   SALES_FIELDS,
@@ -14,6 +17,7 @@ import {
 } from '../records/sales';
 import type { PreviewInput } from '../records/sales';
 import { unwrap } from './client';
+import { auditLogsKey } from './auditLogs';
 import { inventoryKey } from './inventory';
 import { MAX_PAGE_SIZE, productCustomerNamesKey, recordKey, recordsKey } from './records';
 
@@ -184,5 +188,31 @@ export function useProductCustomerNames(productId: string | undefined) {
     queryKey: [...productCustomerNamesKey, productId ?? ''] as const,
     queryFn: () => unwrap(commands.productCustomerNames(productId!)),
     enabled: Boolean(productId),
+  });
+}
+
+/**
+ * 客戶品名批次寫入（docs/architecture.md §8.9「客戶品名批次寫入 API」，需要 `record.write`）。
+ * 寫入成功（`dry_run = false`）後清除客戶、客戶品名相關的快取：客戶列表與單筆、商品的客戶品名、
+ * 銷貨用商品選擇、批次取得明細品名、操作紀錄。
+ */
+export function useCustomerProductNamesBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (req: CustomerProductNameBatchRequest) =>
+      unwrap(commands.customerProductNamesBatch(req)),
+    onSuccess: (_, req) =>
+      req.dry_run
+        ? undefined
+        : Promise.all(
+            [
+              recordsKey('customer'),
+              ['record', 'customer'],
+              productCustomerNamesKey,
+              salesProductLookupKey,
+              salesProductNamesKey,
+              auditLogsKey,
+            ].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+          ),
   });
 }

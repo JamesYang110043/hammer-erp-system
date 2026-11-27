@@ -34,7 +34,8 @@ use hammer_shared::record::{
     UpdateRecordRequest,
 };
 use hammer_shared::sales::{
-    ProductCustomerName, SalesProductLookupItem, SalesProductLookupQuery, SalesProductName,
+    CustomerProductNameBatchRequest, CustomerProductNameBatchResult, ProductCustomerName,
+    SalesProductLookupItem, SalesProductLookupQuery, SalesProductName,
 };
 use hammer_shared::schema::{
     ChangeFieldTypeRequest, CreateEntityRequest, CreateFieldRequest, DeactivateFieldRequest,
@@ -707,6 +708,17 @@ impl AppState {
     ) -> Result<Vec<ProductCustomerName>, ClientError> {
         self.with_token(async |client, url, token| {
             client.product_customer_names(url, token, product_id).await
+        })
+        .await
+    }
+
+    /// 客戶品名批次寫入（`dry_run` 只檢查）。
+    pub async fn customer_product_names_batch(
+        &self,
+        req: &CustomerProductNameBatchRequest,
+    ) -> Result<CustomerProductNameBatchResult, ClientError> {
+        self.with_token(async |client, url, token| {
+            client.customer_product_names_batch(url, token, req).await
         })
         .await
     }
